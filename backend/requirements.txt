@@ -43,10 +43,15 @@ Mako==1.3.12
 greenlet==3.2.4
 
 # --- Validation / data shaping (pydantic 2.x) ---
+# email-validator is the runtime backend for pydantic's EmailStr type.
+# Without it, importing EmailStr (used by app.schemas.admin.UserRead and
+# app.schemas.auth) raises ImportError at module load time.
 pydantic==2.10.3
 pydantic-core==2.27.1
 typing-extensions==4.15.0
 annotated-types==0.7.0
+email-validator==2.2.0
+dnspython==2.8.0
 
 # --- AI provider (Anthropic Claude wrapped by Langchain for replaceability) ---
 # anthropic==0.97.0 is the AAP-mandated pin. langchain 0.3.x is the latest
