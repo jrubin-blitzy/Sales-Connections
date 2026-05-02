@@ -97,6 +97,11 @@ lerna-debug.log*
 secrets/
 # IMPORTANT: .env.example IS tracked. Do not exclude it.
 !**/.env.example
+# IMPORTANT: The Terraform Secrets Manager module under infra/terraform/modules/secrets/
+# is legitimate IaC source code, NOT credential storage. Negate the secrets/ rule
+# above for this specific path (and everything beneath it) so its .tf files are tracked.
+!infra/terraform/modules/secrets/
+!infra/terraform/modules/secrets/**
 
 # --- Terraform / Infrastructure ---
 .terraform/
