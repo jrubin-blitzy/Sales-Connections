@@ -1,0 +1,59 @@
+%% Diagram: Sales-Connections System Context (4 integration surfaces; synchronous only)
+graph LR
+    subgraph Browser["User Browser"]
+        SPA[React 19.2.5 SPA<br/>+ TanStack Query 5.x]
+    end
+    subgraph AWS["AWS (private VPC + managed services)"]
+        ALB[AWS ALB<br/>TLS via ACM]
+        API[ECS Fargate<br/>Flask 3.1.3 + Gunicorn]
+        RDS[(RDS PostgreSQL 17.7<br/>Multi-AZ)]
+        SM[AWS Secrets Manager]
+        CW[CloudWatch<br/>Logs + Metrics + Alarms]
+        ECR[ECR<br/>Container Registry]
+    end
+    subgraph External["External Services (public-Internet HTTPS)"]
+        AC[Anthropic Claude API]
+        GO[Google OAuth 2.0]
+    end
+
+    SPA -->|"Surface 1: HTTPS REST/JSON<br/>HttpOnly JWT cookie"| ALB
+    ALB --> API
+    API -->|"Surface 2: HTTPS via Langchain<br/>API key from SM"| AC
+    API -->|"Surface 3: OAuth 2.0 code exchange<br/>client_secret from SM"| GO
+    SPA -.->|"Surface 3 (redirect): user-agent only"| GO
+    API -->|"Surface 4a: SQLAlchemy 2.x + psycopg 3.x<br/>private VPC"| RDS
+    API -->|"Surface 4b: boto3 read at startup"| SM
+    API -->|"Surface 4c: awslogs driver + OTLP traces"| CW
+    ECR -.->|"image pull at task start"| API
+
+    classDef db fill:#f9f9f9,stroke:#666,stroke-width:2px
+    classDef external fill:#fff5e6,stroke:#cc8800,stroke-width:2px
+    class RDS db
+    class AC,GO external
+
+%% Legend:
+%% - Subgraph zones:
+%%     Browser  - User-agent side; runs the React 19 SPA.
+%%     AWS      - Private VPC + managed services (ALB, ECS Fargate, RDS, Secrets Manager, CloudWatch, ECR).
+%%     External - Public-Internet HTTPS endpoints (Anthropic, Google).
+%% - Arrow conventions:
+%%     -->       Solid line: synchronous request flow at runtime.
+%%     -.->      Dotted line: non-typical-request flows
+%%               (OAuth user-agent redirect; deployment-time ECR image pull).
+%% - Four integration surfaces (AAP Section 0.4.2):
+%%     Surface 1: SPA -> ALB -> API   (REST/JSON; HttpOnly cookie carries session JWT).
+%%     Surface 2: API -> Anthropic    (HTTPS via Langchain wrapper; API key from Secrets Manager).
+%%     Surface 3: API -> Google OAuth (authorization-code flow; client_secret from Secrets Manager;
+%%                                     user-agent traverses Google during the redirect step).
+%%     Surface 4: API -> AWS managed services (SQLAlchemy to RDS; boto3 to Secrets Manager;
+%%                                             awslogs + OTLP to CloudWatch).
+%% - Synchronous-only invariant (AAP Section 0.4.9): No message queues, no event buses, no async drivers,
+%%   no saga patterns, no multi-region active-active, no server-side cache.
+%% - TLS terminates at the ALB (ACM-issued certificate); internal AWS traffic is private VPC.
+%% - Secrets sourced exclusively from AWS Secrets Manager at process startup; cached for worker lifetime.
+%%   Catalog: ANTHROPIC_API_KEY, GOOGLE_OAUTH_CLIENT_SECRET, JWT_SIGNING_KEY, DB_PASSWORD.
+%% - Excluded from MVP: LinkedIn API, CRM sync (Salesforce/HubSpot), calendar/inbox integrations,
+%%   Slack/email notifications, message queues, server-side cache, multi-region replication.
+%% - Source: AAP Section 0.1.3 (Cross-Cutting Request Pipeline), Section 0.4.2 (Integration Surfaces).
+%% - Referenced from: README.md (simplified), docs/architecture.md Section 1, docs/security.md Section 1,
+%%                    docs/operations.md Section 1, docs/api.md Conventions, blitzy-deck/index.html.
