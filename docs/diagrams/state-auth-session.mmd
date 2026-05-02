@@ -1,0 +1,79 @@
+%% Diagram: Authentication Session State Machine (Feature F-012)
+stateDiagram-v2
+    direction LR
+    [*] --> Anonymous : open app or cookie expired
+    Anonymous : Anonymous (no session cookie)
+    Authenticating : Authenticating (login or OAuth in flight)
+    Authenticated : Authenticated (JWT cookie valid)
+    Anonymous --> Authenticating : POST /auth/login OR GET /auth/google/start
+    Authenticating --> Authenticated : credentials valid, JWT minted, cookie set (audit: authentication)
+    Authenticating --> Anonymous : credentials invalid, 401 rejected
+    Authenticated --> Anonymous : POST /auth/logout (audit: authentication, event=logout)
+    Authenticated --> Anonymous : JWT expired (8h TTL), next 401
+    note right of Authenticated
+        Cookie: HttpOnly + Secure + SameSite=Lax + Path=/
+        JWT: HS256, 8h TTL
+        Claims: user_id, org_id, role, iat, exp, kid
+    end note
+    note right of Authenticating
+        OAuth tokens (access/refresh/ID) never persist;
+        only the locally-minted JWT crosses the SPA boundary.
+    end note
+
+%% Legend:
+%% - States:
+%%     Anonymous     - No valid session cookie; AuthProvider sees 401 from /api/me on mount
+%%                     and renders the login surface (frontend/src/features/auth/LoginScreen.tsx).
+%%     Authenticating- Email/password POST /auth/login OR Google OAuth callback at
+%%                     GET /auth/google/callback in flight. Transient state; sub-second for
+%%                     password, sub-2-second for OAuth (AAP Section 0.7.3 budget).
+%%     Authenticated - Valid JWT in HttpOnly cookie; g.session.user_id, g.session.org_id, and
+%%                     g.session.role populated for every request by backend/app/middleware/auth.py.
+%% - Transitions (5 named + 1 initial):
+%%     [*] -> Anonymous                            initial load or cookie cleared/expired.
+%%     Anonymous -> Authenticating                 user submits email/password OR clicks Google sign-in.
+%%     Authenticating -> Authenticated             credentials/OAuth code valid; JWT minted; cookie set.
+%%     Authenticating -> Anonymous                 invalid credentials, OAuth state mismatch, or
+%%                                                 ID token signature invalid; rejected with 401 (or 400
+%%                                                 invalid_state for CSRF mismatches).
+%%     Authenticated -> Anonymous (logout)         POST /auth/logout; cookie cleared; signing-key
+%%                                                 version advanced; audit row written.
+%%     Authenticated -> Anonymous (expiry)         JWT exp claim past; next API call returns 401;
+%%                                                 frontend AuthProvider redirects to /login.
+%% - JWT TTL: 8 hours from issuance. Expiry triggers automatic transition back to Anonymous on next 401;
+%%   no explicit user action required.
+%% - OAuth tokens (access, refresh, ID) NEVER persist and NEVER cross the SPA boundary; only the
+%%   locally-minted session JWT is exposed to the browser (AAP Section 0.4.5). The Authenticating
+%%   state of THIS diagram covers ONLY the locally-minted JWT lifecycle - Google's own session is
+%%   independent and out of scope for this state machine.
+%% - Cookie attributes (AAP Section 0.7.4): HttpOnly (no JS access; mitigates XSS) + Secure (HTTPS
+%%   only) + SameSite=Lax (mitigates CSRF) + Path=/ (covers entire SPA and API).
+%% - JWT signing key uses a versioned list { current, prior } in AWS Secrets Manager to enable
+%%   zero-downtime rotation. New tokens are signed with the current key; verification accepts
+%%   tokens signed by current key first, then prior key as fallback. The kid claim identifies which
+%%   key version signed a given token. Rotation procedure: docs/operations.md Section 4.
+%% - Audit emission: Every successful Authenticating -> Authenticated transition AND every
+%%   Authenticated -> Anonymous (logout) transition writes one audit_events row with
+%%   event_type = authentication. The authentication method (google or password) is recorded in
+%%   after_payload.method; logout events carry after_payload.event = logout. JWT-expiry transitions
+%%   are silent (no audit emission, no user action).
+%% - Frontend behavior: frontend/src/auth/AuthProvider.tsx hits GET /api/me on mount; a 401 response
+%%   transitions the SPA to the Anonymous state and renders the login surface. On successful login,
+%%   the AuthProvider re-fetches /api/me to hydrate session state. ProtectedRoute guards every
+%%   feature route by redirecting unauthenticated users to /login.
+%% - Failure modes (all leave the user in or return to Anonymous):
+%%     Invalid email/password                   -> 401 unauthorized
+%%     OAuth state mismatch (CSRF guard)        -> 400 invalid_state
+%%     OAuth ID token signature invalid         -> 401 invalid_id_token
+%%     OAuth ID token issuer/audience mismatch  -> 401 invalid_id_token
+%%     JWT signature verification failed        -> 401 unauthorized (covers tampered cookie)
+%%     JWT expired                              -> 401 unauthorized (transitions to Anonymous on next call)
+%% - Per-request authentication (the JWT validation by backend/app/middleware/auth.py on every
+%%   /api/* call) is documented in docs/diagrams/request-lifecycle.mmd and is NOT modeled here;
+%%   THIS diagram covers SESSION state only.
+%% - Source feature: F-012 User Authentication (AAP Section 0.1.1, Section 0.4.5).
+%% - Referenced from: docs/architecture.md Section 7 (State Machines / Authentication session state
+%%                    machine), docs/security.md (Auth section: OAuth flow, JWT minting, cookie
+%%                    posture), docs/api.md (/auth/login, /auth/logout, /auth/google/start,
+%%                    /auth/google/callback endpoints), docs/operations.md (JWT signing key rotation
+%%                    procedure), blitzy-deck/index.html (executive summary deck).
