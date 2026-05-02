@@ -345,12 +345,19 @@ def upgrade() -> None:
     #   WHERE org_id = :org AND deleted_at IS NULL
     #   ORDER BY submission_date DESC
     # and works equally well for prefix-only filters on (org_id) or
-    # (org_id, deleted_at). Putting submission_date last lets the planner
-    # scan the index in reverse for "ORDER BY submission_date DESC".
+    # (org_id, deleted_at). The DESC ordering on submission_date is
+    # EXPLICIT per AAP Sec 6.2 / docs/architecture.md §6.2 and decision
+    # log entry DL-0027: PostgreSQL CAN scan an ascending index in
+    # reverse for "ORDER BY ... DESC", but a forward scan on a DESC
+    # index is consistently 5-10% faster at the 10K-record scale ceiling
+    # (AAP Sec 0.7.3 feed-load budget) AND eliminates the documentation-
+    # vs-implementation drift surfaced by the Layer-0 review.
+    # ``sa.text("submission_date DESC")`` is the canonical Alembic
+    # idiom for declaring per-column sort order on an index.
     op.create_index(
         "ix_records_org_deleted_submission",
         "records",
-        ["org_id", "deleted_at", "submission_date"],
+        ["org_id", "deleted_at", sa.text("submission_date DESC")],
     )
     # Single-column indexes for involvement and outreach_status filter
     # dimensions on the feed.

@@ -479,9 +479,9 @@ The schema defines seven indexes, each engineered for a specific query pattern a
 | `ix_records_org_deleted_submission` | `(org_id, deleted_at, submission_date DESC)` on `records` | Composite index that powers the Connection Feed (F-004); covers the org-scope filter, the soft-delete filter, and the default sort by submission date |
 | `ix_records_involvement` | `involvement` on `records` | Single-column index supporting feed filter by involvement type |
 | `ix_records_outreach_status` | `outreach_status` on `records` | Single-column index supporting feed filter by outreach status |
-| `uq_records_org_normalized_url_active` | `(org_id, normalized_linkedin_url) WHERE deleted_at IS NULL` (unique partial) | Powers F-010 duplicate-LinkedIn-URL detection in sub-second time at 10K-record scale |
+| `uq_records_org_normalized_linkedin_url_active` | `(org_id, normalized_linkedin_url) WHERE deleted_at IS NULL` (unique partial) | Powers F-010 duplicate-LinkedIn-URL detection in sub-second time at 10K-record scale |
 | `ix_record_tags_composite` | `(record_id, tag_id)` (composite primary key) on `record_tags` | Supports the join in feed tag filtering |
-| `ix_audit_events_target_time` | `(target_record_id, event_timestamp)` on `audit_events` | Powers F-011 edit-history feed via `GET /api/connections/:id/history` |
+| `ix_audit_events_target_record_event_timestamp` | `(target_record_id, event_timestamp)` on `audit_events` | Powers F-011 edit-history feed via `GET /api/connections/:id/history` |
 | `uq_users_org_email` | `(org_id, email)` (unique composite) on `users` | Enforces email uniqueness within an organization; supports OAuth user upsert lookup |
 
 ### Soft-delete pattern

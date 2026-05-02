@@ -18,6 +18,19 @@ PRODUCTION SECRETS
     startup, then exposes them as Flask config keys. Local development
     reads the same names directly from a ``.env`` file via python-dotenv.
 
+PRODUCTION FAIL-FAST INVARIANT
+    ``ProductionConfig.init_app`` performs fail-fast validation of the
+    four required production secrets (``ANTHROPIC_API_KEY``,
+    ``GOOGLE_OAUTH_CLIENT_SECRET``, ``JWT_SIGNING_KEY``,
+    ``DATABASE_URL``) AFTER any Secrets-Manager load completes. A
+    production deployment whose secrets are empty or still carry
+    placeholder values (``PLACEHOLDER_*`` / ``REPLACE_WITH_*``) raises
+    ``RuntimeError`` and refuses to start, eliminating the silent
+    misconfiguration class where a worker would happily serve traffic
+    with a forged HMAC key, an unusable AI client, or a broken OAuth
+    flow. ``JWT_SIGNING_KEY`` additionally must be at least 32 bytes
+    of UTF-8 to keep HS256 HMAC entropy at the 256-bit security level.
+
 CRITICAL: Secret values must never be logged. The structlog processor
 in ``app.observability.logging`` filters keys whose names match the
 patterns ``*_key``, ``*_secret``, ``password``, ``token``, or
@@ -112,6 +125,48 @@ def _csv_list(value: str | None) -> list[str]:
     if not value:
         return []
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+# Sentinel prefixes that mark a secret value as still being a documentation
+# placeholder rather than a real production credential. ``backend/.env.example``
+# uses ``PLACEHOLDER_`` for required values and ``REPLACE_WITH_`` is reserved
+# for any future placeholders that would otherwise collide with the prefix
+# convention. Production fail-fast checks treat both prefixes as "unset".
+_PLACEHOLDER_PREFIXES: tuple[str, ...] = ("PLACEHOLDER_", "REPLACE_WITH_")
+
+# Minimum byte length for HS256 HMAC keys. NIST SP 800-117 and RFC 7518 §3.2
+# both recommend a key of at least 256 bits (32 bytes) for HS256 to retain the
+# advertised security level. Using a shorter key reduces effective entropy
+# below the 2^256 brute-force ceiling that HS256 advertises and exposes
+# session JWTs to off-line key recovery in the worst case.
+_JWT_SIGNING_KEY_MIN_BYTES: int = 32
+
+
+def _is_placeholder_or_empty(value: str | None) -> bool:
+    """Return True iff *value* is unset, empty, or matches a placeholder sentinel.
+
+    A "placeholder" is any string whose stripped form starts with one of
+    :data:`_PLACEHOLDER_PREFIXES`. Used by
+    :meth:`ProductionConfig._validate_required_secrets` to detect
+    misconfiguration where the deployment was promoted to production
+    without rotating the documentation defaults from ``.env.example``.
+
+    Args:
+        value: The candidate config value. May be ``None`` (config key
+            not set at all), an empty string (set but blank), or a real
+            string. Whitespace-only strings are also treated as empty.
+
+    Returns:
+        ``True`` when *value* is missing, empty, whitespace-only, or has
+        a placeholder prefix; ``False`` for any value that looks like a
+        real production credential.
+    """
+    if value is None:
+        return True
+    stripped = value.strip()
+    if not stripped:
+        return True
+    return any(stripped.startswith(prefix) for prefix in _PLACEHOLDER_PREFIXES)
 
 
 # Load backend/.env into os.environ early so all config classes (including
@@ -402,35 +457,114 @@ class ProductionConfig(BaseConfig):
         - ``SECRETS_MANAGER_DB_PASSWORD_ID`` -> applied into
           ``DATABASE_URL`` via ``${DB_PASSWORD}`` placeholder substitution
 
-        When ``USE_SECRETS_MANAGER`` is False, this method is a no-op
-        (intended for staging/dev environments that share the
-        ``ProductionConfig`` class but inject secrets via env vars
-        instead).
+        When ``USE_SECRETS_MANAGER`` is False, this method skips the
+        Secrets-Manager round-trip (intended for staging/dev environments
+        that share the ``ProductionConfig`` class but inject secrets via
+        env vars instead). Fail-fast validation runs in EITHER case so a
+        production worker never serves traffic with placeholder
+        credentials regardless of whether secrets came from AWS or env.
 
         Empty secret IDs are skipped silently — staging/CI may use a
         hybrid where some secrets come from env vars and some from
         Secrets Manager.
+
+        Raises:
+            RuntimeError: When any of the four required production
+                secrets (``ANTHROPIC_API_KEY``,
+                ``GOOGLE_OAUTH_CLIENT_SECRET``, ``JWT_SIGNING_KEY``,
+                ``DATABASE_URL``) is missing, empty, or still carries a
+                placeholder value, or when ``JWT_SIGNING_KEY`` is
+                shorter than 32 bytes of UTF-8.
         """
         super().init_app(app)
-        if not app.config.get("USE_SECRETS_MANAGER", False):
-            return
-        secrets = cls._load_secrets_from_aws(app)
-        # Anthropic API key
-        if secrets.get("anthropic_api_key"):
-            app.config["ANTHROPIC_API_KEY"] = secrets["anthropic_api_key"]
-        # Google OAuth client secret
-        if secrets.get("google_oauth_client_secret"):
-            app.config["GOOGLE_OAUTH_CLIENT_SECRET"] = secrets["google_oauth_client_secret"]
-        # JWT signing key
-        if secrets.get("jwt_signing_key"):
-            app.config["JWT_SIGNING_KEY"] = secrets["jwt_signing_key"]
-        # DB password — expand into DATABASE_URL using a ${DB_PASSWORD}
-        # placeholder so the rest of the DSN (host/port/db/user) can come
-        # from a non-secret env var.
-        db_password = secrets.get("db_password")
-        if db_password and "${DB_PASSWORD}" in app.config.get("DATABASE_URL", ""):
-            app.config["DATABASE_URL"] = app.config["DATABASE_URL"].replace(
-                "${DB_PASSWORD}", db_password
+        if app.config.get("USE_SECRETS_MANAGER", False):
+            secrets = cls._load_secrets_from_aws(app)
+            # Anthropic API key
+            if secrets.get("anthropic_api_key"):
+                app.config["ANTHROPIC_API_KEY"] = secrets["anthropic_api_key"]
+            # Google OAuth client secret
+            if secrets.get("google_oauth_client_secret"):
+                app.config["GOOGLE_OAUTH_CLIENT_SECRET"] = secrets["google_oauth_client_secret"]
+            # JWT signing key
+            if secrets.get("jwt_signing_key"):
+                app.config["JWT_SIGNING_KEY"] = secrets["jwt_signing_key"]
+            # DB password — expand into DATABASE_URL using a
+            # ${DB_PASSWORD} placeholder so the rest of the DSN
+            # (host/port/db/user) can come from a non-secret env var.
+            db_password = secrets.get("db_password")
+            if db_password and "${DB_PASSWORD}" in app.config.get("DATABASE_URL", ""):
+                app.config["DATABASE_URL"] = app.config["DATABASE_URL"].replace(
+                    "${DB_PASSWORD}", db_password
+                )
+        # Fail-fast: refuse to start if any required production secret
+        # is still placeholder or empty after the (optional) Secrets
+        # Manager load. Runs unconditionally so env-driven and
+        # AWS-driven deployments share the same invariant.
+        cls._validate_required_secrets(app)
+
+    @staticmethod
+    def _validate_required_secrets(app: Any) -> None:
+        """Refuse to start when any required production secret is missing.
+
+        Validates the four required production secrets per AAP Sec 0.7.4
+        Security Invariants. Each secret is checked against
+        :func:`_is_placeholder_or_empty`, which rejects ``None``, empty,
+        whitespace-only, or ``PLACEHOLDER_*`` / ``REPLACE_WITH_*``
+        values. ``JWT_SIGNING_KEY`` additionally must be at least
+        :data:`_JWT_SIGNING_KEY_MIN_BYTES` bytes of UTF-8 to keep HS256
+        HMAC entropy at the 256-bit security level.
+
+        All failures are aggregated into a single ``RuntimeError`` so
+        operators see every misconfiguration at once rather than fixing
+        them one-by-one across restart attempts. The error message
+        names the affected config keys but never echoes their values
+        (placeholder or otherwise) to keep logs free of incidental
+        secrets.
+
+        Args:
+            app: The Flask application whose ``app.config`` carries the
+                resolved secret values.
+
+        Raises:
+            RuntimeError: When at least one required secret is missing,
+                empty, placeholder, or (for ``JWT_SIGNING_KEY``) under
+                the 32-byte length floor.
+        """
+        # Order matters only for the error-message UX; the same set of
+        # keys is checked regardless. The four-tuple matches AAP Sec
+        # 0.7.4 verbatim: Anthropic, Google OAuth, JWT, DB.
+        required_keys: tuple[str, ...] = (
+            "ANTHROPIC_API_KEY",
+            "GOOGLE_OAUTH_CLIENT_SECRET",
+            "JWT_SIGNING_KEY",
+            "DATABASE_URL",
+        )
+        errors: list[str] = []
+        for key in required_keys:
+            value = app.config.get(key)
+            if _is_placeholder_or_empty(value if isinstance(value, str) else None):
+                errors.append(
+                    f"{key} is missing, empty, or contains a placeholder value "
+                    f"(prefix in {list(_PLACEHOLDER_PREFIXES)}); refusing to start"
+                )
+        # JWT-specific length check runs only when the key cleared the
+        # placeholder gate; otherwise the placeholder error is more
+        # actionable than a length error.
+        jwt_key = app.config.get("JWT_SIGNING_KEY")
+        if isinstance(jwt_key, str) and not _is_placeholder_or_empty(jwt_key):
+            jwt_byte_length = len(jwt_key.encode("utf-8"))
+            if jwt_byte_length < _JWT_SIGNING_KEY_MIN_BYTES:
+                errors.append(
+                    f"JWT_SIGNING_KEY must be at least "
+                    f"{_JWT_SIGNING_KEY_MIN_BYTES} bytes for HS256 security; "
+                    f"got {jwt_byte_length} bytes"
+                )
+        if errors:
+            joined = "; ".join(errors)
+            raise RuntimeError(
+                f"ProductionConfig refusing to start: {joined}. "
+                f"Set real values via AWS Secrets Manager or environment "
+                f"variables (see backend/.env.example for required keys)."
             )
 
     @staticmethod

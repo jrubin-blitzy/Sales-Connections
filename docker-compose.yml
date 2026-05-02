@@ -244,7 +244,12 @@ services:
   # Single-user mode (PGADMIN_CONFIG_SERVER_MODE=False) avoids the master-
   # password prompt for local development.
   pgadmin:
-    image: dpage/pgadmin4:latest
+    # AAP Sec 0.7.7 mandates pinned versions everywhere — no `latest`,
+    # `^`, or `~` ranges. pgAdmin is an optional `tools` profile
+    # container off the critical local-dev path, but the pin keeps the
+    # local environment reproducible. Update only with a corresponding
+    # decision-log entry per the Explainability rule (AAP Sec 0.7.5).
+    image: dpage/pgadmin4:8.13
     container_name: sales-connections-pgadmin
     restart: unless-stopped
     profiles:

@@ -147,34 +147,229 @@ export type AuditEventType = (typeof AUDIT_EVENT_TYPE_VALUES)[number];
 // ---------------------------------------------------------------------------
 
 /**
+ * Allowed LinkedIn host subdomains.
+ *
+ * MUST stay character-exact with backend
+ * `app/utils/url.py::_LINKEDIN_SUBDOMAINS` so a URL accepted by the
+ * Zod refine on the SPA is also accepted by the pydantic validator on
+ * the API (and vice-versa). Per AAP Sec 0.5.3, "Pydantic and Zod
+ * schemas mirror each other. Field names and types match exactly so
+ * that the React form payload deserializes cleanly server-side." A
+ * stricter Zod regex creates a UX defect: contributors whose URLs
+ * carry a country subdomain (e.g., `uk.linkedin.com`) would be
+ * blocked at the form even though the backend would accept the same
+ * URL.
+ *
+ * The list contains:
+ *   - `www`, `m` — global aliases
+ *   - Two-letter ISO 3166-1 alpha-2 region codes that LinkedIn
+ *     actively serves; non-exhaustive but covers the long tail of
+ *     network exports observed in practice.
+ *
+ * The bare host `linkedin.com` (no subdomain) is also accepted; this
+ * Set holds only the leading subdomain labels.
+ */
+const LINKEDIN_SUBDOMAINS: ReadonlySet<string> = new Set([
+  "www",
+  "m",
+  "uk",
+  "ca",
+  "au",
+  "in",
+  "de",
+  "fr",
+  "br",
+  "mx",
+  "es",
+  "it",
+  "nl",
+  "be",
+  "ch",
+  "at",
+  "se",
+  "no",
+  "dk",
+  "fi",
+  "pl",
+  "cz",
+  "sk",
+  "hu",
+  "ru",
+  "ua",
+  "tr",
+  "il",
+  "ae",
+  "sa",
+  "za",
+  "eg",
+  "ng",
+  "ke",
+  "jp",
+  "kr",
+  "cn",
+  "hk",
+  "tw",
+  "sg",
+  "my",
+  "th",
+  "id",
+  "ph",
+  "vn",
+  "nz",
+  "cl",
+  "ar",
+  "co",
+  "pe",
+  "pt",
+  "gr",
+  "ie",
+]);
+
+/**
+ * Canonical LinkedIn host. Mirrors backend
+ * `app/utils/url.py::_LINKEDIN_BASE_HOST`.
+ */
+const LINKEDIN_BASE_HOST = "linkedin.com";
+
+/**
+ * Allowed LinkedIn profile path prefixes. Mirrors backend
+ * `app/utils/url.py::_LINKEDIN_PATH_PREFIXES`.
+ *
+ *   - `/in/`  modern public profile URL.
+ *   - `/pub/` legacy public profile URL still seen in exported address
+ *             books and CRM records; the backend accepts these so the
+ *             SPA must also accept them to avoid blocking contributors.
+ */
+const LINKEDIN_PATH_PREFIXES: readonly string[] = ["/in/", "/pub/"];
+
+/**
+ * Slug character class. Mirrors backend
+ * `app/utils/url.py::_SLUG_SEGMENT_RE` exactly:
+ *   `^[A-Za-z0-9._\-%]+$`
+ *
+ * Accepts:
+ *   - ASCII alphanumerics
+ *   - dot (`.`)
+ *   - underscore (`_`)
+ *   - hyphen (`-`)
+ *   - percent-encoding sigil (`%`) — required to round-trip
+ *     percent-encoded vanity URLs (e.g., when a non-ASCII profile is
+ *     exported with its UTF-8 octets percent-escaped)
+ *
+ * The pattern is anchored on both ends so partial matches do not
+ * accidentally accept slugs containing `/` or whitespace.
+ */
+const LINKEDIN_SLUG_PATTERN = /^[A-Za-z0-9._\-%]+$/;
+
+/**
+ * Pre-compiled regex for collapsing two-or-more consecutive `/`
+ * characters in the path. Mirrors backend
+ * `app/utils/url.py::_MULTIPLE_SLASH_RE`.
+ */
+const MULTIPLE_SLASH_PATTERN = /\/{2,}/g;
+
+/**
+ * Returns ``true`` iff *host* is `linkedin.com` or one of the allowed
+ * `<subdomain>.linkedin.com` shapes.
+ *
+ * Mirrors backend `app/utils/url.py::_host_is_linkedin` rule-for-rule.
+ * Multi-level subdomains (e.g., `foo.bar.linkedin.com`) are rejected
+ * to close the spoof vector `attacker.com.linkedin.com` where the
+ * attacker controls a host whose name happens to end with the
+ * `.linkedin.com` suffix.
+ */
+function isLinkedInHost(host: string): boolean {
+  if (!host) {
+    return false;
+  }
+  if (host === LINKEDIN_BASE_HOST) {
+    return true;
+  }
+  const suffix = `.${LINKEDIN_BASE_HOST}`;
+  if (!host.endsWith(suffix)) {
+    return false;
+  }
+  // Slice off the trailing `.linkedin.com` to inspect the leading
+  // label(s). Any remaining `.` indicates a multi-level subdomain
+  // which is rejected.
+  const prefix = host.slice(0, host.length - suffix.length);
+  if (prefix.includes(".")) {
+    return false;
+  }
+  return LINKEDIN_SUBDOMAINS.has(prefix);
+}
+
+/**
+ * Returns ``true`` iff *path* is a well-formed LinkedIn profile path.
+ *
+ * Mirrors backend `app/utils/url.py::_path_is_linkedin_profile`:
+ *   1. Starts with `/in/` or `/pub/`.
+ *   2. Has a non-empty slug segment after the prefix.
+ *   3. The slug matches `LINKEDIN_SLUG_PATTERN`.
+ *
+ * Trailing path components (e.g., `/in/jane-doe/details/contact-info`
+ * or LinkedIn `/pub/` URLs which include numeric trailing segments
+ * such as `/pub/jane-doe/12/345/678`) are tolerated; only the FIRST
+ * segment after the prefix is validated.
+ */
+function isLinkedInProfilePath(path: string): boolean {
+  // Collapse accidental `//` runs the user may have pasted, then check
+  // the resulting normalized path. Matches backend behavior: both
+  // `/in/jane` and `//in//jane` are accepted equivalently.
+  const normalized = path.replace(MULTIPLE_SLASH_PATTERN, "/");
+  for (const prefix of LINKEDIN_PATH_PREFIXES) {
+    if (normalized.startsWith(prefix)) {
+      // Take only the first segment after the prefix. LinkedIn
+      // `/pub/` URLs sometimes append trailing numeric path segments,
+      // and `/in/` URLs may have `/details/contact-info` etc.
+      const tail = normalized.slice(prefix.length);
+      const slug = tail.split("/", 1)[0] ?? "";
+      if (!slug) {
+        return false;
+      }
+      return LINKEDIN_SLUG_PATTERN.test(slug);
+    }
+  }
+  return false;
+}
+
+/**
  * Validates that a string looks like a LinkedIn profile URL.
  *
- * Mirrors backend `app.utils.url.is_valid_linkedin_url`. Acceptable shapes:
- *   - https://www.linkedin.com/in/<slug>
- *   - https://linkedin.com/in/<slug>
- *   - http://www.linkedin.com/in/<slug>     (browser may strip TLS)
- *   - https://www.linkedin.com/in/<slug>/   (trailing slash optional)
- *   - https://www.linkedin.com/in/<slug>?utm_source=...   (query allowed)
+ * MIRRORS backend `app.utils.url.is_valid_linkedin_url` — the two
+ * validators MUST accept and reject the same set of URLs per AAP Sec
+ * 0.5.3 ("Pydantic and Zod schemas mirror each other"). When the
+ * backend rules change, update this function in the same PR; co-
+ * located tests in `frontend/tests/schemas/connection.test.ts`
+ * exercise the same URL set on both validators.
  *
- * Edge cases NOT in MVP scope (per the assigned folder Conventions):
- *   - linkedin.cn (China-specific domain)
- *   - linkedin.com/pub/<slug>/.../... (legacy public profile URLs)
- *   - linkedin.com/company/<slug> (company pages, not profiles)
- * Document deferral in docs/decision-log.md if extension is needed.
+ * Acceptable shapes (each mirrored from the backend):
+ *   - https://linkedin.com/in/<slug>
+ *   - https://www.linkedin.com/in/<slug>
+ *   - http://www.linkedin.com/in/<slug>            (any allowed scheme)
+ *   - https://uk.linkedin.com/in/<slug>            (country subdomain)
+ *   - https://de.linkedin.com/in/<slug>?utm=foo    (query allowed)
+ *   - https://www.linkedin.com/in/<slug>/          (trailing slash optional)
+ *   - https://www.linkedin.com/pub/<slug>/12/345   (legacy /pub/ URLs)
+ *   - https://www.linkedin.com/in/Some.Slug-name%20  (URL-safe slug chars)
+ *
+ * Rejected shapes (each mirrored from the backend):
+ *   - linkedin.cn (China-specific domain — different TLD)
+ *   - https://example.com/in/jane (wrong host)
+ *   - https://attacker.com.linkedin.com/in/jane (spoof: multi-level)
+ *   - https://www.linkedin.com/company/<slug> (company pages)
+ *   - ftp:// schemes (only http/https accepted)
  *
  * Implementation notes:
- *   - Uses the browser's native URL constructor (available in Node 20+
- *     and all modern browsers per the project's browserslist).
- *   - The path regex requires exactly /in/<slug> with optional trailing
- *     slash; query strings are allowed because parsed.pathname excludes
- *     the search portion.
- *   - The slug character class [A-Za-z0-9_-]+ admits the canonical
- *     LinkedIn vanity URL alphabet. International characters (e.g.,
- *     accented Latin letters) are NOT admitted; the backend is the
- *     authoritative validator and may accept additional shapes.
+ *   - Uses the browser's native `URL` constructor (available in Node
+ *     20+ and all modern browsers per the project's browserslist).
+ *   - Hostname comparison is lowercase and excludes the port.
+ *   - Path validation is delegated to ``isLinkedInProfilePath``,
+ *     which preserves the backend's slug character class exactly.
  *
  * @param url The candidate URL string to validate.
- * @returns true when the URL matches a LinkedIn profile shape, false otherwise.
+ * @returns true when the URL matches a LinkedIn profile shape per the
+ *          backend rules; false otherwise. NEVER throws.
  */
 function isValidLinkedInUrl(url: string): boolean {
   try {
@@ -184,14 +379,14 @@ function isValidLinkedInUrl(url: string): boolean {
       return false;
     }
     const host = parsed.hostname.toLowerCase();
-    if (host !== "www.linkedin.com" && host !== "linkedin.com") {
+    if (!isLinkedInHost(host)) {
       return false;
     }
-    // Accept /in/<slug> with optional trailing slash and any query string.
-    // Slug must be at least 1 character (alphanumeric, dash, underscore).
-    const path = parsed.pathname;
-    const linkedinPathPattern = /^\/in\/[A-Za-z0-9_-]+\/?$/;
-    return linkedinPathPattern.test(path);
+    // `parsed.pathname` excludes the search and fragment portions, so
+    // query strings and fragments do not interfere with path
+    // validation. They are dropped during normalization on the backend
+    // (per `app/utils/url.py::normalize_linkedin_url`).
+    return isLinkedInProfilePath(parsed.pathname);
   } catch {
     // URL constructor throws on malformed inputs; treat as invalid.
     return false;
