@@ -1,0 +1,138 @@
+/*
+ * index.css - Global stylesheet for the Sales-Connections SPA.
+ *
+ * This file is the ONLY raw CSS in the project. It is imported exactly
+ * once from frontend/src/main.tsx via `import "@/styles/index.css";`.
+ *
+ * Contents:
+ *   1. Tailwind directives (base, components, utilities) - REQUIRED IN
+ *      THIS ORDER. PostCSS expands them at build time using the theme
+ *      and content globs declared in frontend/tailwind.config.ts.
+ *   2. A small @layer base block establishing global element defaults
+ *      (font family, smooth scrolling, selection color, scrollbar,
+ *      <dialog> backdrop) that are not part of Tailwind's reset.
+ *
+ * Conventions (per AAP Sec 0.7.7):
+ *   - All component styling uses Tailwind utility classes in JSX. This
+ *     file does NOT define component classes; that is reserved for
+ *     future use.
+ *   - No vendor prefixes - Autoprefixer 10.x (frontend/postcss.config.cjs)
+ *     adds them automatically based on the `browserslist` field in
+ *     frontend/package.json. The few prefixed properties present below
+ *     have no unprefixed equivalent.
+ *   - No external @import statements - all assets are local; no
+ *     Google Fonts or CDN dependencies.
+ *   - No CSS variable definitions - design tokens live in
+ *     frontend/tailwind.config.ts theme.extend, the single source of
+ *     truth.
+ */
+
+/* Tailwind directives (order matters: base -> components -> utilities) */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+ * Base layer: global element defaults
+ * ============================================================ */
+@layer base {
+  /* Smooth scroll for in-page anchors (e.g., audit-history feed). */
+  html {
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  /* Body: apply theme font-family token, sensible neutral colors,
+   * and full-viewport min-height for short routes (e.g., /login). */
+  body {
+    @apply font-sans antialiased text-slate-900 bg-slate-50;
+    min-height: 100vh;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Headings: tighter line-height and slightly heavier weight. */
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    @apply font-semibold tracking-tight;
+  }
+
+  /* Brand-tinted text selection. */
+  ::selection {
+    @apply bg-brand-200 text-brand-900;
+  }
+
+  /* Anchor defaults for bare <a> outside Tailwind-styled components. */
+  a {
+    @apply text-brand-600 underline-offset-2;
+  }
+
+  a:hover {
+    @apply text-brand-700;
+  }
+
+  /* Form element line-height parity. */
+  input,
+  select,
+  textarea,
+  button {
+    @apply leading-normal;
+  }
+
+  /* Brand-tinted focus ring for keyboard navigation only. */
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-brand-500;
+  }
+
+  /* Webkit-based browser scrollbar styling. */
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  *::-webkit-scrollbar-track {
+    @apply bg-slate-100;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    @apply bg-slate-300 rounded;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    @apply bg-slate-400;
+  }
+
+  /* Firefox scrollbar styling (declarative). */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: theme("colors.slate.300") theme("colors.slate.100");
+  }
+
+  /* Native <dialog> styling for the Modal primitive. */
+  dialog {
+    @apply rounded-lg shadow-modal border border-slate-200 p-0;
+  }
+
+  /* Native <dialog> backdrop (translucent slate-900 with subtle blur). */
+  dialog::backdrop {
+    background-color: rgb(15 23 42 / 0.5);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+  }
+}
+
+/* ============================================================
+ * Components layer: intentionally empty.
+ * Component styling lives in JSX as Tailwind utility classes.
+ * ============================================================ */
+
+/* ============================================================
+ * Utilities layer: intentionally empty.
+ * Custom utilities should be added via tailwind.config.ts
+ * theme.extend, not here.
+ * ============================================================ */
