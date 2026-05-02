@@ -1,178 +1,592 @@
-# =============================================================================
-# CI - lint, type-check, test, and build on every push / PR.
-# =============================================================================
+# =====================================================================
+# Sales-Connections Continuous Integration
+# =====================================================================
+# Purpose: Validate every PR and every main-branch commit before
+#   merge / before deploy. The pipeline shape (per AAP Sec 0.5.2) is:
 #
-# Jobs are split per tier so they can run in parallel. Each tier is also
-# allowed to fail independently to surface the exact area that broke.
+#     Lint -> Type-check -> Test -> Build -> Security-scan
 #
-# All jobs run on Ubuntu 24.04 and use the same pinned runtime versions as
-# the production Dockerfiles (Python 3.12, Node 20.20.2).
-# =============================================================================
+# Six jobs (five quality + one summary):
+#   - backend-quality       ruff lint+format, mypy, pytest --cov-fail-under=85
+#   - frontend-quality      eslint, prettier --check, tsc --noEmit, vitest
+#   - docker-build-backend  Build backend image (no push)
+#   - docker-build-frontend Build frontend image (no push)
+#   - security-scan         Trivy on built images, pip-audit, npm audit
+#   - ci-summary            Aggregate job results for branch protection
+#
+# Performance-optimized:
+#   - Concurrency cancellation cancels superseded runs on the same branch.
+#   - Pip and npm caches reduce cold-start install time by ~80%.
+#   - Docker layer cache (gha) reuses image layers across runs.
+#   - Quality jobs run in parallel; build jobs gated on quality jobs;
+#     security scan gated on builds.
+#
+# Per AAP Sec 0.7.7 (Coding and Quality Standards):
+#   - Pinned versions everywhere (every uses: pinned to @v<MAJOR>)
+#   - Test coverage threshold 85% enforced by both pytest and vitest
+#   - --max-warnings 0 for ESLint (zero-tolerance lint policy)
+#
+# Per AAP Sec 0.7.4 (Security Invariants):
+#   - Minimum-privilege workflow permissions
+#   - No long-lived AWS keys; CI does not need AWS access (CD does)
+# =====================================================================
 
-name: ci
+name: CI - Lint, Type-check, Test, Build, Scan
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+  # Allow manual reruns for diagnostic purposes.
   workflow_dispatch:
 
-permissions:
-  contents: read
-
+# Cancel any superseded run on the same branch (PR or push). Saves CI minutes
+# and ensures the latest commit is always the validated one.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Minimum-privilege default permissions per AAP Sec 0.7.4.
+# Individual jobs that upload security SARIF elevate to security-events: write.
+permissions:
+  contents: read
+  pull-requests: read
+  checks: write
+  security-events: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "20"
+
 jobs:
-  # ---------------------------------------------------------------------------
-  # Backend (Python 3.12 / Flask / pytest)
-  # ---------------------------------------------------------------------------
-  backend:
-    name: backend (lint + type + test)
-    runs-on: ubuntu-24.04
+  # =====================================================================
+  # Job 1: backend-quality
+  # =====================================================================
+  # Validates the Python 3.12 / Flask 3.1.3 backend per AAP Sec 0.5.2:
+  #   - ruff check             (lint per backend/pyproject.toml)
+  #   - ruff format --check    (formatting drift detection)
+  #   - mypy app tests         (static typing)
+  #   - pytest --cov-fail-under=85 (tests with 85% coverage gate)
+  #
+  # Uses pip cache keyed on requirements.txt + requirements-dev.txt hashes
+  # so installs are near-instant on subsequent runs.
+  # =====================================================================
+  backend-quality:
+    name: Backend Quality (lint, type-check, test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
     defaults:
       run:
         working-directory: backend
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_DB: sales_connections_test
-          POSTGRES_USER: sales_connections
-          POSTGRES_PASSWORD: sales_connections
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U sales_connections"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    steps:
-      - uses: actions/checkout@v4
 
-      - name: Setup Python 3.12
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: backend/requirements*.txt
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
 
-      - name: Install system deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libpq-dev
-
-      - name: Install Python deps
+      - name: Upgrade pip toolchain
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          pip install -r requirements-dev.txt
 
-      - name: Lint (ruff)
+      - name: Install backend dependencies
+        run: |
+          pip install -r requirements.txt -r requirements-dev.txt
+          pip list
+
+      - name: Ruff lint check
         run: ruff check .
 
-      - name: Format check (ruff)
+      - name: Ruff format check
         run: ruff format --check .
 
-      - name: Type-check (mypy)
-        run: mypy app || true # advisory in CI; pydantic owns runtime guarantees
-        continue-on-error: true
+      - name: Mypy type check
+        run: mypy app tests
 
-      - name: Tests (pytest)
+      - name: Pytest with coverage (fail under 85)
         env:
-          DATABASE_URL: postgresql+psycopg://sales_connections:sales_connections@localhost:5432/sales_connections_test
+          # Tests use ephemeral SQLite or test-only Postgres; conftest.py
+          # provides defaults. CI sets only what is required for safety.
           FLASK_ENV: testing
-          JWT_SIGNING_KEY: test-only-not-a-real-key-zzzzzzzzzzzzzzzzzzzz
-          ANTHROPIC_API_KEY: test-key
-          GOOGLE_OAUTH_CLIENT_ID: test
-          GOOGLE_OAUTH_CLIENT_SECRET: test
+          LOG_LEVEL: WARNING
+          JWT_SIGNING_KEY: "test-only-jwt-signing-key-do-not-use-in-prod"
+          DEFAULT_ORG_ID: "00000000-0000-0000-0000-000000000001"
+          USE_SECRETS_MANAGER: "false"
         run: |
-          if [ -d tests ]; then
-            pytest --cov=app --cov-report=xml --cov-report=term-missing
-          else
-            echo "::warning::No tests directory yet; skipping pytest run."
-          fi
+          pytest --cov=app --cov-report=xml:coverage.xml --cov-report=term-missing --cov-fail-under=85
 
-      - name: Upload coverage
+      - name: Upload backend coverage report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: backend-coverage
-          path: backend/coverage.xml
-          if-no-files-found: ignore
+          name: backend-coverage-${{ github.run_id }}
+          path: |
+            backend/coverage.xml
+            backend/htmlcov/
+          retention-days: 7
+          if-no-files-found: warn
 
-  # ---------------------------------------------------------------------------
-  # Frontend (Node 20.20.2 / React / Vite / Vitest)
-  # ---------------------------------------------------------------------------
-  frontend:
-    name: frontend (lint + type + test + build)
-    runs-on: ubuntu-24.04
+  # =====================================================================
+  # Job 2: frontend-quality
+  # =====================================================================
+  # Validates the React 19.2.5 / TypeScript 5.x SPA per AAP Sec 0.5.2:
+  #   - npm run lint           (eslint --max-warnings 0)
+  #   - npm run format:check   (prettier --check)
+  #   - npm run typecheck      (tsc --noEmit on both tsconfig.json and tsconfig.node.json)
+  #   - npm run test:coverage  (vitest run --coverage; thresholds 85% statements/lines, 80% branches)
+  #
+  # Uses npm cache keyed on package-lock.json so installs reuse the GitHub
+  # cache between runs.
+  # =====================================================================
+  frontend-quality:
+    name: Frontend Quality (lint, type-check, test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
     defaults:
       run:
         working-directory: frontend
-    steps:
-      - uses: actions/checkout@v4
 
-      - name: Setup Node 20.20.2
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
-          node-version: "20.20.2"
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Install npm deps
-        env:
-          CI: "true"
-        run: npm ci --no-fund --no-audit --loglevel=error
+      - name: Install frontend dependencies
+        run: |
+          npm ci --no-audit --no-fund --prefer-offline --ignore-scripts
+          npm list --depth=0 || true
 
-      - name: Lint (eslint)
+      - name: ESLint (zero-tolerance, --max-warnings 0)
         run: npm run lint
 
-      - name: Format check (prettier)
+      - name: Prettier format check
         run: npm run format:check
 
-      - name: Type-check (tsc)
-        run: npm run type-check
+      - name: TypeScript type check
+        run: npm run typecheck
 
-      - name: Tests (vitest)
-        run: |
-          if find tests src -name "*.test.ts" -o -name "*.test.tsx" 2>/dev/null | grep -q .; then
-            npm run test
-          else
-            echo "::warning::No vitest test files yet; skipping."
-          fi
+      - name: Vitest run with coverage (85% threshold)
+        run: npm run test:coverage
 
-      - name: Build (vite)
-        env:
-          VITE_API_BASE_URL: ""
-        run: npm run build
+      - name: Upload frontend coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-coverage-${{ github.run_id }}
+          path: |
+            frontend/coverage/
+          retention-days: 7
+          if-no-files-found: warn
 
-  # ---------------------------------------------------------------------------
-  # Docker smoke build - exercises the production Dockerfiles.
-  # ---------------------------------------------------------------------------
-  docker-build:
-    name: docker build (backend + frontend)
-    runs-on: ubuntu-24.04
-    needs: [backend, frontend]
-    if: ${{ always() && (needs.backend.result == 'success' || needs.backend.result == 'skipped') }}
+  # =====================================================================
+  # Job 3: docker-build-backend
+  # =====================================================================
+  # Builds the backend container image WITHOUT pushing to ECR. This
+  # validates that the Dockerfile compiles cleanly with the current
+  # requirements.txt and source tree. Production push happens in cd.yml
+  # after PRs merge to main.
+  #
+  # Uses GitHub Actions cache for buildx layer caching (since CI does not
+  # have ECR push permissions, we cannot use registry cache here).
+  # =====================================================================
+  docker-build-backend:
+    name: Docker Build (backend, no push)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [backend-quality]
+    permissions:
+      contents: read
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          install: true
 
       - name: Build backend image
         uses: docker/build-push-action@v6
+        id: build-backend
         with:
           context: ./backend
+          file: ./backend/Dockerfile
           push: false
-          load: false
-          tags: sales-connections-backend:ci
+          load: true
+          tags: |
+            sales-connections-backend:ci-${{ github.sha }}
+            sales-connections-backend:ci-latest
+          labels: |
+            org.opencontainers.image.title=sales-connections-backend
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=Proprietary
+          cache-from: type=gha,scope=backend-${{ github.ref_name }}
+          cache-to: type=gha,scope=backend-${{ github.ref_name }},mode=max
+          platforms: linux/amd64
+
+      - name: Smoke test backend image
+        run: |
+          # Run the image with the venv Python entrypoint to verify the
+          # virtualenv (/opt/venv) and core packages are importable. This
+          # exercises tini, the venv PATH, and the application's pinned
+          # libraries without needing a live database.
+          docker run --rm \
+            --entrypoint /opt/venv/bin/python \
+            sales-connections-backend:ci-latest \
+            -c "import flask; import sqlalchemy; import psycopg; import pydantic; import anthropic; print(f'Flask={flask.__version__}'); print(f'SQLAlchemy={sqlalchemy.__version__}'); print(f'pydantic={pydantic.VERSION}'); print(f'anthropic={anthropic.__version__}')"
+
+      - name: Save backend image as artifact
+        run: |
+          docker save sales-connections-backend:ci-latest -o /tmp/backend-image.tar
+
+      - name: Upload backend image artifact (for security-scan)
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-image-${{ github.run_id }}
+          path: /tmp/backend-image.tar
+          retention-days: 1
+          if-no-files-found: error
+
+  # =====================================================================
+  # Job 4: docker-build-frontend
+  # =====================================================================
+  # Builds the frontend container image WITHOUT pushing to ECR. Verifies
+  # the Vite production build, npm ci reproducibility, and the multi-stage
+  # nginx runtime stage all compile cleanly.
+  # =====================================================================
+  docker-build-frontend:
+    name: Docker Build (frontend, no push)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [frontend-quality]
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          install: true
 
       - name: Build frontend image
         uses: docker/build-push-action@v6
+        id: build-frontend
         with:
           context: ./frontend
+          file: ./frontend/Dockerfile
           push: false
-          load: false
-          tags: sales-connections-frontend:ci
+          load: true
+          tags: |
+            sales-connections-frontend:ci-${{ github.sha }}
+            sales-connections-frontend:ci-latest
+          labels: |
+            org.opencontainers.image.title=sales-connections-frontend
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=Proprietary
+          cache-from: type=gha,scope=frontend-${{ github.ref_name }}
+          cache-to: type=gha,scope=frontend-${{ github.ref_name }},mode=max
+          platforms: linux/amd64
+          build-args: |
+            VITE_API_BASE_URL=/api
+
+      - name: Smoke test frontend image
+        run: |
+          # Boot the nginx container, request /healthz, and verify HTTP 200
+          # to confirm the SPA shell is being served. The frontend nginx.conf
+          # exposes /healthz as a 200-OK liveness endpoint.
+          docker run -d --name fe-smoke -p 18080:80 sales-connections-frontend:ci-latest
+          # nginx start-up is fast but allow a short grace window
+          for attempt in $(seq 1 10); do
+            if curl --silent --output /dev/null --fail --max-time 3 http://localhost:18080/healthz; then
+              echo "Frontend image healthcheck passed."
+              docker logs fe-smoke
+              docker stop fe-smoke
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Frontend image did not respond on /healthz within 20 seconds."
+          docker logs fe-smoke
+          docker stop fe-smoke
+          exit 1
+
+      - name: Save frontend image as artifact
+        run: |
+          docker save sales-connections-frontend:ci-latest -o /tmp/frontend-image.tar
+
+      - name: Upload frontend image artifact (for security-scan)
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-image-${{ github.run_id }}
+          path: /tmp/frontend-image.tar
+          retention-days: 1
+          if-no-files-found: error
+
+  # =====================================================================
+  # Job 5: security-scan
+  # =====================================================================
+  # Runs three complementary security scans:
+  #   - Trivy: scans the built backend and frontend images for OS-level
+  #            vulnerabilities and misconfigurations. Results uploaded as
+  #            SARIF to GitHub Security tab.
+  #   - pip-audit: scans backend Python dependencies for known CVEs.
+  #   - npm audit: scans frontend npm dependencies for known CVEs.
+  #
+  # Per AAP Sec 0.7.4, dependency-version security is a continuous concern;
+  # CI enforces it on every PR. Dependabot (.github/workflows/dependabot.yml)
+  # opens update PRs as a complementary mechanism.
+  # =====================================================================
+  security-scan:
+    name: Security Scan (Trivy, pip-audit, npm audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [docker-build-backend, docker-build-frontend]
+    permissions:
+      contents: read
+      security-events: write   # Required to upload SARIF
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Download backend image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-image-${{ github.run_id }}
+          path: /tmp/
+
+      - name: Download frontend image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-image-${{ github.run_id }}
+          path: /tmp/
+
+      - name: Load backend image
+        run: docker load -i /tmp/backend-image.tar
+
+      - name: Load frontend image
+        run: docker load -i /tmp/frontend-image.tar
+
+      - name: Trivy scan - backend image (SARIF for Security tab)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: sales-connections-backend:ci-latest
+          format: sarif
+          output: trivy-backend.sarif
+          severity: CRITICAL,HIGH,MEDIUM
+          ignore-unfixed: true
+          exit-code: "0"
+          vuln-type: os,library
+        env:
+          TRIVY_DISABLE_VEX_NOTICE: "true"
+
+      - name: Trivy scan - frontend image (SARIF for Security tab)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: sales-connections-frontend:ci-latest
+          format: sarif
+          output: trivy-frontend.sarif
+          severity: CRITICAL,HIGH,MEDIUM
+          ignore-unfixed: true
+          exit-code: "0"
+          vuln-type: os,library
+        env:
+          TRIVY_DISABLE_VEX_NOTICE: "true"
+
+      - name: Upload backend Trivy SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-backend.sarif
+          category: trivy-backend
+
+      - name: Upload frontend Trivy SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-frontend.sarif
+          category: trivy-frontend
+
+      - name: Trivy scan - backend image (table format, fail on CRITICAL/HIGH)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: sales-connections-backend:ci-latest
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          # FAIL the job on CRITICAL/HIGH after the SARIF is uploaded above.
+          exit-code: "1"
+          vuln-type: os,library
+        env:
+          TRIVY_DISABLE_VEX_NOTICE: "true"
+
+      - name: Trivy scan - frontend image (table format, fail on CRITICAL/HIGH)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: sales-connections-frontend:ci-latest
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+          vuln-type: os,library
+        env:
+          TRIVY_DISABLE_VEX_NOTICE: "true"
+
+      - name: Set up Python for pip-audit
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install pip-audit
+        run: pip install pip-audit==2.7.3
+
+      - name: pip-audit (backend dependencies)
+        working-directory: backend
+        run: |
+          pip-audit \
+            --requirement requirements.txt \
+            --requirement requirements-dev.txt \
+            --strict \
+            --disable-pip \
+            --vulnerability-service osv \
+            --output pip-audit.json \
+            --format json
+        continue-on-error: false
+
+      - name: Upload pip-audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pip-audit-report-${{ github.run_id }}
+          path: backend/pip-audit.json
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Set up Node.js for npm audit
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: npm audit (frontend, fail on high+)
+        working-directory: frontend
+        run: |
+          # npm audit returns non-zero on findings at the configured level.
+          # Pipeline fails on HIGH and CRITICAL CVEs. MODERATE issues are
+          # reported as warnings and tracked via Dependabot.
+          npm audit --audit-level=high --omit=dev || {
+            echo "::error::npm audit found HIGH or CRITICAL vulnerabilities."
+            npm audit --audit-level=high --omit=dev --json > npm-audit.json || true
+            exit 1
+          }
+
+      - name: Upload npm-audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-audit-report-${{ github.run_id }}
+          path: frontend/npm-audit.json
+          retention-days: 30
+          if-no-files-found: ignore
+
+  # =====================================================================
+  # Job 6: ci-summary
+  # =====================================================================
+  # Aggregates pass/fail status from all upstream jobs into a single
+  # status check. This makes it easy to configure branch protection on
+  # `main` to require ONLY this single check rather than enumerating each
+  # job. The job fails fast if any upstream job failed.
+  # =====================================================================
+  ci-summary:
+    name: CI Summary
+    runs-on: ubuntu-latest
+    needs:
+      - backend-quality
+      - frontend-quality
+      - docker-build-backend
+      - docker-build-frontend
+      - security-scan
+    if: always()
+    timeout-minutes: 2
+    permissions:
+      contents: read
+
+    steps:
+      - name: Verify all upstream jobs succeeded
+        run: |
+          backend_quality="${{ needs.backend-quality.result }}"
+          frontend_quality="${{ needs.frontend-quality.result }}"
+          docker_build_backend="${{ needs.docker-build-backend.result }}"
+          docker_build_frontend="${{ needs.docker-build-frontend.result }}"
+          security_scan="${{ needs.security-scan.result }}"
+
+          echo "backend-quality:        ${backend_quality}"
+          echo "frontend-quality:       ${frontend_quality}"
+          echo "docker-build-backend:   ${docker_build_backend}"
+          echo "docker-build-frontend:  ${docker_build_frontend}"
+          echo "security-scan:          ${security_scan}"
+
+          if [ "${backend_quality}" != "success" ] \
+            || [ "${frontend_quality}" != "success" ] \
+            || [ "${docker_build_backend}" != "success" ] \
+            || [ "${docker_build_frontend}" != "success" ] \
+            || [ "${security_scan}" != "success" ]; then
+            echo "::error::One or more CI jobs did not succeed."
+            exit 1
+          fi
+          echo "All CI jobs succeeded."
+
+      - name: Post summary to GitHub Step Summary
+        if: always()
+        run: |
+          {
+            echo "# CI Summary"
+            echo ""
+            echo "| Job | Result |"
+            echo "|-----|--------|"
+            echo "| backend-quality | ${{ needs.backend-quality.result }} |"
+            echo "| frontend-quality | ${{ needs.frontend-quality.result }} |"
+            echo "| docker-build-backend | ${{ needs.docker-build-backend.result }} |"
+            echo "| docker-build-frontend | ${{ needs.docker-build-frontend.result }} |"
+            echo "| security-scan | ${{ needs.security-scan.result }} |"
+          } >> "${GITHUB_STEP_SUMMARY}"
