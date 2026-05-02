@@ -1,0 +1,209 @@
+# =====================================================================
+# CODEOWNERS -- Sales-Connections
+# =====================================================================
+#
+# GitHub uses this file to automatically request reviews from the
+# appropriate team when a pull request touches files matching the
+# patterns below. CODEOWNERS approval is REQUIRED for merging into
+# protected branches (configured separately in branch-protection rules).
+#
+# SYNTAX
+#   <pattern>    @org/team-handle [@additional-team]
+#
+# PRECEDENCE
+#   Later lines override earlier lines for the SAME path. Place
+#   most-specific patterns LAST.
+#
+# TEAM HANDLES
+#   The placeholder organisation `@sales-connections` should be
+#   replaced with the actual GitHub organisation name when the
+#   repository moves out of bootstrap.
+#
+# ROUTING POLICY (per AAP Sec 0.6.1 and 0.7.5)
+#   - backend/    -> backend-team owns Flask, SQLAlchemy, pydantic,
+#                    AI orchestration, audit, RBAC, migrations
+#   - frontend/   -> frontend-team owns React, TanStack Query,
+#                    Vite, Tailwind, components, tests
+#   - infra/      -> platform-team owns Terraform, AWS resources,
+#                    ECR, ALB, RDS, IAM, observability
+#   - docs/       -> leads own decision-log, architecture,
+#                    onboarding, security, operations, diagrams
+#   - blitzy-deck/-> leads own the executive reveal.js deck
+#   - .github/    -> leads own CI/CD, governance, dependabot
+#   - root files  -> leads own README, docker-compose, .gitignore
+#
+# SECURITY-CRITICAL FILES (override default routing)
+#   - backend/app/services/auth.py        -> security-team REQUIRED
+#   - backend/app/services/audit.py       -> security-team REQUIRED
+#   - backend/app/middleware/auth.py      -> security-team REQUIRED
+#   - backend/app/middleware/rbac.py      -> security-team REQUIRED
+#   - backend/migrations/versions/*       -> backend-team + security-team
+#   - infra/terraform/modules/secrets/*   -> platform-team + security-team
+#   - infra/terraform/modules/iam/*       -> platform-team + security-team
+#
+# =====================================================================
+
+# Default fallback: any unmatched file requires leads review.
+*       @sales-connections/leads
+
+# =====================================================================
+# Backend tier -- Python 3.12 / Flask 3.1.3 / SQLAlchemy 2.x / pydantic 2.x
+# =====================================================================
+
+# All backend code defaults to the backend team.
+/backend/                                                       @sales-connections/backend-team
+
+# Migrations require both backend and security oversight because they
+# alter the database privilege model and the append-only audit grants.
+/backend/migrations/                                            @sales-connections/backend-team @sales-connections/security-team
+/backend/migrations/versions/                                   @sales-connections/backend-team @sales-connections/security-team
+
+# Authentication and RBAC files are security-critical (per AAP Sec 0.7.4).
+/backend/app/api/auth.py                                        @sales-connections/backend-team @sales-connections/security-team
+/backend/app/services/auth.py                                   @sales-connections/backend-team @sales-connections/security-team
+/backend/app/middleware/auth.py                                 @sales-connections/backend-team @sales-connections/security-team
+/backend/app/middleware/rbac.py                                 @sales-connections/backend-team @sales-connections/security-team
+
+# Audit emission is security-critical (append-only invariant).
+/backend/app/services/audit.py                                  @sales-connections/backend-team @sales-connections/security-team
+/backend/app/models/audit_event.py                              @sales-connections/backend-team @sales-connections/security-team
+
+# AI orchestration is the only file allowed to import the Anthropic SDK
+# (provider-replaceability invariant per AAP Sec 0.7.7).
+/backend/app/services/ai_orchestration.py                       @sales-connections/backend-team @sales-connections/leads
+
+# Backend dependency manifests require both backend and security review
+# because version pinning has security implications.
+/backend/requirements.txt                                       @sales-connections/backend-team @sales-connections/security-team
+/backend/requirements-dev.txt                                   @sales-connections/backend-team
+/backend/pyproject.toml                                         @sales-connections/backend-team
+
+# Backend Dockerfile is platform-team territory (production runtime).
+/backend/Dockerfile                                             @sales-connections/backend-team @sales-connections/platform-team
+
+# Backend env example documents the operational interface.
+/backend/.env.example                                           @sales-connections/backend-team @sales-connections/platform-team
+
+# =====================================================================
+# Frontend tier -- React 19.2.5 / TypeScript 5.x / Vite / TailwindCSS 3.x
+# =====================================================================
+
+# All frontend code defaults to the frontend team.
+/frontend/                                                      @sales-connections/frontend-team
+
+# The single fetch wrapper governs ALL HTTP traffic per AAP Sec 0.7.7
+# (no direct fetch() elsewhere in the SPA). Changes here require frontend
+# AND security oversight because cookie/credential handling is centralized.
+/frontend/src/api/client.ts                                     @sales-connections/frontend-team @sales-connections/security-team
+
+# Authentication-related frontend modules.
+/frontend/src/auth/                                             @sales-connections/frontend-team @sales-connections/security-team
+/frontend/src/features/auth/                                    @sales-connections/frontend-team @sales-connections/security-team
+
+# Frontend dependency manifests require security review.
+/frontend/package.json                                          @sales-connections/frontend-team @sales-connections/security-team
+/frontend/package-lock.json                                     @sales-connections/frontend-team
+
+# Frontend infrastructure (Dockerfile, nginx) belongs to platform-team
+# alongside frontend-team.
+/frontend/Dockerfile                                            @sales-connections/frontend-team @sales-connections/platform-team
+/frontend/nginx.conf                                            @sales-connections/frontend-team @sales-connections/platform-team
+
+# Frontend env example documents the operational interface.
+/frontend/.env.example                                          @sales-connections/frontend-team @sales-connections/platform-team
+
+# =====================================================================
+# Infrastructure tier -- Terraform / Docker / AWS
+# =====================================================================
+
+# All Terraform / IaC defaults to the platform team.
+/infra/                                                         @sales-connections/platform-team
+
+# Secrets and IAM modules are security-critical (touch the credential
+# surface per AAP Sec 0.4.6).
+/infra/terraform/modules/secrets/                               @sales-connections/platform-team @sales-connections/security-team
+/infra/terraform/modules/iam/                                   @sales-connections/platform-team @sales-connections/security-team
+
+# Database module touches the audit-immutability privileges.
+/infra/terraform/modules/database/                              @sales-connections/platform-team @sales-connections/security-team @sales-connections/backend-team
+
+# Network module shapes the public/private surface.
+/infra/terraform/modules/network/                               @sales-connections/platform-team @sales-connections/security-team
+
+# Observability module wires logs/metrics/traces; cross-cutting.
+/infra/terraform/modules/observability/                         @sales-connections/platform-team @sales-connections/leads
+
+# Production environment composition requires extra scrutiny.
+/infra/terraform/envs/prod/                                     @sales-connections/platform-team @sales-connections/leads @sales-connections/security-team
+
+# Top-level docker-compose for local dev.
+/docker-compose.yml                                             @sales-connections/platform-team @sales-connections/backend-team @sales-connections/frontend-team
+
+# =====================================================================
+# Documentation tier -- Markdown
+# =====================================================================
+
+# Docs default to the leads team (per AAP Sec 0.7.5 Explainability rule).
+/docs/                                                          @sales-connections/leads
+
+# The decision log is the single source of truth for "why" decisions
+# (AAP Sec 0.7.5). All teams must approve changes that affect their domain.
+/docs/decision-log.md                                           @sales-connections/leads
+
+# Architecture and diagrams require leads + relevant tier owner.
+/docs/architecture.md                                           @sales-connections/leads
+/docs/diagrams/                                                 @sales-connections/leads
+
+# API catalog requires backend team review.
+/docs/api.md                                                    @sales-connections/leads @sales-connections/backend-team
+
+# Operations and security runbooks require platform + security review.
+/docs/operations.md                                             @sales-connections/leads @sales-connections/platform-team
+/docs/security.md                                               @sales-connections/leads @sales-connections/security-team
+
+# Onboarding doc affects all teams.
+/docs/onboarding.md                                             @sales-connections/leads
+
+# =====================================================================
+# Executive Presentation deck (per AAP Sec 0.7.5)
+# =====================================================================
+
+# The reveal.js deck is leads territory because it targets non-technical
+# leadership; design and content decisions go through leads.
+/blitzy-deck/                                                   @sales-connections/leads
+
+# =====================================================================
+# GitHub governance and CI/CD
+# =====================================================================
+
+# This folder defaults to leads + platform-team.
+/.github/                                                       @sales-connections/leads @sales-connections/platform-team
+
+# CI/CD workflows are platform-team's primary operational surface.
+/.github/workflows/                                             @sales-connections/platform-team @sales-connections/leads
+/.github/workflows/ci.yml                                       @sales-connections/platform-team @sales-connections/leads
+/.github/workflows/cd.yml                                       @sales-connections/platform-team @sales-connections/leads @sales-connections/security-team
+
+# CODEOWNERS itself requires leads sign-off (governance change).
+/.github/CODEOWNERS                                             @sales-connections/leads
+
+# PR template controls the rule-enforcement surface.
+/.github/pull_request_template.md                               @sales-connections/leads
+
+# Dependabot config affects supply chain security.
+/.github/workflows/dependabot.yml                               @sales-connections/leads @sales-connections/security-team @sales-connections/platform-team
+
+# =====================================================================
+# Repository root files
+# =====================================================================
+
+# Root README is the developer onboarding surface (AAP Sec 0.7.5
+# Onboarding rule). All teams contribute, but leads is the single owner
+# of record.
+/README.md                                                      @sales-connections/leads
+
+# Top-level configuration files default to leads.
+/.gitignore                                                     @sales-connections/leads
+/.gitattributes                                                 @sales-connections/leads
+/.editorconfig                                                  @sales-connections/leads
+/Makefile                                                       @sales-connections/leads @sales-connections/platform-team
