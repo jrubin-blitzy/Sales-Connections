@@ -249,11 +249,16 @@ http_request_duration_seconds: Histogram = Histogram(
 )
 
 # AI request duration histogram labelled by outcome. The ``outcome``
-# label takes one of three values - ``success``, ``timeout``, ``error``
-# - so that alerting rules can isolate timeout rate ("AI timeout
-# rate > 1% over 5 minutes") and error rate independently. Service-layer
-# code in :mod:`app.services.ai_orchestration` records observations
-# here for every Anthropic Claude invocation.
+# label takes one of four values - ``success``, ``timeout``, ``error``,
+# ``validation`` - so that alerting rules can isolate timeout rate
+# ("AI timeout rate > 1% over 5 minutes"), generic-error rate, and
+# input-rejection rate independently. The ``validation`` label is
+# observed when ``app.services.ai_orchestration.generate_outreach_notes``
+# rejects an input that sanitizes down to the empty string (the call is
+# never sent to Anthropic, but the observation still fires with a 0.0
+# duration so input-rejection volume is visible in the histogram).
+# Service-layer code in :mod:`app.services.ai_orchestration` records
+# observations here for every Anthropic Claude invocation.
 ai_request_duration_seconds: Histogram = Histogram(
     "ai_request_duration_seconds",
     (

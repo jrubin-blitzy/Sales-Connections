@@ -259,21 +259,27 @@ class Record(Base):
     # introspection time.
     __table_args__ = (
         # Primary feed-query index (F-004): scoped by org,
-        # soft-delete-aware, ordered by submission_date. PostgreSQL's
-        # B-tree index can use ``deleted_at`` as a range predicate
-        # (WHERE deleted_at IS NULL) while the leading ``org_id``
-        # provides equality and the trailing ``submission_date``
-        # provides ordering. PostgreSQL can scan an ascending index
-        # in reverse for ``ORDER BY submission_date DESC``, so the
-        # ASC declaration here is functionally adequate; the
-        # canonical migration uses an explicit DESC for the marginal
-        # 5-10% scan-speed advantage at 10K-record scale (see
-        # ``backend/migrations/versions/0001_initial_schema.py``).
+        # soft-delete-aware, ordered by ``submission_date DESC``.
+        # PostgreSQL's B-tree index can use ``deleted_at`` as a range
+        # predicate (WHERE deleted_at IS NULL) while the leading
+        # ``org_id`` provides equality and the trailing
+        # ``submission_date`` provides ordering. The DESC ordering is
+        # EXPLICIT per decision log entry DL-0027: PostgreSQL CAN scan
+        # an ascending index backward for ``ORDER BY ... DESC``, but a
+        # forward scan on a DESC index is consistently 5-10% faster at
+        # the 10K-record scale ceiling (AAP Section 0.7.3 feed-load
+        # budget). Declaring ``text("submission_date DESC")`` here
+        # rather than the bare column name keeps this model
+        # character-for-character aligned with the canonical migration
+        # at ``backend/migrations/versions/0001_initial_schema.py``,
+        # which eliminates the alembic-autogenerate drift risk that
+        # would otherwise emit a spurious ASC-recreation migration on
+        # the next ``alembic revision --autogenerate`` invocation.
         Index(
             "ix_records_org_deleted_submission",
             "org_id",
             "deleted_at",
-            "submission_date",
+            text("submission_date DESC"),
         ),
         # Filter-dimension indexes (F-004): support cheap filtering
         # by involvement type and outreach status without scanning
