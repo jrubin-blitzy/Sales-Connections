@@ -196,6 +196,21 @@ docstring-code-line-length = 90
 python_version = "3.12"
 mypy_path = "."
 files = ["app", "tests"]
+# ``explicit_package_bases = true`` is REQUIRED because the ``app/``
+# package is a PEP 420 namespace package (no ``app/__init__.py``) and
+# contains multiple sibling files sharing the same basename across
+# different sub-packages (e.g., ``app/middleware/auth.py`` and
+# ``app/schemas/auth.py``; ``app/observability/logging.py`` shadowing
+# the stdlib). Without this flag mypy reports
+# ``Source file found twice under different module names`` because it
+# ambiguously resolves files via both their bare basename and their
+# fully-qualified ``app.*`` dotted path. The flag makes mypy treat
+# ``mypy_path`` (= ``.``) as the only valid package base, which
+# resolves all in-tree files to their single canonical
+# ``app.<sub>.<name>`` dotted module name. See:
+# https://mypy.readthedocs.io/en/stable/running_mypy.html#mapping-file-paths-to-modules
+explicit_package_bases = true
+namespace_packages = true
 exclude = [
     "migrations/versions/.*",
     "build",
