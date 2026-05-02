@@ -13,8 +13,11 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# Anchor `lib/` and `lib64/` to the repo root so they only match Python
+# distutils build artifacts at the top level, not TypeScript source folders
+# such as frontend/src/lib/.
+/lib/
+/lib64/
 parts/
 sdist/
 var/
