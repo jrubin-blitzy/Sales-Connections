@@ -1,11 +1,12 @@
 {
   "name": "sales-connections-frontend",
-  "version": "0.1.0",
   "private": true,
+  "version": "0.1.0",
+  "description": "Sales-Connections frontend SPA: React 19.2.5 + TypeScript 5.x + Vite + TailwindCSS 3.x + TanStack Query 5.x.",
   "type": "module",
-  "description": "Sales-Connections frontend - React 19 + TypeScript 5 + Vite + TailwindCSS",
+  "license": "UNLICENSED",
   "engines": {
-    "node": ">=20.20.2",
+    "node": ">=20.20.2 <21.0.0",
     "npm": ">=10.0.0"
   },
   "scripts": {
@@ -14,10 +15,11 @@
     "build:check": "tsc -b --noEmit",
     "preview": "vite preview",
     "type-check": "tsc -b --noEmit",
-    "lint": "eslint .",
+    "typecheck": "tsc -b --noEmit",
+    "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
-    "format": "prettier --write \"src/**/*.{ts,tsx,css,json}\" \"tests/**/*.{ts,tsx}\"",
-    "format:check": "prettier --check \"src/**/*.{ts,tsx,css,json}\" \"tests/**/*.{ts,tsx}\"",
+    "format": "prettier --write \"src/**/*.{ts,tsx,css,json}\" \"tests/**/*.{ts,tsx}\" \"index.html\" \"*.{json,cjs,ts}\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx,css,json}\" \"tests/**/*.{ts,tsx}\" \"index.html\" \"*.{json,cjs,ts}\"",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"
@@ -57,5 +59,12 @@
     "typescript-eslint": "8.18.2",
     "vite": "5.4.21",
     "vitest": "2.1.9"
-  }
+  },
+  "browserslist": [
+    "> 0.5%",
+    "last 2 versions",
+    "Firefox ESR",
+    "not dead",
+    "not IE 11"
+  ]
 }
