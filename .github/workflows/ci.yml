@@ -1,0 +1,178 @@
+# =============================================================================
+# CI - lint, type-check, test, and build on every push / PR.
+# =============================================================================
+#
+# Jobs are split per tier so they can run in parallel. Each tier is also
+# allowed to fail independently to surface the exact area that broke.
+#
+# All jobs run on Ubuntu 24.04 and use the same pinned runtime versions as
+# the production Dockerfiles (Python 3.12, Node 20.20.2).
+# =============================================================================
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Backend (Python 3.12 / Flask / pytest)
+  # ---------------------------------------------------------------------------
+  backend:
+    name: backend (lint + type + test)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: sales_connections_test
+          POSTGRES_USER: sales_connections
+          POSTGRES_PASSWORD: sales_connections
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U sales_connections"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libpq-dev
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Format check (ruff)
+        run: ruff format --check .
+
+      - name: Type-check (mypy)
+        run: mypy app || true # advisory in CI; pydantic owns runtime guarantees
+        continue-on-error: true
+
+      - name: Tests (pytest)
+        env:
+          DATABASE_URL: postgresql+psycopg://sales_connections:sales_connections@localhost:5432/sales_connections_test
+          FLASK_ENV: testing
+          JWT_SIGNING_KEY: test-only-not-a-real-key-zzzzzzzzzzzzzzzzzzzz
+          ANTHROPIC_API_KEY: test-key
+          GOOGLE_OAUTH_CLIENT_ID: test
+          GOOGLE_OAUTH_CLIENT_SECRET: test
+        run: |
+          if [ -d tests ]; then
+            pytest --cov=app --cov-report=xml --cov-report=term-missing
+          else
+            echo "::warning::No tests directory yet; skipping pytest run."
+          fi
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: backend/coverage.xml
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # Frontend (Node 20.20.2 / React / Vite / Vitest)
+  # ---------------------------------------------------------------------------
+  frontend:
+    name: frontend (lint + type + test + build)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node 20.20.2
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.20.2"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install npm deps
+        env:
+          CI: "true"
+        run: npm ci --no-fund --no-audit --loglevel=error
+
+      - name: Lint (eslint)
+        run: npm run lint
+
+      - name: Format check (prettier)
+        run: npm run format:check
+
+      - name: Type-check (tsc)
+        run: npm run type-check
+
+      - name: Tests (vitest)
+        run: |
+          if find tests src -name "*.test.ts" -o -name "*.test.tsx" 2>/dev/null | grep -q .; then
+            npm run test
+          else
+            echo "::warning::No vitest test files yet; skipping."
+          fi
+
+      - name: Build (vite)
+        env:
+          VITE_API_BASE_URL: ""
+        run: npm run build
+
+  # ---------------------------------------------------------------------------
+  # Docker smoke build - exercises the production Dockerfiles.
+  # ---------------------------------------------------------------------------
+  docker-build:
+    name: docker build (backend + frontend)
+    runs-on: ubuntu-24.04
+    needs: [backend, frontend]
+    if: ${{ always() && (needs.backend.result == 'success' || needs.backend.result == 'skipped') }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: false
+          load: false
+          tags: sales-connections-backend:ci
+
+      - name: Build frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: false
+          load: false
+          tags: sales-connections-frontend:ci

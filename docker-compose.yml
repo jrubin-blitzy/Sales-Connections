@@ -1,0 +1,105 @@
+# =============================================================================
+# Sales-Connections - Local Development Stack
+# =============================================================================
+# Brings up PostgreSQL 17, the Flask backend, and the React frontend on
+# a shared bridge network. Optional pgAdmin profile available via:
+#     docker compose --profile admin up -d
+#
+# Quick start:
+#     cp backend/.env.example  backend/.env
+#     cp frontend/.env.example frontend/.env.local
+#     docker compose up --build
+#
+# All services share `sales_connections_net`. The backend connects to Postgres
+# via the service hostname `postgres` (NOT `localhost`).
+# =============================================================================
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: sales-connections-postgres
+    environment:
+      POSTGRES_DB: sales_connections
+      POSTGRES_USER: sales_connections
+      POSTGRES_PASSWORD: sales_connections
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sales_connections -d sales_connections"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - sales_connections_net
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: sales-connections-backend:dev
+    container_name: sales-connections-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      FLASK_ENV: development
+      DATABASE_URL: postgresql+psycopg://sales_connections:sales_connections@postgres:5432/sales_connections
+      LOG_LEVEL: DEBUG
+      WEB_CONCURRENCY: 2
+      FRONTEND_ORIGIN: http://localhost:5173
+      OTLP_EXPORTER_ENDPOINT: http://otel-collector:4318/v1/traces
+    env_file:
+      - path: ./backend/.env
+        required: false
+    ports:
+      - "5000:8000"
+    networks:
+      - sales_connections_net
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ""
+    image: sales-connections-frontend:dev
+    container_name: sales-connections-frontend
+    depends_on:
+      - backend
+    ports:
+      - "5173:80"
+    networks:
+      - sales_connections_net
+    restart: unless-stopped
+
+  pgadmin:
+    image: dpage/pgadmin4:8
+    container_name: sales-connections-pgadmin
+    profiles: ["admin"]
+    environment:
+      PGADMIN_DEFAULT_EMAIL: dev@example.local
+      PGADMIN_DEFAULT_PASSWORD: dev
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    ports:
+      - "5050:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - sales_connections_net
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    name: sales_connections_postgres_data
+
+networks:
+  sales_connections_net:
+    name: sales_connections_net
+    driver: bridge

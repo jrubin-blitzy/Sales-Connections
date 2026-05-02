@@ -1,0 +1,57 @@
+# =============================================================================
+# Dependabot - keep production deps within their pinned minor ranges.
+# =============================================================================
+# - Major bumps land as separate PRs the team review explicitly.
+# - Security advisories always create a PR.
+
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/backend"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:00"
+    open-pull-requests-limit: 10
+    versioning-strategy: increase
+    labels: ["dependencies", "backend"]
+    groups:
+      patch-updates:
+        applies-to: version-updates
+        update-types: ["patch"]
+      security-updates:
+        applies-to: security-updates
+
+  - package-ecosystem: npm
+    directory: "/frontend"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:00"
+    open-pull-requests-limit: 10
+    versioning-strategy: increase
+    labels: ["dependencies", "frontend"]
+    groups:
+      patch-updates:
+        applies-to: version-updates
+        update-types: ["patch"]
+      security-updates:
+        applies-to: security-updates
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    labels: ["dependencies", "ci"]
+
+  - package-ecosystem: docker
+    directory: "/backend"
+    schedule:
+      interval: monthly
+    labels: ["dependencies", "docker"]
+
+  - package-ecosystem: docker
+    directory: "/frontend"
+    schedule:
+      interval: monthly
+    labels: ["dependencies", "docker"]

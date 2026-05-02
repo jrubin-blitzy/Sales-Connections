@@ -1,0 +1,125 @@
+# =============================================================================
+# CD - push images to ECR + run terraform plan/apply per environment.
+# =============================================================================
+#
+# Triggered:
+#   - push to `main`              => ECR push, terraform apply staging
+#   - workflow_dispatch (manual)  => terraform apply prod (requires approval)
+#
+# Auth: short-lived OIDC tokens; no long-lived AWS access keys are stored.
+#       Configure the deploy role ARN in the repo secret AWS_DEPLOY_ROLE_ARN.
+# =============================================================================
+
+name: cd
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      target_env:
+        description: "Target environment (dev, staging, prod)"
+        required: true
+        default: staging
+        type: choice
+        options: [dev, staging, prod]
+
+permissions:
+  contents: read
+  id-token: write # required for OIDC into AWS
+
+concurrency:
+  group: cd-${{ github.event.inputs.target_env || 'staging' }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  TF_VERSION: 1.10.3
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Build & push images to ECR.
+  # ---------------------------------------------------------------------------
+  push-images:
+    name: build & push to ECR
+    runs-on: ubuntu-24.04
+    outputs:
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Compute image metadata
+        id: meta
+        run: |
+          IMAGE_TAG=${GITHUB_SHA::12}
+          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Build & push backend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ${{ steps.ecr-login.outputs.registry }}/sales-connections-backend:${{ steps.meta.outputs.image_tag }}
+            ${{ steps.ecr-login.outputs.registry }}/sales-connections-backend:latest
+
+      - name: Build & push frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: true
+          tags: |
+            ${{ steps.ecr-login.outputs.registry }}/sales-connections-frontend:${{ steps.meta.outputs.image_tag }}
+            ${{ steps.ecr-login.outputs.registry }}/sales-connections-frontend:latest
+
+  # ---------------------------------------------------------------------------
+  # Terraform plan + apply for the chosen environment.
+  # Default for `push` triggers is `staging`; `workflow_dispatch` allows prod.
+  # ---------------------------------------------------------------------------
+  terraform:
+    name: terraform (${{ github.event.inputs.target_env || 'staging' }})
+    runs-on: ubuntu-24.04
+    needs: [push-images]
+    environment: ${{ github.event.inputs.target_env || 'staging' }}
+    defaults:
+      run:
+        working-directory: infra/terraform/envs/${{ github.event.inputs.target_env || 'staging' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive ../../
+
+      - name: terraform init
+        run: terraform init -input=false
+
+      - name: terraform validate
+        run: terraform validate
+
+      - name: terraform plan
+        run: terraform plan -input=false -var "image_tag=${{ needs.push-images.outputs.image_tag }}"
+
+      - name: terraform apply
+        if: github.event_name == 'push' || github.event.inputs.target_env != 'prod'
+        run: terraform apply -input=false -auto-approve -var "image_tag=${{ needs.push-images.outputs.image_tag }}"

@@ -1,0 +1,28 @@
+node_modules/
+dist/
+build/
+.vite/
+coverage/
+.next/
+.cache/
+
+# Local config
+.env
+.env.*
+!.env.example
+
+# Test artifacts
+*.log
+.npm/
+.eslintcache
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Git
+.git/
+.github/
