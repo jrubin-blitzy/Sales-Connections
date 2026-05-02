@@ -1,0 +1,105 @@
+%% Diagram: Request Lifecycle for State-Changing Requests (POST/PATCH/DELETE on /api/*)
+sequenceDiagram
+    autonumber
+    participant B as Browser
+    participant ALB as AWS ALB
+    participant F as Flask App
+    participant CM as Correlation MW
+    participant AM as Auth MW
+    participant RB as RBAC Decorator
+    participant H as Handler
+    participant S as Service
+    participant DB as PostgreSQL
+    participant AU as Audit Emitter
+
+    B->>ALB: HTTPS POST /api/connections (Cookie session=JWT, optional X-Correlation-Id)
+    ALB->>F: forward (TLS terminated, private VPC)
+    F->>CM: enter middleware stack
+    CM->>CM: generate UUID4 if X-Correlation-Id absent, bind to structlog and OTel context
+    CM->>AM: pass to auth middleware
+    AM->>AM: extract session cookie, verify JWT against current/prior signing keys, populate g.session
+    Note over AM: Failure here -> 401 unauthorized (no g.session populated, error_handlers emits envelope)
+    AM->>H: pass to handler
+    H->>RB: @requires_role(...) decorator runs
+    RB->>RB: compare g.session.role to admitted roles (sub-50 ms, in-process, no DB round-trip)
+    Note over RB: Failure here -> 403 forbidden (also covers cross-org access)
+    RB-->>H: admit
+    H->>H: parse request body via pydantic (e.g., ConnectionCreate), reject client-supplied owner fields
+    Note over H: pydantic failure -> 422 validation_error with fields[] array
+    H->>S: create_record(g.session, payload)
+    rect rgb(220, 240, 220)
+        S->>DB: BEGIN transaction
+        S->>DB: INSERT INTO records (org_id, owner_user_id, normalized_linkedin_url, fields...)
+        S->>AU: emit_audit_event(event_type=create, actor=session.user_id, target=new_record_id, before=null, after=snapshot)
+        AU->>DB: INSERT INTO audit_events (correlation_id propagated)
+        S->>DB: COMMIT (atomic state-change + audit pair)
+    end
+    Note over S,DB: ATOMIC -- any error in BEGIN..COMMIT triggers ROLLBACK, both records and audit_events INSERTs undone
+    S-->>H: return persisted entity (Record domain object)
+    H->>H: format ConnectionRead response (pydantic serialization)
+    H-->>F: HTTP 201 with JSON body
+    F-->>ALB: response (correlation_id header attached)
+    ALB-->>B: HTTPS 201 (correlation_id echoed in response headers)
+
+%% Legend:
+%% - Arrow conventions:
+%%     ->>      Solid arrow: synchronous request (call) from source to target.
+%%     -->>     Dashed arrow: synchronous response (return) from target back to source.
+%%     X->>X    Self-arrow: an intra-component operation (no inter-process boundary crossed).
+%%              Used here for correlation generation (Step 4), JWT verification (Step 6),
+%%              RBAC role compare (Step 9), pydantic parse (Step 11), and pydantic serialize (Step 19).
+%% - Participants (left to right):
+%%     Browser            React 19.2.5 SPA via frontend/src/api/client.ts fetch wrapper.
+%%     AWS ALB            Application Load Balancer terminates TLS via ACM; forwards to ECS Fargate.
+%%     Flask App          Flask 3.1.3 + Gunicorn process inside ECS Fargate (stateless worker).
+%%     Correlation MW     backend/app/middleware/correlation.py; binds X-Correlation-Id to logs + traces.
+%%     Auth MW            backend/app/middleware/auth.py; verifies session JWT and populates g.session.
+%%     RBAC Decorator     backend/app/middleware/rbac.py; @requires_role(...) admits/denies role.
+%%     Handler            backend/app/api/<feature>.py; pydantic parse, service call, response format.
+%%     Service            backend/app/services/<feature>.py; owns the transaction + business logic.
+%%     PostgreSQL         RDS PostgreSQL 17.7 Multi-AZ; SQLAlchemy 2.x + psycopg 3.x.
+%%     Audit Emitter      backend/app/services/audit.py:emit_audit_event; runs INSIDE parent transaction.
+%% - Atomicity invariant (AAP Section 0.7.1, Principle 6):
+%%     The green rect highlight (Steps 13-17) marks the atomic transaction:
+%%     BEGIN -> INSERT records -> emit_audit_event -> INSERT audit_events -> COMMIT.
+%%     If any step fails, ROLLBACK undoes BOTH the record creation AND the audit_events INSERT.
+%%     There is NO partial commit: state-change and audit row succeed or fail together.
+%% - Append-only invariant (AAP Section 0.4.7):
+%%     The application database role is GRANTed INSERT only on audit_events; UPDATE and DELETE
+%%     are revoked at the database privilege layer. Tests verify a direct UPDATE attempted from
+%%     the application role fails at the database boundary.
+%% - Correlation propagation (AAP Section 0.7.5, Observability rule):
+%%     The X-Correlation-Id is generated (or echoed if client-provided) at Step 4 and propagates
+%%     through every structlog log line, every OpenTelemetry span, the response headers, and the
+%%     uniform error envelope's error.correlation_id field (when an error occurs). It is also
+%%     persisted on audit_events.correlation_id for end-to-end tracing.
+%% - Middleware stack order (AAP Section 0.5.2, Layer 0):
+%%     correlation -> auth -> RBAC -> handler -> error_handlers (registered last; intercepts failures).
+%% - Failure modes and HTTP status codes (uniform error envelope):
+%%     401 unauthorized       missing or invalid session cookie at Step 6 (Auth MW).
+%%     403 forbidden          RBAC role mismatch or cross-org access at Step 9 (RBAC Decorator).
+%%     422 validation_error   pydantic schema rejection at Step 11 (Handler); fields[] enumerates errors.
+%%     500 internal_error     unexpected exception in any layer; ROLLBACK if inside the rect block.
+%%     504 ai_timeout         applies only to POST /api/notes/generate (5s watchdog); not in this diagram.
+%% - Performance budgets (AAP Section 0.7.3):
+%%     Form submit (excluding AI) <= 2s end-to-end (Steps 1..22 timed by prometheus histogram).
+%%     RBAC role check << 50ms (Step 9; in-process JWT-claim comparison; no DB round-trip).
+%%     Audit emission <= 100ms (Steps 15-16; single INSERT inside the parent transaction).
+%% - Read-only requests (GET /api/*):
+%%     Follow Steps 1..12 of this same pipeline, then in place of Steps 13-17 the Service issues
+%%     SELECT statements (no transaction needed; no audit emission since reads are not state-changes),
+%%     then continue with Steps 18..22 to format and return the response.
+%% - OpenTelemetry span hierarchy:
+%%     Outer span:  http.request (created by opentelemetry-instrumentation-flask).
+%%     Inner span:  service.<operation> (e.g., service.create_record); covers Steps 13-17.
+%%     Both spans carry correlation_id, user_id, org_id as span attributes for Jaeger/CloudWatch lookup.
+%% - Stateless invariant (AAP Section 0.7.1, Principle 1):
+%%     The Flask App holds no in-process session state; g.session is populated per-request from the JWT
+%%     and discarded at request end. Any worker can be terminated and replaced without data loss.
+%% - Source: AAP Section 0.1.3 (Cross-Cutting Request Pipeline), Section 0.4.3 (Surface 1 detail),
+%%           Section 0.5.2 (Layer 0 and Layer 2 implementation), Section 0.7.1 (Architectural Invariants).
+%% - Referenced from: docs/architecture.md Section 4 (Request Lifecycle),
+%%                    docs/security.md Section 2 (Authentication) and Section 3 (Authorization),
+%%                    docs/api.md (Conventions, error envelope discussion),
+%%                    docs/operations.md Section 5 (Observability, correlation propagation),
+%%                    blitzy-deck/index.html (executive summary deck).
