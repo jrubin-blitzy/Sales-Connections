@@ -1,0 +1,95 @@
+%% Diagram: Outreach Status State Machine (Feature F-005)
+stateDiagram-v2
+    direction LR
+    NotStarted : Not Started
+    InProgress : In Progress
+    Contacted : Contacted
+    Closed : Closed
+    [*] --> NotStarted : record created (PostgreSQL default)
+    NotStarted --> InProgress : Sales Rep / Admin claims
+    InProgress --> Contacted : Sales Rep / Admin contacts prospect
+    Contacted --> Closed : Sales Rep / Admin closes
+    InProgress --> NotStarted : Sales Rep / Admin un-claims
+    Contacted --> InProgress : Sales Rep / Admin re-engages
+    Closed --> InProgress : Sales Rep / Admin reopens
+    note right of NotStarted
+        Default state on POST /api/connections.
+        Awaiting a sales rep to claim the lead.
+    end note
+    note right of Closed
+        Not a terminal sink:
+        Sales Rep / Admin may reopen
+        via Closed -> In Progress.
+    end note
+
+%% Legend:
+%% - States (4 total; values of the PostgreSQL enum type outreach_status):
+%%     Not Started  - Default state set on POST /api/connections (records.outreach_status DEFAULT
+%%                    'Not Started' per migration 0001_initial_schema). The lead is fresh in the
+%%                    feed and has not been claimed by any sales rep.
+%%     In Progress  - A sales rep has claimed the lead and is actively researching the prospect or
+%%                    preparing the outreach. No outreach attempt has been made yet.
+%%     Contacted    - An outreach attempt has been made (introduction sent, email delivered, call
+%%                    placed, etc.). Awaiting prospect response or next-step decision.
+%%     Closed       - The lead has been worked through to a conclusion (won, lost, abandoned, or
+%%                    fully consumed). NOT a terminal sink - the diagram permits Closed -> In Progress
+%%                    to support reopening previously concluded leads.
+%% - Transitions (7 total: 1 initial + 3 forward + 3 reverse):
+%%     [*] -> Not Started               POST /api/connections; outreach_status defaults to
+%%                                      'Not Started' at the database layer; create-record audit row
+%%                                      (event_type = create) emitted in the same transaction. This
+%%                                      initial transition is a side effect of record creation, not a
+%%                                      status_change event.
+%%     Not Started -> In Progress       PATCH /api/connections/:id/status; sales rep claims the lead.
+%%     In Progress -> Contacted         PATCH /api/connections/:id/status; sales rep makes contact.
+%%     Contacted -> Closed              PATCH /api/connections/:id/status; deal concludes.
+%%     In Progress -> Not Started       PATCH /api/connections/:id/status; sales rep un-claims and
+%%                                      returns the lead to the available pool.
+%%     Contacted -> In Progress         PATCH /api/connections/:id/status; sales rep re-engages
+%%                                      after the prospect did not respond.
+%%     Closed -> In Progress            PATCH /api/connections/:id/status; sales rep reopens a
+%%                                      previously closed lead.
+%% - Authorization (AAP Section 0.1.1 F-005, Section 0.1.2, Section 0.5.2 Layer 4):
+%%     ALL transitions require Sales Rep (Viewer) or Admin role. Contributors CANNOT mutate
+%%     outreach status, even on records they themselves submitted. This is the most surprising
+%%     authorization rule in the platform and is intentional: the user's verbatim instruction
+%%     "to preserve sales team accountability" (AAP Section 0.1.2) keeps the sales workflow
+%%     under sales-team control. Enforcement: backend/app/api/connections.py PATCH
+%%     /api/connections/:id/status decorated with @requires_role('Viewer', 'Admin'); attempts
+%%     by Contributors return HTTP 403 forbidden with error.code = "forbidden".
+%% - Audit emission contract (AAP Section 0.4.7, Section 0.7.1 atomicity invariant):
+%%     Every transition (the six PATCH-driven edges, NOT the [*] -> Not Started initial
+%%     transition) writes exactly ONE audit_events row in the SAME database transaction as the
+%%     UPDATE on records. The row carries:
+%%         event_type      = status_change
+%%         actor_user_id   = g.session.user_id (the sales rep or admin who performed the change)
+%%         target_record_id = records.id
+%%         before_payload  = { "outreach_status": "<prior value>" }
+%%         after_payload   = { "outreach_status": "<new value>" }
+%%         event_timestamp = NOW() (UTC, set by the database)
+%%     If the audit INSERT fails the UPDATE is rolled back; if the UPDATE fails the audit is
+%%     never committed. The audit_events table is append-only at the database privilege layer
+%%     (no UPDATE or DELETE granted to the application role per migration 0001_initial_schema).
+%% - Initial-state semantics: the [*] -> Not Started transition reflects the database-level
+%%   DEFAULT 'Not Started' on records.outreach_status, NOT a status_change audit event. The
+%%   create-record audit event captures the full initial record state (including outreach_status =
+%%   'Not Started') in after_payload; no separate status_change event is emitted at creation time.
+%% - 'Closed' is NOT strictly terminal: the Closed -> In Progress reopen edge is a deliberate
+%%   product decision so that re-engagement after a lost or paused deal does not require creating
+%%   a new record. The audit trail captures every reopen so historical accountability is preserved.
+%%   This diagram models the lifecycle of the outreach_status FIELD only; the lifecycle of the
+%%   underlying RECORD (active / soft-deleted / hard-deleted) is documented separately in
+%%   docs/diagrams/state-record-lifecycle.mmd.
+%% - Out of scope for this diagram:
+%%     PATCH /api/connections/:id (record edits to non-status fields) does NOT transition outreach
+%%     status. Edits emit audit_events.event_type = edit and are catalogued in docs/api.md, not
+%%     here.
+%%     Soft delete (DELETE /api/connections/:id) and hard delete (DELETE /api/admin/records/:id)
+%%     do NOT transition outreach status; they transition the RECORD lifecycle and are documented
+%%     in docs/diagrams/state-record-lifecycle.mmd.
+%% - Source feature: F-005 Outreach Status Tracking (AAP Section 0.1.1, Section 0.5.2 Layer 4).
+%% - Referenced from: docs/architecture.md Section 7 (State Machines / Outreach status state
+%%                    machine), docs/api.md (PATCH /api/connections/:id/status endpoint),
+%%                    docs/security.md (RBAC matrix; status mutation is Viewer/Admin only),
+%%                    docs/operations.md (incident response context for status anomalies),
+%%                    blitzy-deck/index.html (executive summary deck).
