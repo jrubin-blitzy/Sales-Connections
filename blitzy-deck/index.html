@@ -1,0 +1,947 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Sales-Connections — Executive Summary</title>
+  <meta name="description" content="Sales-Connections platform executive summary deck for non-technical leadership.">
+
+  <!-- Reveal.js core CSS (PINNED 5.1.0) -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/reveal.min.css">
+
+  <!-- Reveal.js base theme (overridden by Blitzy theme below). The id="theme" is the reveal.js convention. -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/theme/black.min.css" id="theme">
+
+  <!-- Canonical Blitzy reveal.js theme override. Brand identity (colors, typography) lives here. -->
+  <link rel="stylesheet" href="references/blitzy-reveal-theme.css">
+
+  <!-- Layout-only CSS. Brand identity (colors, typography) belongs in the theme CSS, not here. -->
+  <style>
+    /* Feature grid (slide 3) — 4x4 grid carrying 14 feature cells + 2 brand-badge cells. */
+    /* Sized tightly so all 16 cells fit within the 1080px slide canvas alongside the */
+    /* mission paragraph and the FOURTEEN MVP FEATURES heading. */
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 0.4rem 0.75rem;
+      align-items: start;
+      justify-items: center;
+      margin-top: 0.75rem;
+    }
+    .feature-grid .feature-cell {
+      text-align: center;
+      padding: 0.25rem 0.25rem;
+      max-width: 18rem;
+    }
+    .feature-grid .feature-cell svg {
+      width: 34px;
+      height: 34px;
+      margin-bottom: 0.2rem;
+      stroke-width: 1.5;
+    }
+    .feature-grid .feature-id {
+      display: block;
+      font-size: 0.6em;
+      letter-spacing: 0.06em;
+      opacity: 0.7;
+      margin-bottom: 0.05rem;
+    }
+    .feature-grid .feature-name {
+      display: block;
+      font-size: 0.7em;
+      font-weight: 500;
+      line-height: 1.2;
+    }
+    /* Brand-badge cells fill the two leftover slots in the 4x4 grid so the layout stays balanced. */
+    .feature-grid .feature-cell.brand-badge {
+      opacity: 0.55;
+      align-self: center;
+      font-size: 0.65em;
+      letter-spacing: 0.08em;
+    }
+
+    /* Decision-highlights, risk-register, and next-tasks share a card style. */
+    .decision-grid,
+    .risk-grid,
+    .next-tasks {
+      display: grid;
+      gap: 1.25rem;
+      margin-top: 1.25rem;
+    }
+    .decision-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .risk-grid     { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+    .next-tasks    { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+    .decision-grid .card,
+    .risk-grid .cell,
+    .next-tasks .item {
+      padding: 0.9rem 1.05rem;
+      border-radius: 0.5rem;
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+      text-align: left;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .decision-grid .card svg,
+    .risk-grid .cell svg,
+    .next-tasks .item svg {
+      width: 26px;
+      height: 26px;
+      flex-shrink: 0;
+      margin-top: 0.15rem;
+      stroke-width: 1.5;
+    }
+    .decision-grid .card .heading,
+    .risk-grid .cell .heading,
+    .next-tasks .item .heading {
+      display: block;
+      font-weight: 600;
+      font-size: 0.95em;
+      margin-bottom: 0.2rem;
+      line-height: 1.2;
+    }
+    .decision-grid .card .body,
+    .risk-grid .cell .body,
+    .next-tasks .item .body {
+      display: block;
+      font-size: 0.78em;
+      opacity: 0.9;
+      line-height: 1.4;
+    }
+
+    /* Risk grid styling: left column = risks, right column = mitigations. */
+    .risk-grid .cell.risk     { border-left: 3px solid #c87a4a; }
+    .risk-grid .cell.mitigation { border-left: 3px solid #4a9b6e; }
+
+    /* Icon size classes. */
+    .blitzy-icon-large { width: 96px;  height: 96px;  display: inline-block; vertical-align: middle; stroke-width: 1.25; }
+    .blitzy-icon-huge  { width: 144px; height: 144px; display: inline-block; margin-bottom: 1.25rem; stroke-width: 1.25; }
+
+    /* Diagram slide constraints. Mermaid SVG must scale to slide canvas without overflow. */
+    /* max-height is tighter than 70vh because reveal.js center:true + slide controls + caption */
+    /* leave less than viewport vertical room. 55vh keeps the caption visible across all six */
+    /* embedded diagrams (slides 4, 5, 7, 8, 9, 15). */
+    .diagram-slide .mermaid {
+      max-width: 100%;
+      margin: 0.5rem auto;
+    }
+    .diagram-slide .mermaid svg {
+      max-width: 100% !important;
+      max-height: 55vh !important;
+      width: auto !important;
+      height: auto !important;
+      display: block;
+      margin: 0 auto;
+    }
+
+    /* Section divider centering. */
+    .section-divider { text-align: center; }
+    .section-divider h2 {
+      font-size: 4rem;
+      margin: 0.25rem 0 0.75rem;
+      letter-spacing: 0.01em;
+    }
+    .section-divider .blitzy-section-sub {
+      font-size: 1.1rem;
+      opacity: 0.85;
+      margin: 0 auto;
+      max-width: 65%;
+    }
+
+    /* Title and closing slide centering. */
+    .title-slide,
+    .closing-slide { text-align: center; }
+    .title-slide .blitzy-brand {
+      font-size: 4.5rem;
+      margin: 0.5rem 0 0.4rem;
+      letter-spacing: 0.01em;
+    }
+    .title-slide .blitzy-tagline {
+      font-size: 1.85rem;
+      opacity: 0.9;
+      margin: 0 0 1.5rem;
+      font-weight: 400;
+    }
+    .title-slide .blitzy-subtitle,
+    .title-slide .blitzy-credit,
+    .closing-slide .blitzy-credit {
+      font-size: 1rem;
+      opacity: 0.7;
+      margin: 0.25rem 0;
+      letter-spacing: 0.04em;
+    }
+
+    .closing-slide h2 { font-size: 3rem; margin-bottom: 1rem; }
+    .closing-slide .farewell { margin-top: 1.5rem; }
+    .closing-slide .farewell svg { width: 56px; height: 56px; stroke-width: 1.25; }
+    .closing-slide .farewell-text {
+      font-size: 1.4rem;
+      margin: 0.5rem 0 0.25rem;
+    }
+
+    /* Caption styling for sub-text below diagrams. */
+    .caption {
+      margin-top: 0.85rem;
+      font-size: 0.8em;
+      opacity: 0.85;
+      text-align: center;
+      font-style: italic;
+    }
+
+    /* Subtitle directly under a slide title. */
+    .subtitle {
+      margin-top: -0.25rem;
+      margin-bottom: 0.5rem;
+      font-size: 0.95em;
+      opacity: 0.75;
+    }
+
+    /* Documentation links list (slide 15). */
+    .doc-links {
+      list-style: none;
+      padding: 0;
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 0.4rem 1.5rem;
+      max-width: 80%;
+      margin: 1.25rem auto 0;
+      text-align: left;
+      font-size: 0.85em;
+    }
+    .doc-links li {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+    }
+    .doc-links li svg {
+      width: 18px;
+      height: 18px;
+      stroke-width: 1.5;
+      flex-shrink: 0;
+    }
+    .doc-links .path {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Cascadia Code", "Roboto Mono", Consolas, monospace;
+      font-size: 0.92em;
+      opacity: 0.85;
+    }
+
+    /* Responsive scaling: keep base font readable on 1280x720 projector. */
+    .reveal h1 { font-weight: 600; }
+    .reveal h2 { font-weight: 600; }
+    .reveal h3 { font-weight: 500; opacity: 0.95; margin-bottom: 0.5rem; }
+    .reveal p  { line-height: 1.45; }
+
+    /* Content slides keep h2 reasonably sized so the slide body has room for content */
+    /* (the feature grid on slide 3, the long flowcharts on slides 4/5/9, etc.). */
+    .reveal .content-slide h2 { font-size: 2.1rem; margin: 0 0 0.4rem; }
+    .reveal .content-slide h3 { font-size: 1.2rem; margin: 0.85rem 0 0.4rem; }
+    .reveal .content-slide p  { font-size: 0.95rem; line-height: 1.4; margin: 0.4rem 0; }
+    .reveal .content-slide .subtitle { font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <div class="reveal">
+    <div class="slides">
+
+      <!-- ============================================================== -->
+      <!-- SLIDE 1 of 16 — Title                                          -->
+      <!-- ============================================================== -->
+      <section class="title-slide blitzy-title">
+        <i data-lucide="users-round" class="blitzy-icon-large" aria-label="Sales-Connections brand mark"></i>
+        <h1 class="blitzy-brand">Sales-Connections</h1>
+        <h2 class="blitzy-tagline">Connection Intelligence for Sales Teams</h2>
+        <p class="blitzy-subtitle">Executive Summary — MVP Release</p>
+        <p class="blitzy-credit">Delivered by Blitzy</p>
+      </section>
+
+      <!-- ============================================================== -->
+      <!-- SLIDE 2 of 16 — Section Divider: What We Built                 -->
+      <!-- ============================================================== -->
+      <section class="section-divider blitzy-section">
+        <i data-lucide="layers" class="blitzy-icon-huge" aria-label="What we built"></i>
+        <h2>What We Built</h2>
+        <p class="blitzy-section-sub">A connection intelligence platform with fourteen bound MVP features.</p>
+      </section>
+
+      <!-- ============================================================== -->
+      <!-- SLIDE 3 of 16 — Content: Product Mission and 14 Features grid  -->
+      <!-- ============================================================== -->
+      <section class="content-slide">
+        <h2>Product Mission</h2>
+        <p>Sales-Connections turns passive network knowledge into actionable sales leads. Contributors log curated Connection Idea records about real people in their professional networks; the system uses AI to draft outreach talking points; sales reps prioritize and execute against those records.</p>
+        <h3>Fourteen MVP Features</h3>
+        <div class="feature-grid">
+          <div class="feature-cell">
+            <i data-lucide="file-plus" aria-hidden="true"></i>
+            <span class="feature-id">F-001</span>
+            <span class="feature-name">Connection Form</span>
+          </div>
+          <div class="feature-cell">
+            <i data-lucide="sparkles" aria-hidden="true"></i>
+            <span class="feature-id">F-002</span>
+            <span class="feature-name">AI Note Generation</span>
+          </div>
+          <div class="feature-cell">
+            <i data-lucide="flag" aria-hidden="true"></i>
+            <span class="feature-id">F-003</span>
+            <span class="feature-name">Involvement Indicator</span>
+          </div>
+          <div class="feature-cell">
+            <i data-lucide="list" aria-hidden="true"></i>
+            <span class="feature-id">F-004</span>
+            <span class="feature-name">Connection Feed and Dashboard</span>
+          </div>
+          <div class="feature-cell">
+            <i data-lucide="target" aria-hidden="true"></i>
+            <span class="feature-id">F-005</span>
+            <span class="feature-name">Outreach Status Tracking</span>
+          </div>
+          <div class="feature-cell">
+            <i data-lucide="user-check" aria-hidden="true"></i>
+            <span class="feature-id">F-006</span>
+            <span class="feature-name">Owner Attribution</span>
+          </div>
+          <div class="feature-cell">
+            <i data-lucide="archive" aria-hidden="true"></i>
+            <span class="feature-id">F-007</span>
+            <span class="feature-name">Edit and Soft Delete</span>
+          </div>
+          <div class="feature-cell">
+            <i data-lucide="tags" aria-hidden="true"></i>
+            <span class="feature-id">F-008</span>
+            <span class="feature-name">Tagging and Categorization</span>
+          </div>
+          <div class="feature-cell">
+            <i data-lucide="shield-check" aria-hidden="true"></i>
+            <span class="feature-id">F-009</span>
+            <span class="feature-name">Role-Based Access Control</span>
+          </div>
+          <div class="feature-cell">
+            <i data-lucide="search" aria-hidden="true"></i>
+            <span class="feature-id">F-010</span>
+            <span class="feature-name">Duplicate Detection</span>
+          </div>
+          <div class="feature-cell">
+            <i data-lucide="history" aria-hidden="true"></i>
+            <span class="feature-id">F-011</span>
+            <span class="feature-name">Detail and Edit History</span>
+          </div>
+          <div class="feature-cell">
+            <i data-lucide="key-round" aria-hidden="true"></i>
+            <span class="feature-id">F-012</span>
+            <span class="feature-name">Authentication</span>
+          </div>
+          <div class="feature-cell">
+            <i data-lucide="scroll-text" aria-hidden="true"></i>
+            <span class="feature-id">F-013</span>
+            <span class="feature-name">Audit Trail</span>
+          </div>
+          <div class="feature-cell">
+            <i data-lucide="settings" aria-hidden="true"></i>
+            <span class="feature-id">F-014</span>
+            <span class="feature-name">Admin Panel</span>
+          </div>
+          <div class="feature-cell brand-badge" aria-hidden="true">
+            <i data-lucide="check-check"></i>
+            <span class="feature-name">All Critical and High</span>
+          </div>
+          <div class="feature-cell brand-badge" aria-hidden="true">
+            <i data-lucide="badge-check"></i>
+            <span class="feature-name">MVP Complete</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================================================== -->
+      <!-- SLIDE 4 of 16 — Content: User Flow 1 (Contributor adds)        -->
+      <!-- ============================================================== -->
+      <section class="content-slide diagram-slide">
+        <h2>User Flow 1: Add a Connection</h2>
+        <p class="subtitle">Contributor records a curated lead with AI-assisted outreach notes.</p>
+        <div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant U as Contributor
+    participant SPA as React SPA
+    participant API as Flask API
+    participant AI as Anthropic Claude
+    participant DB as PostgreSQL
+    U->>SPA: Click Add Connection
+    U->>SPA: Fill name, LinkedIn, company, title
+    U->>SPA: Enter relationship context
+    SPA->>API: POST /api/notes/generate
+    API->>AI: Generate outreach notes (5s budget)
+    AI-->>API: AI-suggested notes
+    API-->>SPA: Notes (or 504 on timeout, non-blocking)
+    U->>SPA: Review and edit AI notes
+    U->>SPA: Select involvement, add tags, submit
+    SPA->>API: POST /api/connections
+    API->>DB: INSERT record + audit_event (atomic)
+    DB-->>API: Persisted entity
+    API-->>SPA: 201 Created
+    SPA-->>U: Record added to feed
+        </div>
+        <p class="caption">AI is suggestion-only. Failure does not block submission.</p>
+      </section>
+
+      <!-- ============================================================== -->
+      <!-- SLIDE 5 of 16 — Content: User Flow 2 (Sales Rep claims)        -->
+      <!-- ============================================================== -->
+      <section class="content-slide diagram-slide">
+        <h2>User Flow 2: Browse and Claim a Lead</h2>
+        <p class="subtitle">Sales Rep filters the feed and updates outreach status.</p>
+        <div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant U as Sales Rep
+    participant SPA as React SPA
+    participant API as Flask API
+    participant DB as PostgreSQL
+    U->>SPA: Open Connection Feed
+    SPA->>API: GET /api/connections?involvement=Warm Intro
+    API->>DB: SELECT WHERE org_id AND deleted_at IS NULL
+    DB-->>API: Filtered records
+    API-->>SPA: Records list
+    U->>SPA: Filter by industry tag
+    U->>SPA: Select a record
+    SPA->>API: GET /api/connections/:id
+    API-->>SPA: Detail + AI notes + submitter context
+    U->>SPA: Set status In Progress
+    SPA->>API: PATCH /api/connections/:id/status
+    API->>API: RBAC check (Sales Rep or Admin only)
+    API->>DB: UPDATE record + audit_event (atomic)
+    DB-->>API: Confirmed
+    API-->>SPA: 200 OK
+    SPA-->>U: Status chip updated
+        </div>
+        <p class="caption">Status mutation is gated to Sales Rep or Admin only — preserving sales team accountability.</p>
+      </section>
+
+      <!-- ============================================================== -->
+      <!-- SLIDE 6 of 16 — Section Divider: Architecture                  -->
+      <!-- ============================================================== -->
+      <section class="section-divider blitzy-section">
+        <i data-lucide="network" class="blitzy-icon-huge" aria-label="Architecture"></i>
+        <h2>Architecture</h2>
+        <p class="blitzy-section-sub">Three-tier web app on AWS — synchronous, simple, scalable to 10,000 records per organization.</p>
+      </section>
+
+      <!-- ============================================================== -->
+      <!-- SLIDE 7 of 16 — Content: System Context                        -->
+      <!-- ============================================================== -->
+      <section class="content-slide diagram-slide">
+        <h2>System Context</h2>
+        <p class="subtitle">Three tiers, four synchronous integration surfaces.</p>
+        <div class="mermaid">
+graph LR
+    subgraph Browser["User Browser"]
+        SPA["React SPA"]
+    end
+    subgraph AWS["AWS private VPC"]
+        ALB["AWS ALB"]
+        API["Flask API on ECS"]
+        RDS[("PostgreSQL Multi-AZ")]
+        SM["Secrets Manager"]
+        CW["CloudWatch"]
+    end
+    subgraph External["External services"]
+        AC["Anthropic Claude"]
+        GO["Google OAuth"]
+    end
+    SPA -->|"Surface 1: HTTPS"| ALB
+    ALB --> API
+    API -->|"Surface 2: AI"| AC
+    API -->|"Surface 3: OAuth"| GO
+    SPA -.->|"redirect"| GO
+    API -->|"Surface 4a: DB"| RDS
+    API -->|"Surface 4b"| SM
+    API -->|"Surface 4c"| CW
+        </div>
+        <p class="caption">No message queues. No event buses. No async DB drivers. Synchronous-only by design.</p>
+      </section>
+
+      <!-- ============================================================== -->
+      <!-- SLIDE 8 of 16 — Content: Data Model                            -->
+      <!-- ============================================================== -->
+      <section class="content-slide diagram-slide">
+        <h2>Data Model</h2>
+        <p class="subtitle">Six tables, three enum types, append-only audit at the database privilege layer.</p>
+        <div class="mermaid">
+erDiagram
+    organizations ||--o{ users : "has"
+    organizations ||--o{ records : "owns"
+    organizations ||--o{ tags : "owns"
+    users ||--o{ records : "submitted by"
+    records ||--o{ record_tags : "tagged via"
+    tags ||--o{ record_tags : "applied via"
+    users ||--o{ audit_events : "actor"
+    records ||--o{ audit_events : "target"
+    organizations {
+        uuid id PK
+        text name
+    }
+    users {
+        uuid id PK
+        uuid org_id FK
+        text email
+        user_role role
+    }
+    records {
+        uuid id PK
+        uuid org_id FK
+        uuid owner_user_id FK
+        text linkedin_url
+        text normalized_linkedin_url
+        involvement_type involvement
+        outreach_status outreach_status
+        timestamptz deleted_at
+    }
+    tags {
+        uuid id PK
+        uuid org_id FK
+        text name
+    }
+    record_tags {
+        uuid record_id PK
+        uuid tag_id PK
+    }
+    audit_events {
+        uuid id PK
+        uuid actor_user_id FK
+        uuid target_record_id FK
+        audit_event_type event_type
+        timestamptz event_timestamp
+    }
+        </div>
+        <p class="caption">Every entity carries org_id from day one — multi-tenant data model, single-org runtime in MVP.</p>
+      </section>
+
+      <!-- ============================================================== -->
+      <!-- SLIDE 9 of 16 — Content: Request Lifecycle                     -->
+      <!-- ============================================================== -->
+      <section class="content-slide diagram-slide">
+        <h2>Request Lifecycle</h2>
+        <p class="subtitle">Atomic state-change + audit emission in a single transaction.</p>
+        <div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant B as Browser
+    participant API as Flask API
+    participant MW as Middleware Stack
+    participant H as Handler
+    participant S as Service
+    participant DB as PostgreSQL
+    B->>API: HTTPS request (cookie session JWT)
+    API->>MW: correlation, auth, RBAC
+    MW->>H: pass to handler
+    H->>H: pydantic validation
+    H->>S: call service
+    rect rgb(220, 240, 220)
+        S->>DB: BEGIN
+        S->>DB: INSERT record
+        S->>DB: INSERT audit_event
+        S->>DB: COMMIT
+    end
+    S-->>H: persisted entity
+    H-->>B: response with correlation_id
+        </div>
+        <p class="caption">Green block is atomic — both succeed or both roll back. Sub-100 ms audit emission.</p>
+      </section>
+
+
+      <!-- ============================================================== -->
+      <!-- SLIDE 10 of 16 — Section Divider: Why                          -->
+      <!-- ============================================================== -->
+      <section class="section-divider blitzy-section">
+        <i data-lucide="compass" class="blitzy-icon-huge" aria-label="Why"></i>
+        <h2>Why</h2>
+        <p class="blitzy-section-sub">Five architectural decisions that define the platform.</p>
+      </section>
+
+      <!-- ============================================================== -->
+      <!-- SLIDE 11 of 16 — Content: Decision Highlights                  -->
+      <!-- ============================================================== -->
+      <section class="content-slide">
+        <h2>Decision Highlights</h2>
+        <p class="subtitle">Reference: docs/decision-log.md for the complete log.</p>
+        <div class="decision-grid">
+          <div class="card">
+            <i data-lucide="git-merge" aria-hidden="true"></i>
+            <div>
+              <span class="heading">Synchronous-only</span>
+              <span class="body">No message queues, no event buses, no async DB drivers. Synchronous-only ensures audit-emission atomicity within a single transaction.</span>
+            </div>
+          </div>
+          <div class="card">
+            <i data-lucide="lock" aria-hidden="true"></i>
+            <div>
+              <span class="heading">Append-only audit</span>
+              <span class="body">Application database role has INSERT only on audit_events. Even SQL injection cannot mutate audit history.</span>
+            </div>
+          </div>
+          <div class="card">
+            <i data-lucide="building-2" aria-hidden="true"></i>
+            <div>
+              <span class="heading">Multi-tenant data model</span>
+              <span class="body">Every entity carries org_id from day one. Single-org runtime today; multi-org-ready forever.</span>
+            </div>
+          </div>
+          <div class="card">
+            <i data-lucide="archive-restore" aria-hidden="true"></i>
+            <div>
+              <span class="heading">Soft delete by default</span>
+              <span class="body">deleted_at flag preserves audit referenceability. Hard delete is Admin-only and explicitly audited.</span>
+            </div>
+          </div>
+          <div class="card">
+            <i data-lucide="replace" aria-hidden="true"></i>
+            <div>
+              <span class="heading">Provider-replaceable AI</span>
+              <span class="body">Anthropic SDK isolated behind Langchain. Swap providers without touching feature handlers.</span>
+            </div>
+          </div>
+          <div class="card">
+            <i data-lucide="eye" aria-hidden="true"></i>
+            <div>
+              <span class="heading">Observability built in</span>
+              <span class="body">Structured logs, distributed tracing, /metrics endpoint, /healthz and /readyz, CloudWatch dashboard. The application is not complete until it is observable.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================================================== -->
+      <!-- SLIDE 12 of 16 — Section Divider: Risk and Mitigation          -->
+      <!-- ============================================================== -->
+      <section class="section-divider blitzy-section">
+        <i data-lucide="shield-alert" class="blitzy-icon-huge" aria-label="Risk and Mitigation"></i>
+        <h2>Risk and Mitigation</h2>
+        <p class="blitzy-section-sub">Known unknowns documented; mitigations engineered in or scheduled for follow-up.</p>
+      </section>
+
+      <!-- ============================================================== -->
+      <!-- SLIDE 13 of 16 — Content: Risk Register                        -->
+      <!-- ============================================================== -->
+      <section class="content-slide">
+        <h2>Risk Register</h2>
+        <p class="subtitle">Each risk is mitigated, documented, or scheduled for follow-up.</p>
+        <div class="risk-grid">
+          <div class="cell risk">
+            <i data-lucide="bot" aria-hidden="true"></i>
+            <div>
+              <span class="heading">AI dependency on Anthropic</span>
+              <span class="body">Single-provider AI dependency for the F-002 note generation feature.</span>
+            </div>
+          </div>
+          <div class="cell mitigation">
+            <i data-lucide="circle-check" aria-hidden="true"></i>
+            <div>
+              <span class="heading">Mitigated</span>
+              <span class="body">5-second timeout watchdog; AI failure is non-blocking on form submission; provider-replaceable via Langchain abstraction.</span>
+            </div>
+          </div>
+          <div class="cell risk">
+            <i data-lucide="globe" aria-hidden="true"></i>
+            <div>
+              <span class="heading">Single-region AWS deployment</span>
+              <span class="body">Regional availability dependency on the chosen AWS region.</span>
+            </div>
+          </div>
+          <div class="cell mitigation">
+            <i data-lucide="circle-check" aria-hidden="true"></i>
+            <div>
+              <span class="heading">Mitigated</span>
+              <span class="body">Multi-AZ RDS for high availability within region; multi-region active-active is post-MVP per the scope boundary.</span>
+            </div>
+          </div>
+          <div class="cell risk">
+            <i data-lucide="building" aria-hidden="true"></i>
+            <div>
+              <span class="heading">Single-org runtime in MVP</span>
+              <span class="body">No org-onboarding flow ships with MVP; only one organization is served at runtime.</span>
+            </div>
+          </div>
+          <div class="cell mitigation">
+            <i data-lucide="circle-check" aria-hidden="true"></i>
+            <div>
+              <span class="heading">Mitigated</span>
+              <span class="body">Data model is multi-tenant from day one; org-onboarding UI is deferred to post-MVP without rework.</span>
+            </div>
+          </div>
+          <div class="cell risk">
+            <i data-lucide="gauge" aria-hidden="true"></i>
+            <div>
+              <span class="heading">No inbound API rate limiting</span>
+              <span class="body">No per-user or per-IP throttle in MVP.</span>
+            </div>
+          </div>
+          <div class="cell mitigation">
+            <i data-lucide="circle-check" aria-hidden="true"></i>
+            <div>
+              <span class="heading">Mitigated</span>
+              <span class="body">TLS at the ALB; authentication required for every state-changing endpoint; rate limiting is documented as a post-MVP next step.</span>
+            </div>
+          </div>
+        </div>
+        <p class="caption">All risks tracked in docs/decision-log.md and docs/operations.md.</p>
+      </section>
+
+      <!-- ============================================================== -->
+      <!-- SLIDE 14 of 16 — Section Divider: Onboarding                   -->
+      <!-- ============================================================== -->
+      <section class="section-divider blitzy-section">
+        <i data-lucide="book-open" class="blitzy-icon-huge" aria-label="Onboarding"></i>
+        <h2>Onboarding</h2>
+        <p class="blitzy-section-sub">From a clean machine to a running app in under ten minutes.</p>
+      </section>
+
+      <!-- ============================================================== -->
+      <!-- SLIDE 15 of 16 — Content: Onboarding Flow                      -->
+      <!-- ============================================================== -->
+      <section class="content-slide diagram-slide">
+        <h2>Clean Machine to Running App</h2>
+        <p class="subtitle">Verified end-to-end in Docker Compose.</p>
+        <div class="mermaid">
+flowchart LR
+    A["Clone repository"] --> B["Copy .env.example"]
+    B --> C["Set secrets"]
+    C --> D["docker compose up"]
+    D --> E["Stack running"]
+    E --> F["Open localhost:5173"]
+    F --> G["Sign in"]
+    G --> H["Add a Connection"]
+        </div>
+        <ul class="doc-links" aria-label="Documentation entry points">
+          <li>
+            <i data-lucide="book" aria-hidden="true"></i>
+            <span><span class="path">README.md</span> — Quick Start</span>
+          </li>
+          <li>
+            <i data-lucide="book" aria-hidden="true"></i>
+            <span><span class="path">docs/architecture.md</span> — Component architecture</span>
+          </li>
+          <li>
+            <i data-lucide="book" aria-hidden="true"></i>
+            <span><span class="path">docs/api.md</span> — REST endpoint catalog</span>
+          </li>
+          <li>
+            <i data-lucide="book" aria-hidden="true"></i>
+            <span><span class="path">docs/operations.md</span> — Deploy and runbook</span>
+          </li>
+          <li>
+            <i data-lucide="book" aria-hidden="true"></i>
+            <span><span class="path">docs/security.md</span> — Auth, RBAC, audit, secrets</span>
+          </li>
+          <li>
+            <i data-lucide="book" aria-hidden="true"></i>
+            <span><span class="path">docs/decision-log.md</span> — Master decision log</span>
+          </li>
+        </ul>
+      </section>
+
+      <!-- ============================================================== -->
+      <!-- SLIDE 16 of 16 — Closing: What's Next + Thank You              -->
+      <!-- ============================================================== -->
+      <section class="closing-slide blitzy-closing">
+        <h2>What's Next</h2>
+        <p class="subtitle">Suggested follow-ups drawn from the post-MVP roadmap.</p>
+        <div class="next-tasks">
+          <div class="item">
+            <i data-lucide="building-2" aria-hidden="true"></i>
+            <div>
+              <span class="heading">Multi-organization onboarding</span>
+              <span class="body">Data model already supports it; ship the org-creation UI and the cross-org switcher.</span>
+            </div>
+          </div>
+          <div class="item">
+            <i data-lucide="megaphone" aria-hidden="true"></i>
+            <div>
+              <span class="heading">Slack notifications</span>
+              <span class="body">Notify the sales team in Slack when a high-warmth Warm Intro record is added.</span>
+            </div>
+          </div>
+          <div class="item">
+            <i data-lucide="file-spreadsheet" aria-hidden="true"></i>
+            <div>
+              <span class="heading">CSV import and export</span>
+              <span class="body">Bulk upload for legacy lists; bulk export for back-office reporting.</span>
+            </div>
+          </div>
+          <div class="item">
+            <i data-lucide="link" aria-hidden="true"></i>
+            <div>
+              <span class="heading">LinkedIn profile preview</span>
+              <span class="body">Render basic profile metadata alongside captured records (no scraping; vendor-supplied).</span>
+            </div>
+          </div>
+          <div class="item">
+            <i data-lucide="cloud-cog" aria-hidden="true"></i>
+            <div>
+              <span class="heading">CRM bidirectional sync</span>
+              <span class="body">Salesforce and HubSpot push and pull for status changes and contact metadata.</span>
+            </div>
+          </div>
+          <div class="item">
+            <i data-lucide="line-chart" aria-hidden="true"></i>
+            <div>
+              <span class="heading">Velocity and conversion analytics</span>
+              <span class="body">Lead velocity, status funnel, contributor leaderboard beyond the basic three admin panels.</span>
+            </div>
+          </div>
+          <div class="item">
+            <i data-lucide="smartphone" aria-hidden="true"></i>
+            <div>
+              <span class="heading">Mobile PWA shell</span>
+              <span class="body">Wrap the responsive web SPA as an installable Progressive Web App; offline-friendly for field reps.</span>
+            </div>
+          </div>
+          <div class="item">
+            <i data-lucide="gauge" aria-hidden="true"></i>
+            <div>
+              <span class="heading">API rate limiting</span>
+              <span class="body">Per-user and per-IP throttles on inbound traffic; coordinated with WAF rules at the ALB.</span>
+            </div>
+          </div>
+        </div>
+        <div class="farewell">
+          <i data-lucide="handshake" aria-label="Thank you"></i>
+          <p class="farewell-text">Thank you. Questions?</p>
+          <p class="blitzy-credit">Delivered by Blitzy</p>
+        </div>
+      </section>
+
+    </div>
+  </div>
+
+  <!-- ================================================================= -->
+  <!-- Reveal.js core JS (PINNED 5.1.0)                                  -->
+  <!-- ================================================================= -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/reveal.min.js"></script>
+
+  <!-- ================================================================= -->
+  <!-- Mermaid (PINNED 11.4.0)                                           -->
+  <!-- ================================================================= -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/11.4.0/mermaid.min.js"></script>
+
+  <!-- ================================================================= -->
+  <!-- Lucide icons (PINNED 0.460.0). cdnjs does not host Lucide;        -->
+  <!-- the AAP allows cdnjs.cloudflare.com OR unpkg.com OR jsdelivr.net. -->
+  <!-- ================================================================= -->
+  <script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+
+  <!-- ================================================================= -->
+  <!-- Initialization                                                    -->
+  <!--                                                                   -->
+  <!-- AAP-mandated configuration (Section 0.7.5):                       -->
+  <!--   Reveal.js   : hash: true, transition: 'slide',                  -->
+  <!--                 controlsTutorial: false, width: 1920,             -->
+  <!--                 height: 1080                                      -->
+  <!--   Mermaid     : startOnLoad: false; rendered on the reveal 'ready'-->
+  <!--                 event AND on every 'slidechanged' event           -->
+  <!--   Lucide      : rendered on the same two events                   -->
+  <!-- ================================================================= -->
+  <script>
+    // Mermaid initialization. Do NOT auto-start; we render manually per
+    // slide so hidden slides do not produce 0-width SVGs.
+    //
+    // fontFamily is set to a universally available font stack so Mermaid's
+    // text-width measurement matches the actual rendered glyph width.
+    // Without this, Mermaid measures with "trebuchet ms" (its default) but
+    // the browser falls back to a wider font (e.g. Arial on Linux), which
+    // causes node labels to be visually clipped at the right edge.
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: 'default',
+      securityLevel: 'loose',
+      fontFamily: 'Arial, "Liberation Sans", "Helvetica Neue", Helvetica, sans-serif',
+      themeVariables: {
+        fontFamily: 'Arial, "Liberation Sans", "Helvetica Neue", Helvetica, sans-serif',
+        fontSize: '14px'
+      },
+      // Tight spacing keeps diagrams compact so they fit within the slide
+      // canvas height alongside the title, subtitle, and caption.
+      flowchart: {
+        nodeSpacing: 35,
+        rankSpacing: 45,
+        diagramPadding: 10,
+        useMaxWidth: true,
+        htmlLabels: true
+      },
+      sequence: {
+        boxMargin: 8,
+        messageMargin: 28,
+        diagramMarginX: 30,
+        diagramMarginY: 10,
+        actorMargin: 60,
+        useMaxWidth: true
+      },
+      er: {
+        diagramPadding: 12,
+        layoutDirection: 'TB',
+        minEntityWidth: 110,
+        minEntityHeight: 60,
+        entityPadding: 10,
+        useMaxWidth: true
+      },
+      // themeCSS is injected into the rendered SVG's <style> block.
+      // foreignObject default overflow:hidden clips node labels when Mermaid's
+      // text-width measurement is slightly narrower than the actual rendered
+      // text. Setting overflow:visible lets the label render fully; the parent
+      // node <rect> is sized with padding so there is visual room for it.
+      themeCSS: '\n        foreignObject { overflow: visible !important; }\n        .nodeLabel, .edgeLabel, .label { white-space: nowrap !important; }\n      '
+    });
+
+    // Reveal.js initialization with the AAP-mandated configuration.
+    Reveal.initialize({
+      hash: true,
+      transition: 'slide',
+      controlsTutorial: false,
+      width: 1920,
+      height: 1080,
+      slideNumber: 'c/t',
+      controls: true,
+      progress: true,
+      center: true
+    }).then(function () {
+      // 'ready' event: render Mermaid + Lucide for the initial slide.
+      renderVisuals();
+    });
+
+    // Re-render Mermaid + Lucide on every slide change.
+    Reveal.on('slidechanged', renderVisuals);
+
+    function renderVisuals() {
+      // Lucide: createIcons() is idempotent across the whole document
+      // and replaces any unprocessed <i data-lucide="..."> with inline SVG.
+      try {
+        if (window.lucide && typeof window.lucide.createIcons === 'function') {
+          window.lucide.createIcons();
+        }
+      } catch (err) {
+        console.error('Lucide render error:', err);
+      }
+
+      // Mermaid: render only the current slide's unprocessed blocks so
+      // hidden slides do not produce 0-width SVGs (a known Mermaid issue
+      // when rendering inside display:none containers).
+      try {
+        var currentSlide = (typeof Reveal !== 'undefined' && Reveal.getCurrentSlide)
+          ? Reveal.getCurrentSlide()
+          : null;
+        var root = currentSlide || document;
+        var blocks = root.querySelectorAll('.mermaid:not([data-processed="true"])');
+        if (blocks.length > 0 && typeof mermaid.run === 'function') {
+          mermaid.run({ nodes: blocks }).catch(function (err) {
+            console.error('Mermaid render error:', err);
+          });
+        }
+      } catch (err) {
+        console.error('renderVisuals error:', err);
+      }
+    }
+  </script>
+</body>
+</html>
+
