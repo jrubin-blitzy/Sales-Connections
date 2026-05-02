@@ -1,0 +1,120 @@
+%% Diagram: Sales-Connections Entity-Relationship Diagram (6 tables)
+erDiagram
+    organizations {
+        uuid id PK
+        text name
+        timestamptz created_at
+    }
+    users {
+        uuid id PK
+        uuid org_id FK
+        text email
+        text display_name
+        text password_hash "nullable; OAuth users have NULL"
+        user_role role "enum Admin Contributor Viewer"
+        timestamptz created_at
+    }
+    records {
+        uuid id PK
+        uuid org_id FK
+        uuid owner_user_id FK
+        text owner_display_name "denormalized for feed"
+        text full_name
+        text linkedin_url
+        text normalized_linkedin_url "duplicate-detection key"
+        text company
+        text job_title
+        text relationship_context
+        text ai_notes "nullable; AI failure non-blocking"
+        involvement_type involvement "Warm Intro Soft Reference Target Only"
+        outreach_status outreach_status "Not Started In Progress Contacted Closed"
+        date submission_date
+        timestamptz deleted_at "soft-delete; NULL means active"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    tags {
+        uuid id PK
+        uuid org_id FK
+        text name "unique per org"
+        timestamptz created_at
+    }
+    record_tags {
+        uuid record_id PK
+        uuid tag_id PK
+    }
+    audit_events {
+        uuid id PK
+        uuid actor_user_id FK
+        uuid target_record_id FK "nullable for auth events"
+        audit_event_type event_type "8 values; see legend"
+        timestamptz event_timestamp
+        jsonb before_payload
+        jsonb after_payload
+        text correlation_id "ties to request-lifecycle correlation"
+    }
+
+    organizations ||--o{ users : "has"
+    organizations ||--o{ records : "owns"
+    organizations ||--o{ tags : "owns"
+    users ||--o{ records : "submitted by"
+    records ||--o{ record_tags : "tagged via"
+    tags ||--o{ record_tags : "applied via"
+    users ||--o{ audit_events : "acted in"
+    records ||--o{ audit_events : "targeted by"
+
+%% Legend:
+%% - Cardinality notation:
+%%     ||--o{ means one-to-many (mandatory parent, optional child).
+%%              Used for every FK relationship in this model: each FK row may be NULL
+%%              (optional child side) only when the column is explicitly nullable
+%%              (audit_events.target_record_id), otherwise FK is NOT NULL but the parent
+%%              still admits zero-or-more child rows from its perspective.
+%% - Key markers in entity blocks:
+%%     PK   primary key column.
+%%     FK   foreign key column.
+%%     record_tags.record_id and record_tags.tag_id together form the composite primary key
+%%     and are also foreign keys to records.id and tags.id respectively.
+%% - Enum types (PostgreSQL native enum types created in 0001_initial_schema migration):
+%%     user_role         : Admin, Contributor, Viewer
+%%     involvement_type  : Warm Intro, Soft Reference, Target Only
+%%     outreach_status   : Not Started, In Progress, Contacted, Closed
+%%     audit_event_type  : create, status_change, edit, soft_delete, hard_delete,
+%%                         role_change, authentication, admin_op
+%% - Soft-delete: records.deleted_at IS NULL means active; NOT NULL means soft-deleted.
+%%   Default reads inject WHERE deleted_at IS NULL at the service layer. Only Admin
+%%   moderation views opt out of this filter. No other table is soft-deletable in MVP.
+%% - Append-only invariant (AAP Section 0.4.7): The application database role has GRANT INSERT
+%%   only on audit_events; UPDATE and DELETE are revoked at the database privilege layer.
+%%   The migrations role retains full privileges for governance. SQLAlchemy ORM also avoids
+%%   issuing UPDATE/DELETE against AuditEvent. Tests verify a direct UPDATE attempted from
+%%   the application role fails at the database boundary.
+%% - Multi-tenancy (AAP Section 0.7.1): organizations is the multi-tenant root entity. Every other
+%%   entity carries org_id either directly (users, records, tags) or transitively
+%%   (record_tags inherits via record_id; audit_events inherits via actor_user_id and
+%%   target_record_id). Every read and every write injects WHERE org_id = session.org_id
+%%   at the service layer. Cross-org access returns 403 from the API and 404 from the SPA.
+%% - Owner attribution (AAP Section 0.7.4): records.owner_user_id is non-null and sourced
+%%   exclusively from session.user_id; the pydantic ConnectionCreate schema rejects any
+%%   client-supplied owner_user_id or owner_display_name. records.owner_display_name is
+%%   denormalized for fast feed rendering at the 10K-record scale ceiling, avoiding a
+%%   JOIN on every feed query.
+%% - Correlation linkage: audit_events.correlation_id ties an audit row back to the
+%%   request-lifecycle correlation chain documented in docs/diagrams/request-lifecycle.mmd,
+%%   enabling end-to-end tracing of state-changing operations across logs, traces, and audit.
+%% - target_record_id nullability: NULL is allowed because authentication events
+%%   (event_type = authentication) and some admin_op events do not target a record.
+%% - Seven indexes (AAP Section 0.4.7) -- not visualized as nodes; documented here:
+%%     1. records (org_id, deleted_at, submission_date DESC)        primary feed index
+%%     2. records (involvement)                                     filter by involvement
+%%     3. records (outreach_status)                                 filter by status
+%%     4. records (org_id, normalized_linkedin_url)
+%%        WHERE deleted_at IS NULL UNIQUE PARTIAL                   duplicate detection
+%%     5. record_tags (record_id, tag_id)                           via composite PK
+%%     6. audit_events (target_record_id, event_timestamp)          detail history feed
+%%     7. users (org_id, email) UNIQUE                              email lookup, dup prevention
+%% - Source: AAP Section 0.4.7 schema and AAP Section 0.5.2 Layer 1-4 model implementation.
+%% - Referenced from: docs/architecture.md Section 6 (Data Model), docs/security.md Section 5
+%%                    (Data Scoping), docs/api.md (Schema Reference Appendix),
+%%                    docs/operations.md Section 6 (Database Operations),
+%%                    blitzy-deck/index.html.
