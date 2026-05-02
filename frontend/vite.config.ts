@@ -66,7 +66,7 @@ export default defineConfig({
   // Per AAP Sec 0.3.7 the alias `@/` maps to `frontend/src/` so feature code
   // can import via `@/features/connections/ConnectionFeed` instead of fragile
   // relative paths like `../../../features/connections/ConnectionFeed`. The
-  // alias must remain in lock-step with the `paths` entry in tsconfig.app.json.
+  // alias must remain in lock-step with the `paths` entry in tsconfig.json.
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
