@@ -6,8 +6,12 @@ Covers:
       algorithm pinning, expiry handling)
     - authenticate_password (constant-time on user-not-found,
       anti-enumeration, OAuth-only-user rejection)
+    - authenticate_email_password (high-level wrapper per file
+      exports schema)
     - upsert_oauth_user (INSERT-or-UPDATE by composite (org_id, email),
       hybrid auth preservation)
+    - record_login_audit / record_logout_audit (F-013 authentication
+      audit-event emission per file exports schema)
 
 Verifies the security invariants documented in AAP Section 0.7.4:
     - Passwords stored as bcrypt salted hashes; never logged; never
@@ -19,6 +23,9 @@ Verifies the security invariants documented in AAP Section 0.7.4:
     - Generic 401 message regardless of failure mode.
     - OAuth-only users have password_hash=None and cannot authenticate
       via password.
+    - bcrypt 72-byte input limit is enforced explicitly (CWE-20)
+      so oversized passwords are REJECTED rather than silently
+      truncated.
 """
 
 from __future__ import annotations
@@ -32,14 +39,22 @@ import uuid
 import bcrypt
 import jwt as pyjwt
 import pytest
+from sqlalchemy import select
 
-from app.middleware.error_handlers import AppError
-from app.models.enums import UserRole
+from app.middleware.auth import Session as AuthSession
+from app.middleware.error_handlers import AppError, AuthError, ValidationFailedError
+from app.models import AuditEvent
+from app.models.enums import AuditEventType, UserRole
+from app.services import auth as auth_module
+from app.services.audit import AuditEmissionError
 from app.services.auth import (
     AuthenticationError,
+    authenticate_email_password,
     authenticate_password,
     hash_password,
     mint_session_jwt,
+    record_login_audit,
+    record_logout_audit,
     upsert_oauth_user,
     verify_password,
     verify_session_jwt,
@@ -125,9 +140,7 @@ class TestMintSessionJwt:
         # JWT format: header.payload.signature (3 dot-delimited parts).
         assert token.count(".") == 2
 
-    def test_mint_includes_required_claims(
-        self, app: Flask, contributor_user
-    ) -> None:
+    def test_mint_includes_required_claims(self, app: Flask, contributor_user) -> None:
         """Token claims include user_id, org_id, role, exp, iat."""
         token = mint_session_jwt(contributor_user)
         # Decode without verification to inspect claims.
@@ -138,17 +151,13 @@ class TestMintSessionJwt:
         assert "iat" in claims
         assert "exp" in claims
 
-    def test_mint_uses_configured_algorithm(
-        self, app: Flask, contributor_user
-    ) -> None:
+    def test_mint_uses_configured_algorithm(self, app: Flask, contributor_user) -> None:
         """JWT header carries HS256 (or whatever JWT_ALGORITHM is)."""
         token = mint_session_jwt(contributor_user)
         header = pyjwt.get_unverified_header(token)
         assert header["alg"] == app.config["JWT_ALGORITHM"]
 
-    def test_mint_token_is_verifiable(
-        self, app: Flask, contributor_user
-    ) -> None:
+    def test_mint_token_is_verifiable(self, app: Flask, contributor_user) -> None:
         """Token round-trips through verify_session_jwt."""
         token = mint_session_jwt(contributor_user)
         claims = verify_session_jwt(token)
@@ -163,17 +172,13 @@ class TestMintSessionJwt:
 class TestVerifySessionJwt:
     """Verify verify_session_jwt enforces all security checks."""
 
-    def test_verify_valid_token_returns_claims(
-        self, app: Flask, contributor_user
-    ) -> None:
+    def test_verify_valid_token_returns_claims(self, app: Flask, contributor_user) -> None:
         token = mint_session_jwt(contributor_user)
         claims = verify_session_jwt(token)
         assert claims["user_id"] == str(contributor_user.id)
         assert claims["role"] == contributor_user.role.value
 
-    def test_verify_rejects_expired_token(
-        self, app: Flask, contributor_user
-    ) -> None:
+    def test_verify_rejects_expired_token(self, app: Flask, contributor_user) -> None:
         """An expired token raises AuthenticationError."""
         # Manually craft an expired token.
         expired_claims = {
@@ -209,9 +214,7 @@ class TestVerifySessionJwt:
         with pytest.raises(AuthenticationError):
             verify_session_jwt(token)
 
-    def test_verify_rejects_algorithm_confusion(
-        self, app: Flask, contributor_user
-    ) -> None:
+    def test_verify_rejects_algorithm_confusion(self, app: Flask, contributor_user) -> None:
         """Token signed with 'none' algorithm is rejected (CWE-345 defense)."""
         # Manually build an unsigned token.
         unsigned = pyjwt.encode(
@@ -389,9 +392,7 @@ class TestAuthenticatePassword:
         # not-found path skipped bcrypt entirely, it would be 100x
         # faster - which would be a bug. We allow up to 5x variance
         # to account for normal jitter on shared CI hardware.
-        ratio = max(wrong_pw_elapsed, not_found_elapsed) / min(
-            wrong_pw_elapsed, not_found_elapsed
-        )
+        ratio = max(wrong_pw_elapsed, not_found_elapsed) / min(wrong_pw_elapsed, not_found_elapsed)
         assert ratio < 10, (
             f"Timing-attack window: wrong-pw={wrong_pw_elapsed:.4f}s, "
             f"not-found={not_found_elapsed:.4f}s, ratio={ratio:.1f}x"
@@ -530,3 +531,367 @@ class TestUpsertOAuthUser:
                 },
                 org_id=organization.id,
             )
+
+
+# ---------------------------------------------------------------------------
+# TestHashPasswordSchemaRequirements
+# ---------------------------------------------------------------------------
+# The file exports schema for ``backend/app/services/auth.py`` lists
+# ``ValidationFailedError`` as a required imported exception class, with
+# the explicit purpose: "ValidationFailedError (422) for hash_password
+# rejections (non-string input, plaintext exceeding bcrypt's 72-byte
+# limit) with field-level error details so the SPA can highlight the
+# offending password field". These tests verify those rejection paths.
+
+
+class TestHashPasswordSchemaRequirements:
+    """Verify hash_password enforces the bcrypt 72-byte limit and string-typing.
+
+    Per AAP Section 0.7.4 password-storage invariants and the file
+    exports schema, oversized inputs are REJECTED (HTTP 422) rather
+    than silently truncated. Silent truncation would produce the
+    subtle bug "password works for any string sharing the same first
+    72 bytes" - a CWE-20 input-handling defect.
+    """
+
+    def test_rejects_non_string_input(self, app: Flask) -> None:
+        """Non-string input raises ValidationFailedError (422)."""
+        with pytest.raises(ValidationFailedError) as exc_info:
+            hash_password(b"bytes-input")  # type: ignore[arg-type]
+        assert exc_info.value.status_code == 422
+        assert "must be a string" in exc_info.value.message.lower()
+
+    def test_rejects_oversized_input(self, app: Flask) -> None:
+        """73 bytes raises ValidationFailedError; 72 bytes succeeds."""
+        # 72 bytes (boundary) - succeeds.
+        h = hash_password("a" * 72)
+        assert h.startswith("$2b$")
+        # Verify the 72-byte value can be checked against the hash.
+        assert bcrypt.checkpw(b"a" * 72, h.encode("utf-8"))
+
+        # 73 bytes - raises.
+        with pytest.raises(ValidationFailedError) as exc_info:
+            hash_password("a" * 73)
+        assert exc_info.value.status_code == 422
+        assert "72" in exc_info.value.message  # mentions the limit
+
+    def test_oversized_check_uses_byte_count_not_char_count(self, app: Flask) -> None:
+        """Length check is byte-based (UTF-8), not character-based.
+
+        A 36-character string of multi-byte chars (each 2 UTF-8 bytes)
+        yields 72 bytes - boundary success. A 37-character string
+        yields 74 bytes - rejection.
+        """
+        # Latin-1 supplement chars (e.g., n with tilde) encode as 2
+        # UTF-8 bytes each. 36 chars = 72 bytes (boundary).
+        boundary = "\u00f1" * 36  # n-tilde * 36
+        assert len(boundary.encode("utf-8")) == 72
+        h = hash_password(boundary)
+        assert h.startswith("$2b$")
+
+        # 37 chars * 2 bytes = 74 bytes (over limit).
+        with pytest.raises(ValidationFailedError):
+            hash_password("\u00f1" * 37)
+
+
+# ---------------------------------------------------------------------------
+# TestAuthenticateEmailPassword
+# ---------------------------------------------------------------------------
+# ``authenticate_email_password`` is the schema-defined high-level
+# entry point per AAP Section 0.5.2 Layer 1. It opens its own session,
+# resolves the single-org default org id from config, and delegates to
+# ``authenticate_password`` for the credential check. On any failure
+# it raises ``AuthError`` (HTTP 401) with the GENERIC message
+# "Invalid credentials." per the AAP Section 0.7.4 anti-enumeration
+# invariant.
+
+
+class TestAuthenticateEmailPassword:
+    """Verify the authenticate_email_password high-level wrapper."""
+
+    def test_correct_credentials_returns_user(
+        self,
+        app: Flask,
+        db_session: DBSession,
+        contributor_user,
+    ) -> None:
+        """A user with the right password is returned."""
+        contributor_user.password_hash = hash_password("known-password-2026")
+        db_session.commit()
+
+        user = authenticate_email_password(
+            email=contributor_user.email,
+            password="known-password-2026",
+        )
+        assert user.id == contributor_user.id
+
+    def test_unknown_email_raises_auth_error(self, app: Flask) -> None:
+        """Unknown email raises AuthError (HTTP 401), not AuthenticationError.
+
+        The schema's exports contract requires the public wrapper to
+        raise ``AuthError`` (the canonical project-wide exception
+        type) so callers can do ``except AuthError:`` without coupling
+        to the legacy local ``AuthenticationError`` class.
+        """
+        with pytest.raises(AuthError) as exc_info:
+            authenticate_email_password(
+                email="nobody-2026@nowhere.invalid",
+                password="any-password",
+            )
+        assert exc_info.value.status_code == 401
+
+    def test_wrong_password_raises_auth_error(
+        self,
+        app: Flask,
+        db_session: DBSession,
+        contributor_user,
+    ) -> None:
+        """Wrong password raises AuthError with status 401."""
+        contributor_user.password_hash = hash_password("the-real-password")
+        db_session.commit()
+
+        with pytest.raises(AuthError) as exc_info:
+            authenticate_email_password(
+                email=contributor_user.email,
+                password="wrong-password",
+            )
+        assert exc_info.value.status_code == 401
+
+    def test_empty_email_raises_auth_error(self, app: Flask) -> None:
+        """Empty email is rejected uniformly with AuthError."""
+        with pytest.raises(AuthError):
+            authenticate_email_password(email="", password="any")
+        with pytest.raises(AuthError):
+            authenticate_email_password(email="   ", password="any")
+
+    def test_empty_password_raises_auth_error(self, app: Flask) -> None:
+        """Empty password is rejected uniformly with AuthError."""
+        with pytest.raises(AuthError):
+            authenticate_email_password(email="user@example.com", password="")
+
+    def test_non_string_inputs_raise_auth_error(self, app: Flask) -> None:
+        """Non-string inputs are rejected uniformly with AuthError."""
+        with pytest.raises(AuthError):
+            authenticate_email_password(
+                email=None,  # type: ignore[arg-type]
+                password="x",
+            )
+        with pytest.raises(AuthError):
+            authenticate_email_password(
+                email="user@example.com",
+                password=None,  # type: ignore[arg-type]
+            )
+
+    def test_email_normalization(
+        self,
+        app: Flask,
+        db_session: DBSession,
+        contributor_user,
+    ) -> None:
+        """Mixed-case email matches lowercase stored email.
+
+        The wrapper normalizes the email before lookup so callers do
+        not need to pre-normalize. The stored email is already
+        lowercased per AAP Section 0.5.2 Layer 1.
+        """
+        contributor_user.password_hash = hash_password("normalize-test-pass")
+        db_session.commit()
+
+        # Pass UPPERCASE email; wrapper normalizes to lowercase.
+        upper_email = contributor_user.email.upper()
+        user = authenticate_email_password(
+            email=upper_email,
+            password="normalize-test-pass",
+        )
+        assert user.id == contributor_user.id
+
+
+# ---------------------------------------------------------------------------
+# TestRecordLoginAudit
+# ---------------------------------------------------------------------------
+# ``record_login_audit`` emits an F-013 ``authentication`` audit
+# event for a successful login (password or OAuth). Per AAP Section
+# 0.7.1 invariant 6 (atomic state-change + audit pair), the event is
+# persisted inside the caller's open transaction.
+
+
+class TestRecordLoginAudit:
+    """Verify record_login_audit emits authentication events correctly."""
+
+    def test_emits_password_authentication_event(
+        self,
+        app: Flask,
+        db_session: DBSession,
+        contributor_user,
+    ) -> None:
+        """A password login emits an authentication event with method=password."""
+        with db_session.begin():
+            record_login_audit(
+                contributor_user,
+                method="password",
+                db_session=db_session,
+            )
+
+        events = db_session.scalars(
+            select(AuditEvent)
+            .where(AuditEvent.actor_user_id == contributor_user.id)
+            .where(AuditEvent.event_type == AuditEventType.AUTHENTICATION)
+        ).all()
+        assert len(events) >= 1
+        # The most-recent event we just emitted carries the expected
+        # payload shape per the schema's after_payload contract.
+        latest = max(events, key=lambda e: e.event_timestamp)
+        assert latest.event_type == AuditEventType.AUTHENTICATION
+        assert latest.actor_user_id == contributor_user.id
+        # target_record_id is None for authentication events (the row
+        # is keyed to a user, not to a record).
+        assert latest.target_record_id is None
+        # before_payload is None - no prior state for an
+        # authentication action.
+        assert latest.before_payload is None
+        assert latest.after_payload is not None
+        assert latest.after_payload["method"] == "password"
+        assert latest.after_payload["result"] == "success"
+        assert latest.after_payload["user_id"] == str(contributor_user.id)
+        assert latest.after_payload["org_id"] == str(contributor_user.org_id)
+
+    def test_emits_oauth_authentication_event(
+        self,
+        app: Flask,
+        db_session: DBSession,
+        contributor_user,
+    ) -> None:
+        """An OAuth login emits an authentication event with method=oauth_google."""
+        with db_session.begin():
+            record_login_audit(
+                contributor_user,
+                method="oauth_google",
+                db_session=db_session,
+            )
+
+        events = db_session.scalars(
+            select(AuditEvent).where(AuditEvent.actor_user_id == contributor_user.id)
+        ).all()
+        latest = max(events, key=lambda e: e.event_timestamp)
+        assert latest.after_payload is not None
+        assert latest.after_payload["method"] == "oauth_google"
+
+    def test_outside_transaction_raises(
+        self,
+        app: Flask,
+        db_session: DBSession,
+        contributor_user,
+    ) -> None:
+        """Calling outside an active transaction raises AuditEmissionError.
+
+        Per AAP Section 0.7.1 invariant 6, the audit emitter REJECTS
+        calls made outside an open transaction so the audit row
+        cannot escape the parent state-change atomic boundary.
+        """
+        with pytest.raises(AuditEmissionError):
+            record_login_audit(
+                contributor_user,
+                method="password",
+                db_session=db_session,
+            )
+
+
+# ---------------------------------------------------------------------------
+# TestRecordLogoutAudit
+# ---------------------------------------------------------------------------
+# ``record_logout_audit`` emits an F-013 ``authentication`` event with
+# ``after_payload.method = "logout"`` for the logout flow. The actor
+# is the per-request ``app.middleware.auth.Session`` dataclass.
+
+
+class TestRecordLogoutAudit:
+    """Verify record_logout_audit emits logout events correctly."""
+
+    def test_emits_logout_authentication_event(
+        self,
+        app: Flask,
+        db_session: DBSession,
+        contributor_user,
+    ) -> None:
+        """A logout emits an authentication event with method=logout."""
+        actor = AuthSession(
+            user_id=contributor_user.id,
+            org_id=contributor_user.org_id,
+            role=UserRole.CONTRIBUTOR,
+            email=contributor_user.email,
+        )
+
+        with db_session.begin():
+            record_logout_audit(actor, db_session=db_session)
+
+        events = db_session.scalars(
+            select(AuditEvent).where(AuditEvent.actor_user_id == contributor_user.id)
+        ).all()
+        latest = max(events, key=lambda e: e.event_timestamp)
+        assert latest.event_type == AuditEventType.AUTHENTICATION
+        assert latest.actor_user_id == contributor_user.id
+        assert latest.target_record_id is None
+        assert latest.before_payload is None
+        assert latest.after_payload is not None
+        assert latest.after_payload["method"] == "logout"
+        assert latest.after_payload["result"] == "success"
+        assert latest.after_payload["user_id"] == str(contributor_user.id)
+        assert latest.after_payload["org_id"] == str(contributor_user.org_id)
+
+    def test_outside_transaction_raises(
+        self,
+        app: Flask,
+        db_session: DBSession,
+        contributor_user,
+    ) -> None:
+        """Calling outside an active transaction raises AuditEmissionError."""
+        actor = AuthSession(
+            user_id=contributor_user.id,
+            org_id=contributor_user.org_id,
+            role=UserRole.CONTRIBUTOR,
+        )
+        with pytest.raises(AuditEmissionError):
+            record_logout_audit(actor, db_session=db_session)
+
+
+# ---------------------------------------------------------------------------
+# TestSchemaExports
+# ---------------------------------------------------------------------------
+# Verify the file exports schema is satisfied: all eight required
+# exports are importable and callable from ``app.services.auth``.
+
+
+class TestSchemaExports:
+    """Verify all schema-required exports exist with correct shape."""
+
+    def test_all_schema_exports_importable(self) -> None:
+        """All 8 schema-required exports must be importable."""
+        required_exports = [
+            "hash_password",
+            "verify_password",
+            "mint_session_jwt",
+            "verify_session_jwt",
+            "authenticate_email_password",
+            "upsert_oauth_user",
+            "record_login_audit",
+            "record_logout_audit",
+        ]
+        for name in required_exports:
+            assert hasattr(auth_module, name), f"Missing schema-required export: {name}"
+            obj = getattr(auth_module, name)
+            assert callable(obj), f"Schema-required export {name} is not callable"
+
+    def test_schema_exports_in_dunder_all(self) -> None:
+        """The schema exports must be in __all__ for explicit re-export."""
+        required_in_all = [
+            "hash_password",
+            "verify_password",
+            "mint_session_jwt",
+            "verify_session_jwt",
+            "authenticate_email_password",
+            "upsert_oauth_user",
+            "record_login_audit",
+            "record_logout_audit",
+        ]
+        for name in required_in_all:
+            assert name in auth_module.__all__, f"Schema-required export {name} not in __all__"

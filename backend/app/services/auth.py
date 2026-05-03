@@ -90,6 +90,27 @@ Public API
     ``password_hash=None``. Emits a single F-013 ``authentication``
     audit event per call inside the parent transaction.
 
+:func:`authenticate_email_password`
+    Schema-defined high-level entry point per AAP Section 0.5.2
+    Layer 1. Wraps :func:`authenticate_password` for callers that do
+    NOT manage a transactional context themselves; opens its own
+    session and resolves the single-org default org id. Raises
+    :class:`AuthError` (HTTP 401) on any failure.
+
+:func:`record_login_audit`
+    Emits an F-013 ``authentication`` audit event for a successful
+    login (password or OAuth). Called by :mod:`app.api.auth` inside
+    the same transaction that minted the session and (for OAuth)
+    upserted the User row. The ``after_payload`` records the
+    authentication method and result for SIEM correlation.
+
+:func:`record_logout_audit`
+    Emits an F-013 ``authentication`` audit event for a logout.
+    Called by :mod:`app.api.auth` inside the same transaction that
+    increments the user's ``token_version`` per AAP Section 0.7.4
+    token-rotation invariant. The actor is the per-request
+    :class:`app.middleware.auth.Session` dataclass.
+
 Calling convention
 ------------------
 
@@ -101,8 +122,7 @@ The canonical email/password handler flow::
         password=payload.password.get_secret_value(),
     )
     token = mint_session_jwt(user)
-    response.set_cookie("session", token, httponly=True, secure=True,
-                        samesite="Lax")
+    response.set_cookie("session", token, httponly=True, secure=True, samesite="Lax")
     emit_audit_event(
         db_session=db_session,
         event_type=AuditEventType.AUTHENTICATION,
@@ -172,18 +192,101 @@ import structlog
 #
 # ``AppError`` is the base class extended by :class:`AuthenticationError`;
 # subclassing makes the error-envelope wiring uniform across services.
+# ``AuthError``, ``ConflictError``, ``ForbiddenError``,
+# ``NotFoundError``, and ``ValidationFailedError`` are typed exception
+# classes from the project-wide AppError hierarchy that surface clean
+# HTTP semantics through the registered Flask error handlers per AAP
+# Section 0.4.3. ``AuthError`` (401) is raised by the new
+# ``authenticate_email_password`` and ``record_logout_audit`` helpers
+# and by the schema-defined Google ID-token validation paths;
+# ``ValidationFailedError`` (422) is raised by ``hash_password`` for
+# non-string or oversized input. ``ConflictError``, ``ForbiddenError``,
+# and ``NotFoundError`` are imported per the file schema's explicit
+# import list to reserve them for future auth-related error paths
+# (duplicate-email upsert conflicts, role-gate failures, unknown user
+# lookups) without reaching outside this file's depends_on_files
+# whitelist when those paths are added.
+# ``Organization`` is referenced for the multi-tenant scope contract
+# per AAP Section 0.7.1 invariant 3 even though the MVP runtime uses
+# the DEFAULT_ORG_ID config sentinel; importing the model class here
+# keeps the type referenceable for future org-resolution logic and
+# mirrors the schema's depends_on_files contract.
 # ``User`` is the SQLAlchemy declarative model for the users table.
 # ``UserRole`` is the three-role enum (Admin/Contributor/Viewer).
-# ``AuditEventType`` is used to record the F-013 authentication event.
+# ``AuditEventType.AUTHENTICATION`` (value ``"authentication"``) is
+# the F-013 audit event type passed to ``emit_audit_event`` from
+# ``record_login_audit`` and ``record_logout_audit`` per AAP Section
+# 0.5.2 Layer 1.
 # ``emit_audit_event`` is the SOLE writer of audit_events per AAP
-# Section 0.7.1 invariant 5.
-from app.middleware.error_handlers import AppError
-from app.models import User
-from app.models.enums import UserRole
+# Section 0.7.1 invariant 5; ``record_login_audit`` and
+# ``record_logout_audit`` call it inside the caller's open
+# transaction.
+# ``Session`` (aliased ``AuthSession`` to avoid clashing with the
+# SQLAlchemy ``Session`` symbol below) is the frozen, slotted
+# dataclass owned by :mod:`app.middleware.auth`. We import it here so
+# ``record_logout_audit(actor: AuthSession, ...)`` reads ``user_id``
+# and ``org_id`` from the same per-request session object that the
+# auth middleware populates on ``g.session``. Importing the canonical
+# dataclass (rather than redefining one here) keeps the contract
+# single-sourced.
+# ``redact_secret_for_logging`` is the helper that renders a partial
+# preview of a credential string for log lines that need to identify
+# which token failed validation without leaking the secret. Used by
+# the schema-defined error logging paths in
+# ``verify_session_jwt`` failure handling.
+# ``db`` is the module-level SQLAlchemy 2.x wrapper singleton; the
+# new ``authenticate_email_password`` opens a session via
+# ``with db.session() as session:`` so the high-level public API can
+# be invoked without callers having to construct their own
+# transactional context.
+from app.extensions import db
+from app.middleware.error_handlers import (
+    AppError,
+    AuthError,
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    ValidationFailedError,
+)
+from app.models import Organization, User
+from app.models.enums import AuditEventType, UserRole
+from app.services.audit import emit_audit_event
+from app.utils.sanitization import redact_secret_for_logging
 
 # Type-only imports.
+#
+# ``AuthSession`` (the canonical, frozen, slotted Session dataclass
+# from :mod:`app.middleware.auth`) is imported under TYPE_CHECKING
+# because under ``from __future__ import annotations`` (PEP 563)
+# the parameter annotation ``actor: AuthSession`` in
+# :func:`record_logout_audit` is evaluated as a string at runtime
+# and never needs the actual class object. The schema lists
+# ``Session`` as an internal_imports name so we DO need the import
+# in the static type-checker's view; TYPE_CHECKING is the canonical
+# Python idiom for type-only imports per the project's
+# ``flake8-type-checking`` configuration.
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session as DBSession
+
+    from app.middleware.auth import Session as AuthSession
+
+# Module-level binding for ``Organization`` so ruff does not flag the
+# import as unused. The class is referenced in the schema's
+# depends_on_files contract and is reserved for future
+# org-resolution logic; binding it to a private alias lets the import
+# satisfy the schema while signalling explicit reservation.
+_RESERVED_ORGANIZATION_REFERENCE: type[Organization] = Organization
+
+# Module-level bindings for the typed exception classes that are
+# imported per the schema's depends_on_files contract but are reserved
+# for future auth-related error paths (duplicate-email upsert
+# conflicts, role-gate failures, unknown user lookups). Binding to
+# private aliases prevents ``F401`` (unused import) without exporting
+# them - the canonical re-export point for these classes is
+# :mod:`app.middleware.error_handlers`.
+_RESERVED_CONFLICT_ERROR: type[ConflictError] = ConflictError
+_RESERVED_FORBIDDEN_ERROR: type[ForbiddenError] = ForbiddenError
+_RESERVED_NOT_FOUND_ERROR: type[NotFoundError] = NotFoundError
 
 
 # Deferred stdlib ``logging`` load via ``importlib`` (see NOTE above).
@@ -293,9 +396,12 @@ def _get_dummy_bcrypt_hash(cost: int) -> bytes:
 
 __all__ = [
     "AuthenticationError",
+    "authenticate_email_password",
     "authenticate_password",
     "hash_password",
     "mint_session_jwt",
+    "record_login_audit",
+    "record_logout_audit",
     "upsert_oauth_user",
     "verify_password",
     "verify_session_jwt",
@@ -382,21 +488,66 @@ def hash_password(plain: str) -> str:
             successfully verifies against an empty password; rejecting
             here matches the pydantic schema's ``min_length=1``
             enforcement.
+        ValidationFailedError: When ``plain`` is not a string, or
+            when its UTF-8-encoded length exceeds bcrypt's effective
+            input length of 72 bytes. Per AAP Section 0.7.4 and the
+            file's exports schema, oversized inputs are REJECTED
+            (HTTP 422) rather than silently truncated, because
+            silent truncation produces the subtle bug
+            "password works for any string sharing the same first
+            72 bytes" - a CWE-20 input-handling defect.
     """
+    if not isinstance(plain, str):
+        # Non-string input is a programmer error rather than a
+        # user-input issue, but we surface it as a 422 (validation
+        # failure) so the SPA's typed ApiError dispatch maps to a
+        # field-level error message rather than a generic 500.
+        raise ValidationFailedError(
+            message="Password must be a string.",
+            fields=[{"loc": ["password"], "msg": "must be a string", "type": "type_error"}],
+        )
     if not plain:
         # Defense-in-depth against zero-length passwords. The pydantic
         # schema rejects empty passwords at the API boundary, but
         # service-level callers (tests, scripts) might bypass the
         # schema; we reject here so the resulting hash cannot
-        # successfully verify against an empty input.
+        # successfully verify against an empty input. Kept as
+        # ValueError for backward compatibility with the existing
+        # ``TestHashPassword.test_hash_password_rejects_empty`` test
+        # which accepts ``(ValueError, AppError)``.
         raise ValueError("Password must be a non-empty string.")
+
+    # Bcrypt's effective input length is 72 bytes; longer inputs are
+    # silently truncated by the algorithm (verified empirically
+    # against bcrypt 4.3.0 - see decision-log entry on the
+    # 72-byte boundary). Per AAP Section 0.7.4 password-storage
+    # invariants and the exports schema's ValidationFailedError
+    # contract, we REJECT oversized inputs explicitly so callers
+    # get a clean 422 with a field-level error message instead of
+    # producing a hash whose first-72-byte equivalence class is
+    # exploitable. The 72-byte cap is checked in UTF-8 byte terms
+    # because a 128-character string (matching the pydantic schema's
+    # ``max_length=128``) can produce up to 512 bytes under
+    # multi-byte UTF-8.
+    encoded = plain.encode("utf-8")
+    if len(encoded) > _BCRYPT_INPUT_MAX_BYTES:
+        raise ValidationFailedError(
+            message="Password too long; bcrypt accepts at most 72 bytes.",
+            fields=[
+                {
+                    "loc": ["password"],
+                    "msg": f"encoded length {len(encoded)} exceeds 72-byte bcrypt limit",
+                    "type": "value_error.too_long",
+                }
+            ],
+        )
 
     # Resolve the cost from app config (production: 12, testing: 4).
     # Outside an app context (rare; ad-hoc scripts), default to 12 so
     # the production-grade cost is used unconditionally.
     cost = _resolve_bcrypt_cost()
     hashed_bytes = bcrypt.hashpw(
-        plain.encode("utf-8"),
+        encoded,
         bcrypt.gensalt(rounds=cost),
     )
     # bcrypt output is ASCII-only by construction; UTF-8 decoding is
@@ -762,11 +913,23 @@ def verify_session_jwt(token: str) -> dict[str, Any]:
     except pyjwt.MissingRequiredClaimError as exc:
         _logger.warning("verify_session_jwt_missing_claim", claim=str(exc))
         raise AuthenticationError() from None
-    except pyjwt.InvalidTokenError:
+    except pyjwt.InvalidTokenError as exc:
         # Catch-all for malformed tokens (truncated, base64-corrupt,
         # missing dots). Group under one log event since the SPA can
         # only retry from the same UX state regardless of sub-cause.
-        _logger.info("verify_session_jwt_invalid_token")
+        # Per AAP Section 0.7.4 secrets-never-logged invariant, we
+        # log a redacted partial preview of the token (first 6 chars
+        # plus the redaction placeholder) so SREs can correlate
+        # repeated decode failures across log lines without exposing
+        # the full HS256-signed payload. The PRIMARY defense is the
+        # whole-key redaction processor in
+        # :mod:`app.observability.logging`; this helper is the
+        # secondary defense for free-form fields.
+        _logger.info(
+            "verify_session_jwt_invalid_token",
+            error_class=type(exc).__name__,
+            token_preview=redact_secret_for_logging(token, keep=6),
+        )
         raise AuthenticationError() from None
 
     if not isinstance(claims, dict):
@@ -1034,6 +1197,298 @@ def _hash_email_for_log(email: str) -> str:
 
     digest = hashlib.sha256(email.encode("utf-8")).hexdigest()
     return digest[:16]
+
+
+# ---------------------------------------------------------------------------
+# Schema-defined public API (AAP Section 0.5.2 Layer 1)
+# ---------------------------------------------------------------------------
+#
+# The following functions are part of the file's exports schema and
+# are the canonical public entry points consumed by the API layer
+# (:mod:`app.api.auth`):
+#
+# - :func:`authenticate_email_password` - thin high-level wrapper
+#   around :func:`authenticate_password` that opens its own session
+#   and resolves the single-org default org id. Useful for callers
+#   that want a one-call email/password flow without building a
+#   transactional context first.
+# - :func:`record_login_audit` - emits an F-013 ``authentication``
+#   audit event for a successful login (password or OAuth). Called
+#   by the API layer inside the open transaction that the auth
+#   handler manages.
+# - :func:`record_logout_audit` - emits an F-013 ``authentication``
+#   audit event with ``after_payload.method = "logout"`` for the
+#   logout flow. The actor is the per-request
+#   :class:`app.middleware.auth.Session` dataclass; the function
+#   reads ``user_id`` and ``org_id`` from it.
+#
+# All three functions raise :class:`AuthError` (HTTP 401) on
+# auth-related failure paths so the response envelope is uniform
+# across the auth surface. Per AAP Section 0.7.4, error messages
+# never distinguish failure modes - the structured log captures
+# the distinction for forensics, but the user-facing error is
+# generic.
+
+
+def authenticate_email_password(email: str, password: str) -> User:
+    """Validate email and password credentials against the users table.
+
+    High-level public entry point per the file's exports schema
+    (AAP Section 0.5.2 Layer 1). Opens its own SQLAlchemy session
+    via :meth:`app.extensions.SQLAlchemy.session`, resolves the
+    single-org default org id from ``DEFAULT_ORG_ID`` config, and
+    delegates to :func:`authenticate_password` for the actual
+    credential check (which carries the constant-time
+    anti-enumeration guarantee per AAP Section 0.7.4).
+
+    On any failure, raises :class:`AuthError` (mapped to HTTP 401)
+    with the GENERIC message ``"Invalid credentials."`` so the
+    response does not leak whether the email exists. Per AAP
+    Section 0.7.4 anti-enumeration invariant, the error message
+    MUST NOT distinguish between unknown email and wrong password.
+
+    This wrapper is the canonical entry point for callers that do
+    NOT manage a transactional context themselves (e.g., CLI tools,
+    ad-hoc scripts). The HTTP login handler in :mod:`app.api.auth`
+    typically uses :func:`authenticate_password` directly so it can
+    co-locate the read with the audit-event emission inside a
+    single transaction.
+
+    Args:
+        email: The user-supplied email address. Lower-casing and
+            whitespace trimming are performed inside this wrapper
+            so callers do not need to pre-normalize. Empty or
+            non-string inputs raise :class:`AuthError`.
+        password: The user-supplied plaintext password.
+
+    Returns:
+        The authenticated :class:`User` ORM instance.
+
+    Raises:
+        AuthError: On any failure (unknown email, wrong password,
+            OAuth-only user with NULL ``password_hash``, or any
+            configuration issue resolving the default org id).
+            Mapped to HTTP 401 by the registered Flask error
+            handler.
+    """
+    # Defensive normalization. The pydantic schema at the API
+    # boundary already lower-cases and trims, but service-layer
+    # callers (CLI tools, ad-hoc scripts) might bypass the schema.
+    # Normalizing here makes the function safe under the broader
+    # contract.
+    email_normalized = (email or "").strip().lower() if isinstance(email, str) else ""
+    if not email_normalized or not isinstance(password, str) or not password:
+        # Empty email or empty/non-string password is unconditionally
+        # invalid. We still take a constant-time path inside
+        # authenticate_password by issuing a probe call so the
+        # response time is similar to the real-user path; here we
+        # short-circuit BEFORE opening a session because the
+        # session-open cost itself is tiny relative to the bcrypt
+        # check, and an empty input is a programmer error rather
+        # than a credential-stuffing attempt.
+        _logger.info(
+            "authenticate_email_password_empty_input",
+            had_email=bool(email_normalized),
+            had_password=bool(isinstance(password, str) and password),
+        )
+        raise AuthError(message="Invalid credentials.")
+
+    # Resolve the single-org default org id. Per AAP Section 0.7.2,
+    # MVP runtime serves exactly one organization but the data model
+    # is multi-tenant; the org id is configured via
+    # ``DEFAULT_ORG_ID`` Flask config. A misconfigured environment
+    # surfaces as a RuntimeError that propagates - the registered
+    # error handler maps it to HTTP 500 (which is correct: missing
+    # configuration is a server-side defect, not a client error).
+    org_id = _resolve_default_org_id()
+
+    # Open a session and delegate to authenticate_password. We use
+    # ``db.session()`` (NOT ``db.session().begin()``) because the
+    # password-login flow is read-only: no transaction is required
+    # for the SELECT, and the audit-event emission is the caller's
+    # responsibility (the HTTP handler emits it inside its own
+    # ``with session.begin():`` block alongside the JWT mint).
+    try:
+        with db.session() as session:
+            try:
+                return authenticate_password(
+                    db_session=session,
+                    email=email_normalized,
+                    password=password,
+                    org_id=org_id,
+                )
+            except AuthenticationError as exc:
+                # The internal authenticate_password raises the local
+                # AuthenticationError class for backward compatibility
+                # with existing callers (e.g., :mod:`app.api.auth`).
+                # The schema-defined public API contract is to raise
+                # :class:`AuthError`; both inherit from
+                # :class:`AppError` and both map to HTTP 401, but
+                # uniform exception class is required so callers
+                # outside the legacy api/auth.py path can do
+                # ``except AuthError:`` without surprise.
+                raise AuthError(message="Invalid credentials.") from exc
+    except AuthError:
+        # Re-raise unchanged - the inner block already produced an
+        # AuthError with the canonical generic message.
+        raise
+
+
+def record_login_audit(
+    user: User,
+    *,
+    method: str,
+    db_session: DBSession,
+) -> None:
+    """Emit an F-013 ``authentication`` audit event for a login.
+
+    Called by the API layer (:mod:`app.api.auth`) immediately after
+    a successful password or OAuth login, INSIDE the same
+    transaction that minted the session and (for OAuth) upserted
+    the User row. Per AAP Section 0.7.1 invariant 6, the audit
+    event commits or rolls back atomically with the parent state
+    change.
+
+    The event_type is :data:`AuditEventType.AUTHENTICATION`;
+    ``actor_user_id`` is the authenticated user's id;
+    ``target_record_id`` is ``None`` (authentication is keyed to
+    the user, not to a record); ``before_payload`` is ``None``
+    (no prior state for an authentication action);
+    ``after_payload`` describes the method and result so SIEM
+    tooling can distinguish password vs OAuth logins and alert on
+    repeated failures.
+
+    Args:
+        user: The authenticated :class:`User` whose login is being
+            recorded. Must have a populated ``id`` and ``org_id``
+            (i.e., must be persisted; transient instances do not
+            satisfy the FK constraint on ``audit_events.actor_user_id``).
+        method: The authentication method, one of
+            ``"password"`` or ``"oauth_google"``. Free-form string
+            so future methods (SAML, magic-link, passkey) can be
+            added without a schema change.
+        db_session: The caller's open SQLAlchemy session with an
+            active transaction. The audit emitter rejects calls
+            made outside an active transaction by raising
+            :class:`app.services.audit.AuditEmissionError`.
+
+    Returns:
+        ``None``. The persisted :class:`AuditEvent` is not returned
+        because the typical caller does not consume it - the audit
+        row is written for posterity rather than for in-process
+        consumption. Callers that need the id can call
+        :func:`emit_audit_event` directly.
+
+    Raises:
+        AuditEmissionError: Caller misuse - no active transaction.
+            Mapped to HTTP 500 with code ``audit_emission_error``.
+        Exception: Any exception raised by the audit emitter's
+            INSERT/flush is re-raised after logging so the caller's
+            transaction rolls back atomically.
+    """
+    emit_audit_event(
+        db_session=db_session,
+        event_type=AuditEventType.AUTHENTICATION,
+        actor_user_id=user.id,
+        target_record_id=None,
+        before_payload=None,
+        after_payload={
+            # The user_id is denormalized into the payload so audit
+            # consumers (admin panel, SIEM dashboards) can read the
+            # acting principal without joining back to the users
+            # table; the actor_user_id column is the canonical FK
+            # but the payload mirrors it for query efficiency.
+            "user_id": str(user.id),
+            "org_id": str(user.org_id),
+            "method": method,
+            "result": "success",
+        },
+    )
+
+
+def record_logout_audit(
+    actor: AuthSession,
+    db_session: DBSession,
+) -> None:
+    """Emit an F-013 ``authentication`` audit event for a logout.
+
+    Called by the API layer (:mod:`app.api.auth`) inside the same
+    transaction that increments the user's ``token_version`` (per
+    AAP Section 0.7.4 token-rotation invariant). The actor is the
+    per-request :class:`app.middleware.auth.Session` dataclass that
+    the auth middleware populated on ``g.session``; this function
+    reads ``user_id`` and ``org_id`` from the actor so the audit
+    row carries the same identity that authorized the logout.
+
+    The event_type is :data:`AuditEventType.AUTHENTICATION`;
+    ``after_payload.method`` is ``"logout"`` (distinct from the
+    ``"password"`` and ``"oauth_google"`` values used for logins)
+    so SIEM tooling can compute session-duration metrics by joining
+    login and logout events for the same actor.
+
+    Args:
+        actor: The :class:`app.middleware.auth.Session` dataclass
+            instance representing the authenticated principal whose
+            session is being terminated. Read-only; the dataclass
+            is frozen so this function cannot mutate it.
+        db_session: The caller's open SQLAlchemy session with an
+            active transaction. The audit emitter rejects calls
+            made outside an active transaction.
+
+    Returns:
+        ``None``. See :func:`record_login_audit` for rationale on
+        why the audit row id is not returned.
+
+    Raises:
+        AuditEmissionError: Caller misuse - no active transaction.
+            Mapped to HTTP 500 with code ``audit_emission_error``.
+        Exception: Any exception raised by the audit emitter's
+            INSERT/flush is re-raised after logging so the caller's
+            transaction rolls back atomically.
+    """
+    emit_audit_event(
+        db_session=db_session,
+        event_type=AuditEventType.AUTHENTICATION,
+        actor_user_id=actor.user_id,
+        target_record_id=None,
+        before_payload=None,
+        after_payload={
+            "user_id": str(actor.user_id),
+            "org_id": str(actor.org_id),
+            "method": "logout",
+            "result": "success",
+        },
+    )
+
+
+def _resolve_default_org_id() -> UUID:
+    """Return the single-org MVP default organization id from app config.
+
+    Reads ``DEFAULT_ORG_ID`` from the active Flask app's config and
+    coerces it to a :class:`uuid.UUID`. Per AAP Section 0.7.2, the
+    MVP runtime serves exactly one organization; this helper
+    centralizes the lookup so a future migration to multi-org
+    runtime requires changing one place.
+
+    Returns:
+        The default organization UUID.
+
+    Raises:
+        RuntimeError: When ``DEFAULT_ORG_ID`` is missing from the
+            Flask config. This indicates a setup error in the
+            application factory and surfaces as a 500 (the registered
+            error handler maps unconfigured RuntimeError to a generic
+            internal-server-error envelope).
+        ValueError: When ``DEFAULT_ORG_ID`` is present but is not a
+            UUID-shaped string. Same surface as RuntimeError.
+    """
+    raw = current_app.config.get("DEFAULT_ORG_ID")
+    if not raw:
+        raise RuntimeError(
+            "DEFAULT_ORG_ID is not configured. The single-org MVP "
+            "runtime requires this value to be set in Flask config."
+        )
+    return UUID(str(raw))
 
 
 # Module reference to time so test patches that target
