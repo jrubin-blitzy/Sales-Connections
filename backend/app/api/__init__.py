@@ -28,10 +28,11 @@ Wired blueprints (per AAP Sec 0.4.3 endpoint catalog):
   (``GET``, ``PATCH``, ``DELETE``, ``GET /:id/history``,
   ``GET /duplicate-check``) ship in Layers 4-6 by appending to the
   same blueprint.
-
-Future blueprints (Checkpoint 4-5 deliverables):
-
-* :mod:`app.api.admin`       -> mounted under ``/api/admin``.
+* :mod:`app.api.admin`       -> mounted under ``/api/admin``;
+  delivers F-014 (Admin Panel) per AAP Section 0.5.2 Layer 6 with
+  five admin-only endpoints (user listing, role mutation, record
+  moderation list, hard delete, analytics aggregation). All five
+  routes are gated by ``@requires_role(UserRole.ADMIN)``.
 
 Per AAP Section 0.5.2 (Layer 0), :func:`register_blueprints` is the
 LAST step in :func:`app.create_app` after middleware registration so
@@ -100,6 +101,7 @@ _PREFIX_API: str = "/api"
 _PREFIX_NOTES: str = "/api/notes"
 _PREFIX_TAGS: str = "/api/tags"
 _PREFIX_CONNECTIONS: str = "/api/connections"
+_PREFIX_ADMIN: str = "/api/admin"
 
 
 __all__ = [
@@ -159,6 +161,7 @@ def register_blueprints(app: Flask) -> None:
     # services in turn import models, schemas, and middleware. Loading
     # the blueprints lazily here ensures the import graph is fully
     # constructed before Flask's blueprint-registration assertions run.
+    from app.api.admin import admin_bp  # noqa: PLC0415
     from app.api.auth import auth_bp, me_bp  # noqa: PLC0415
     from app.api.connections import connections_bp  # noqa: PLC0415
     from app.api.health import health_bp  # noqa: PLC0415
@@ -203,6 +206,16 @@ def register_blueprints(app: Flask) -> None:
     # are appended to the same blueprint as those layers ship.
     app.register_blueprint(connections_bp, url_prefix=_PREFIX_CONNECTIONS)
 
+    # ----- Admin Panel (mounted at /api/admin) ------------------------
+    # The admin blueprint declares routes at relative paths
+    # ``/users``, ``/users/<uuid:user_id>``, ``/records``,
+    # ``/records/<uuid:record_id>``, and ``/analytics`` so mounting
+    # under ``/api/admin`` produces the F-014 endpoint surface per
+    # AAP Section 0.5.2 Layer 6. All five routes are gated by
+    # ``@requires_role(UserRole.ADMIN)``; non-Admin callers receive
+    # HTTP 403 envelopes.
+    app.register_blueprint(admin_bp, url_prefix=_PREFIX_ADMIN)
+
     _stdlib_logger.info(
         "api_blueprints_registered",
         extra={
@@ -213,6 +226,7 @@ def register_blueprints(app: Flask) -> None:
                 "notes",
                 "tags",
                 "connections",
+                "admin",
             ],
             "prefixes": {
                 "auth": _PREFIX_AUTH,
@@ -220,6 +234,7 @@ def register_blueprints(app: Flask) -> None:
                 "notes": _PREFIX_NOTES,
                 "tags": _PREFIX_TAGS,
                 "connections": _PREFIX_CONNECTIONS,
+                "admin": _PREFIX_ADMIN,
             },
         },
     )
