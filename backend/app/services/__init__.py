@@ -1,98 +1,132 @@
-"""Service-layer re-exports for the Sales-Connections backend.
+"""Sales-Connections business-logic (service) layer.
 
-Per AAP Section 0.2.3, this package consolidates the service modules
-into a single import surface. The pattern mirrors
-:mod:`app.models.__init__` and :mod:`app.schemas.__init__` so handlers,
-middleware, and tests can write::
+The service layer is the single place in the codebase that:
 
-    from app.services import (
-        emit_audit_event,
-        find_duplicate,
-        generate_outreach_notes,
-        hash_password,
-        verify_session_jwt,
-    )
+1. Opens and owns database transactions.
+2. Calls external services (Anthropic Claude via Langchain, Google
+   OAuth via Authlib).
+3. Emits audit events for every state-changing operation.
+4. Enforces business invariants beyond schema validation (org-scoping,
+   soft-delete semantics, owner attribution, RBAC consequences).
 
-without knowing which submodule each function lives in.
+Modules
+-------
+- ``audit``: :func:`emit_audit_event` is the sole writer of the
+  ``audit_events`` table. State-mutating services call it inside their
+  parent transaction so the state change and the audit row commit (or
+  roll back) atomically per AAP Section 0.7.1 invariant 6.
+- ``auth``: password hashing (bcrypt 4.x, cost-12 in production),
+  PyJWT mint/verify of the HS256 8-hour session token, and Google
+  OAuth user upsert. Powers F-012 across both the email/password
+  fallback and the OAuth authorization-code flow.
+- ``connections``: record CRUD, listing, soft-deletion, status
+  mutation, and edit-history retrieval. Backs F-001, F-004, F-005,
+  F-007, and F-011.
+- ``ai_orchestration``: Langchain-wrapped Anthropic Claude client
+  (F-002). The ONLY module in the entire codebase that imports the
+  Anthropic SDK or any Langchain provider class. This preserves the
+  provider-replaceability invariant per AAP Section 0.7.7 ("No direct
+  Anthropic SDK usage outside ``services/ai_orchestration.py``").
+- ``duplicate_detection``: LinkedIn URL duplicate lookup against the
+  partial unique index ``(org_id, normalized_linkedin_url) WHERE
+  deleted_at IS NULL``. Backs F-010.
+- ``admin``: administrative aggregations, role mutations, hard
+  delete, and the three analytics panels exposed by F-014. All
+  operations are restricted to the Admin role at the API layer per
+  AAP Section 0.7.1 invariant 7.
 
-Per AAP Section 0.5.3 ("service functions own transactions"), every
-state-changing service function opens its own ``with session.begin():``
-block and invokes :func:`emit_audit_event` inside that transaction so
-the state change and the audit row commit (or roll back) atomically.
-The re-exports here do not change that contract; they only make the
-imports terser at the call site.
+Conventions
+-----------
+- Service functions accept the authenticated session context (the
+  ``Session`` dataclass produced by :mod:`app.middleware.auth`) as an
+  explicit parameter, never via a thread-local. This keeps the service
+  layer pure for testing and avoids hidden coupling.
+- Service functions raise typed exceptions (subclasses of
+  ``app.middleware.error_handlers.AppError`` such as
+  :class:`app.middleware.error_handlers.NotFoundError`,
+  :class:`app.middleware.error_handlers.ForbiddenError`,
+  :class:`app.middleware.error_handlers.ConflictError`); the registered
+  Flask error handler maps these to JSON envelopes per AAP Section
+  0.4.3.
+- State-changing service functions are atomic: the state change AND
+  the audit-event INSERT happen in a single database transaction.
+  Failure of either rolls back both, satisfying AAP Section 0.7.1
+  invariant 6.
+- Service modules do NOT import another service module's private
+  internals (underscore-prefixed helpers). Cross-service collaboration
+  only happens through the public functions re-exported here.
 
-Per AAP Section 0.7.1 invariant 7 ("API-layer authorization is
-authoritative"), this module deliberately re-exports authentication
-helpers (``hash_password``, ``verify_password``, ``mint_session_jwt``,
-``verify_session_jwt``) so the auth API blueprint and middleware can
-reach them via a single import statement. The handlers themselves
-remain thin per AAP Section 0.5.3.
+Importing app.services has zero side effects beyond running the
+re-export statements: no database connection is opened, no HTTP call
+is made, no environment variable is read, and no file is touched.
+External-resource side effects only occur inside the consumer
+functions themselves.
 
-This module deliberately has no module-level side effects beyond the
-re-export statements. Importing :mod:`app.services` does not log,
-does not make HTTP calls, does not touch the filesystem, and does
-not connect to any database.
+Re-export ordering note
+-----------------------
+The per-module re-export blocks below are arranged in alphabetical
+order (admin, ai_orchestration, audit, auth, connections,
+duplicate_detection) to satisfy the project's ruff isort
+configuration (``force-sort-within-sections = true``) and to make
+diffs predictable. The conceptual build-layer ordering used by
+AAP Section 0.5.1 (foundation -> auth -> RBAC + audit -> create
+paths -> read paths -> classification -> composition) is documented
+in the ``Modules`` section above, not encoded in import order.
 """
 
 from __future__ import annotations
 
 # ---------------------------------------------------------------------------
-# Admin aggregations (F-014)
+# Admin operations (F-014)
 # ---------------------------------------------------------------------------
-# ``get_analytics_snapshot`` produces the three-panel analytics payload
-# (most active contributors, leads by status, weekly activity sparkline)
-# consumed by the admin dashboard. ``hard_delete_record`` permanently
-# removes a record (admin-only). ``update_user_role`` mutates a user's
-# role and emits the corresponding ``role_change`` audit event.
+# ``list_all_users`` enumerates all users in the actor's organization for
+# the Admin user-management surface. ``update_user_role`` performs the
+# role mutation and emits the corresponding ``role_change`` audit event.
+# ``list_records_for_moderation`` powers the Admin record-moderation
+# tab including (optionally) soft-deleted records. ``hard_delete_record``
+# permanently removes a record (Admin-only) and emits the
+# ``hard_delete`` audit event. ``compute_analytics`` produces the
+# three-panel analytics payload (most active contributors, leads by
+# status, weekly activity sparkline).
 from app.services.admin import (
-    LastAdminError,
-    SelfDemotionError,
-    get_analytics_snapshot,
+    compute_analytics,
     hard_delete_record,
-    list_org_users,
+    list_all_users,
+    list_records_for_moderation,
     update_user_role,
 )
 
 # ---------------------------------------------------------------------------
-# AI orchestration (F-002)
+# AI orchestration (F-002) - sole importer of the Anthropic SDK
 # ---------------------------------------------------------------------------
-# ``generate_outreach_notes`` is the SOLE caller of the langchain +
-# Anthropic SDK across the entire backend, preserving the
-# provider-replaceability invariant per AAP Section 0.4.4.
-# ``AIServiceUnavailableError`` is the AppError subclass surfaced on
-# timeout / provider error / misconfiguration.
-from app.services.ai_orchestration import (
-    AIServiceUnavailableError,
-    generate_outreach_notes,
-)
+# ``generate_outreach_notes`` is the only public entry point of the AI
+# orchestration module and the only function in the entire backend that
+# (transitively) imports the Anthropic SDK or Langchain provider classes.
+# This preserves the provider-replaceability invariant per AAP Section
+# 0.7.7 so the upstream model vendor can be swapped without changing
+# feature handlers.
+from app.services.ai_orchestration import generate_outreach_notes
 
 # ---------------------------------------------------------------------------
-# Audit emitter (F-013)
+# Audit emitter (foundational; all state-mutating services depend on this)
 # ---------------------------------------------------------------------------
 # ``emit_audit_event`` is the SOLE writer of the ``audit_events`` table
 # per AAP Section 0.7.1 invariant 5 (append-only) and invariant 6
-# (atomic state-change + audit pair). ``AuditEmissionError`` is the
-# AppError subclass raised on caller misuse (no active transaction,
-# malformed argument types, or INSERT failure).
-from app.services.audit import (
-    AuditEmissionError,
-    emit_audit_event,
-)
+# (atomic state-change + audit pair). The PostgreSQL-level GRANT INSERT
+# / REVOKE UPDATE, DELETE clauses in the initial migration enforce the
+# same invariant at the database privilege layer.
+from app.services.audit import emit_audit_event
 
 # ---------------------------------------------------------------------------
-# Authentication services (F-012)
+# Authentication primitives (F-012)
 # ---------------------------------------------------------------------------
 # ``hash_password`` / ``verify_password`` wrap bcrypt 4.x with the
-# project's cost-12 production setting (cost-4 in TestingConfig).
-# ``mint_session_jwt`` / ``verify_session_jwt`` produce and validate
-# the HS256 8-hour session token delivered to the SPA via HttpOnly
-# cookie. ``upsert_oauth_user`` is the OAuth-callback path's user
-# row creator/updater. ``authenticate_password`` is the email/password
-# login flow's verification entry point.
+# project's cost-12 production setting (cost-4 in TestingConfig for fast
+# tests). ``mint_session_jwt`` / ``verify_session_jwt`` produce and
+# validate the HS256 8-hour session token delivered to the SPA via an
+# HttpOnly + Secure + SameSite=Lax cookie. ``upsert_oauth_user`` is the
+# Google OAuth callback path's user row creator/updater.
 from app.services.auth import (
-    AuthenticationError,
-    authenticate_password,
     hash_password,
     mint_session_jwt,
     upsert_oauth_user,
@@ -101,34 +135,24 @@ from app.services.auth import (
 )
 
 # ---------------------------------------------------------------------------
-# Connection record service (F-001, F-004, F-005, F-007, F-011)
+# Connection record CRUD (F-001, F-004, F-005, F-007, F-011)
 # ---------------------------------------------------------------------------
-# This module owns the entire lifecycle of ``records`` and
-# ``record_tags``:
+# This module owns the entire lifecycle of ``records``:
 #
-# * ``create_record`` is the sole writer of new ``records`` rows
-#   (F-001), opening its own ``with session.begin():`` block and
-#   emitting the corresponding ``CREATE`` audit event in the same
-#   transaction per AAP Section 0.7.1 invariant 6 (atomic
-#   state-change + audit pair).
-# * ``get_record`` and ``list_records`` are the read paths backing
-#   the F-004 feed and the F-011 detail view; both inject the
-#   org-scope and soft-delete-scope predicates uniformly.
-# * ``update_record`` (F-007 edit), ``update_status`` (F-005
-#   outreach-status mutation), and ``soft_delete_record`` (F-007
-#   soft delete) are the three state-changing mutation paths
-#   beyond CREATE; each emits its own typed audit event in the
-#   parent transaction.
-# * ``get_record_history`` powers the F-011 edit-history feed by
+# - ``create_record``: F-001 form-driven create. Opens its own
+#   ``session.begin()`` block and emits the corresponding ``create``
+#   audit event in the same transaction.
+# - ``get_record`` / ``list_records``: read paths backing the F-011
+#   detail view and the F-004 feed; both inject the org-scope and
+#   soft-delete-scope predicates uniformly.
+# - ``update_record`` (F-007 edit), ``update_status`` (F-005 outreach
+#   status mutation, RBAC-gated to Sales Rep / Admin), and
+#   ``soft_delete_record`` (F-007 soft delete) are the three
+#   state-changing mutation paths beyond CREATE; each emits its own
+#   typed audit event in the parent transaction.
+# - ``get_record_history``: powers the F-011 edit-history feed by
 #   surfacing audit events filtered to a single record id.
-# * ``ConnectionFilters`` is the frozen dataclass carrying the
-#   seven optional filter parameters consumed by the feed query.
-# * ``DuplicateRecordError`` is the AppError subclass raised when
-#   the unique partial index on ``normalized_linkedin_url`` fires
-#   (mapped to HTTP 409).
 from app.services.connections import (
-    ConnectionFilters,
-    DuplicateRecordError,
     create_record,
     get_record,
     get_record_history,
@@ -142,32 +166,34 @@ from app.services.connections import (
 # Duplicate detection (F-010)
 # ---------------------------------------------------------------------------
 # ``find_duplicate`` queries the unique partial index
-# ``uq_records_org_normalized_linkedin_url_active`` to detect a
-# pre-existing record with the same normalized LinkedIn URL within the
-# same org. Per AAP Section 0.7.6 this returns a non-blocking warning,
-# never a hard reject.
+# ``(org_id, normalized_linkedin_url) WHERE deleted_at IS NULL`` to
+# detect a pre-existing record with the same normalized LinkedIn URL
+# within the same org. Per AAP Section 0.7.6 this returns a
+# non-blocking warning, never a hard reject.
 from app.services.duplicate_detection import find_duplicate
 
+# ---------------------------------------------------------------------------
+# Public re-export surface
+# ---------------------------------------------------------------------------
+# ``__all__`` defines the package's public API. Names are listed in
+# alphabetical order so wildcard imports (``from app.services import *``)
+# and tooling (mypy, ruff) recognize the canonical surface. Helper
+# utilities such as ``_build_prompt``, ``_assert_in_transaction``,
+# ``_apply_org_scope``, etc., are intentionally PRIVATE inside their
+# respective modules and are deliberately NOT re-exported here.
 __all__ = [
-    "AIServiceUnavailableError",
-    "AuditEmissionError",
-    "AuthenticationError",
-    "ConnectionFilters",
-    "DuplicateRecordError",
-    "LastAdminError",
-    "SelfDemotionError",
-    "authenticate_password",
+    "compute_analytics",
     "create_record",
     "emit_audit_event",
     "find_duplicate",
     "generate_outreach_notes",
-    "get_analytics_snapshot",
     "get_record",
     "get_record_history",
     "hard_delete_record",
     "hash_password",
-    "list_org_users",
+    "list_all_users",
     "list_records",
+    "list_records_for_moderation",
     "mint_session_jwt",
     "soft_delete_record",
     "update_record",
