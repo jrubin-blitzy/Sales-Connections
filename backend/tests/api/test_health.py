@@ -359,11 +359,40 @@ class TestReadinessEndpoint:
         difference exceeds the 1-second threshold, simulating a slow
         round-trip without actually sleeping in the test process.
         """
-        # Side effect returns 0.0 then 1.5; difference (1.5s) exceeds the
-        # 1.0s budget defined in app.api.health._READYZ_DB_TIMEOUT_SECONDS.
-        # The handler calls perf_counter twice in the success path: once
-        # at start and once after the SELECT 1 returns.
-        with patch("app.api.health.time.perf_counter", side_effect=[0.0, 1.5]):
+        # The handler calls ``time.perf_counter()`` twice (at start
+        # and at end of the DB round-trip); we configure a callable
+        # side_effect that returns a sequence of monotonically-
+        # increasing values so the difference between the FIRST TWO
+        # calls inside the health probe exceeds the 1.0 s budget.
+        #
+        # Patching ``app.api.health.time.perf_counter`` replaces the
+        # ``perf_counter`` attribute on the shared ``time`` module
+        # globally, so other callers of ``time.perf_counter()`` (e.g.,
+        # the metrics middleware before/after request hooks) also
+        # consume from the iterator. Using a callable side_effect
+        # rather than a finite list avoids ``StopIteration`` when the
+        # number of incidental calls grows.
+        call_count = {"n": 0}
+
+        def fake_perf_counter() -> float:
+            # Returns values such that the FIRST and SECOND health-
+            # probe calls span 1.5 s. Subsequent metrics-middleware
+            # calls receive larger values and do not interfere.
+            call_count["n"] += 1
+            n = call_count["n"]
+            # Skip metrics before_request (n=1) by returning an early
+            # value, then the health probe sees a 0.0 -> 1.5 jump on
+            # its two calls. We over-allocate by giving 0 for n<=1,
+            # 0.0 for n==2, 1.5 for n==3, then increasing values.
+            if n <= 1:
+                return 0.0
+            if n == 2:
+                return 0.0
+            if n == 3:
+                return 1.5
+            return 1.5 + (n - 3) * 0.001
+
+        with patch("app.api.health.time.perf_counter", side_effect=fake_perf_counter):
             response = client.get(_READYZ_PATH)
 
         assert response.status_code == 503, (
