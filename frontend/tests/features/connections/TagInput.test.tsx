@@ -15,12 +15,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 import { TagInput } from "@/features/connections/TagInput";
-import {
-  renderWithMockedSession,
-  screen,
-  userEvent,
-  waitFor,
-} from "../../test-utils";
+import { renderWithMockedSession, screen, userEvent, waitFor } from "../../test-utils";
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -72,11 +67,7 @@ describe("TagInput", () => {
     it("renders empty when no tags selected", () => {
       const onChange = vi.fn();
       renderWithMockedSession(
-        <TagInput
-          availableTags={sampleTags}
-          selectedTagIds={[]}
-          onChange={onChange}
-        />,
+        <TagInput availableTags={sampleTags} selectedTagIds={[]} onChange={onChange} />,
         minimalSession,
       );
       // No chip buttons.
@@ -103,11 +94,7 @@ describe("TagInput", () => {
     it("renders the search input with role=combobox", () => {
       const onChange = vi.fn();
       renderWithMockedSession(
-        <TagInput
-          availableTags={sampleTags}
-          selectedTagIds={[]}
-          onChange={onChange}
-        />,
+        <TagInput availableTags={sampleTags} selectedTagIds={[]} onChange={onChange} />,
         minimalSession,
       );
       // The combobox is the visible search input.
@@ -180,11 +167,7 @@ describe("TagInput", () => {
       const user = userEvent.setup();
       const onChange = vi.fn();
       renderWithMockedSession(
-        <TagInput
-          availableTags={sampleTags}
-          selectedTagIds={[]}
-          onChange={onChange}
-        />,
+        <TagInput availableTags={sampleTags} selectedTagIds={[]} onChange={onChange} />,
         minimalSession,
       );
       const combo = screen.getByRole("combobox");
@@ -199,11 +182,7 @@ describe("TagInput", () => {
       const user = userEvent.setup();
       const onChange = vi.fn();
       renderWithMockedSession(
-        <TagInput
-          availableTags={sampleTags}
-          selectedTagIds={[]}
-          onChange={onChange}
-        />,
+        <TagInput availableTags={sampleTags} selectedTagIds={[]} onChange={onChange} />,
         minimalSession,
       );
       const combo = screen.getByRole("combobox");
@@ -213,9 +192,7 @@ describe("TagInput", () => {
       // After filtering, "Industry: Logistics" should still be suggested.
       // and "Use Case: Sales" should NOT match.
       await waitFor(() => {
-        expect(
-          screen.getByText("Industry: Logistics"),
-        ).toBeInTheDocument();
+        expect(screen.getByText("Industry: Logistics")).toBeInTheDocument();
       });
     });
 
@@ -223,20 +200,14 @@ describe("TagInput", () => {
       const user = userEvent.setup();
       const onChange = vi.fn();
       renderWithMockedSession(
-        <TagInput
-          availableTags={sampleTags}
-          selectedTagIds={[]}
-          onChange={onChange}
-        />,
+        <TagInput availableTags={sampleTags} selectedTagIds={[]} onChange={onChange} />,
         minimalSession,
       );
       const combo = screen.getByRole("combobox");
       await user.click(combo);
       // Find and click the "Industry: Logistics" option.
       const options = screen.getAllByRole("option");
-      const industryOption = options.find((o) =>
-        o.textContent?.includes("Industry: Logistics"),
-      );
+      const industryOption = options.find((o) => o.textContent?.includes("Industry: Logistics"));
       expect(industryOption).toBeDefined();
 
       // Use mousedown event (component uses onMouseDown to fire BEFORE onBlur).
@@ -317,9 +288,7 @@ describe("TagInput", () => {
       );
       // Error wins over helper.
       expect(screen.getByText("Required")).toBeInTheDocument();
-      expect(
-        screen.queryByText("e.g. industry, use case"),
-      ).not.toBeInTheDocument();
+      expect(screen.queryByText("e.g. industry, use case")).not.toBeInTheDocument();
     });
   });
 });

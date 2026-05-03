@@ -34,10 +34,7 @@ function makeWrapper(client: QueryClient) {
   };
 }
 
-function makeJsonResponse(
-  body: unknown,
-  status: number = 200,
-): Response {
+function makeJsonResponse(body: unknown, status: number = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json" },
@@ -162,14 +159,11 @@ describe("useAdminRecordsQuery", () => {
   });
 
   it("calls GET /api/admin/records with include_deleted param", async () => {
-    fetchSpy.mockResolvedValue(
-      makeJsonResponse({ records: [], total: 0, page: 1, page_size: 25 }),
-    );
+    fetchSpy.mockResolvedValue(makeJsonResponse({ records: [], total: 0, page: 1, page_size: 25 }));
 
-    const { result } = renderHook(
-      () => useAdminRecordsQuery({ include_deleted: true }),
-      { wrapper: makeWrapper(client) },
-    );
+    const { result } = renderHook(() => useAdminRecordsQuery({ include_deleted: true }), {
+      wrapper: makeWrapper(client),
+    });
 
     await waitFor(() => {
       expect(result.current.isSuccess).toBe(true);
@@ -180,14 +174,11 @@ describe("useAdminRecordsQuery", () => {
   });
 
   it("encodes include_deleted=false explicitly", async () => {
-    fetchSpy.mockResolvedValue(
-      makeJsonResponse({ records: [], total: 0, page: 1, page_size: 25 }),
-    );
+    fetchSpy.mockResolvedValue(makeJsonResponse({ records: [], total: 0, page: 1, page_size: 25 }));
 
-    renderHook(
-      () => useAdminRecordsQuery({ include_deleted: false }),
-      { wrapper: makeWrapper(client) },
-    );
+    renderHook(() => useAdminRecordsQuery({ include_deleted: false }), {
+      wrapper: makeWrapper(client),
+    });
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalled();

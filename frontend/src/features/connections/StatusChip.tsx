@@ -1,14 +1,10 @@
 /**
- * StatusChip.tsx - F-005 Outreach Status Chip with role-gated mutation.
+ * StatusChip.tsx - F-005 Outreach Status Chip.
  *
- * Renders the four-state outreach status (Not Started / In Progress /
- * Contacted / Closed) as a colored Badge primitive. When the current
- * user's role admits status mutation (Admin OR Viewer/Sales-Rep per
- * AAP Sec 0.1.1 F-005), the chip behaves as an inline editable control:
- * clicking it opens a small dropdown of the four status values, and
- * picking one fires the `useUpdateStatusMutation` hook from
- * `@/api/connections`. When the user's role does NOT admit mutation
- * (Contributor), the chip renders as a read-only Badge.
+ * Renders one of the four outreach status values (Not Started /
+ * In Progress / Contacted / Closed) as a colored Badge. For users with
+ * Admin or Viewer (Sales Rep) role, the chip is editable inline via a
+ * Select primitive that fires `useUpdateStatusMutation` on change.
  *
  * The four outreach status values per AAP Sec 0.1.1 F-005:
  *   - Not Started   default for newly-created records.
@@ -22,57 +18,68 @@
  *    <RoleGate> is a UX courtesy; the backend RBAC decorator is the
  *    only authoritative gate."
  *
- * This component reflects that invariant: hiding the dropdown for
- * Contributors is purely a UX optimization. The backend
+ * This component reflects that invariant: the editable Select is gated
+ * to the Admin / Viewer (Sales Rep) roles via <RoleGate>, falling back
+ * to a static read-only Badge for Contributors. The backend
  * `@requires_role(UserRole.VIEWER, UserRole.ADMIN)` decorator on
- * `PATCH /api/connections/:id/status` is the actual security
- * boundary; even if a Contributor tampered with the DOM to show the
- * dropdown, the API would return 403.
+ * `PATCH /api/connections/:id/status` is the actual security boundary;
+ * even if a Contributor tampered with the DOM to surface the Select,
+ * the API would return 403.
  *
- * Visual treatment per the design system tokens declared in
- * `frontend/tailwind.config.ts` under theme.extend.colors.outreach.*
- * and consumed by the Badge primitive in
- * `frontend/src/components/ui/Badge.tsx`:
- *   - outreach-not-started   (slate tint)
- *   - outreach-in-progress   (amber tint, with optional dot indicator)
- *   - outreach-contacted     (blue tint)
- *   - outreach-closed        (slate-darker tint)
+ * Optimistic updates:
+ *   `useUpdateStatusMutation` implements `onMutate`/`onError`/`onSettled`
+ *   for optimistic cache updates against the parent connection-detail
+ *   query. The chip's `value` prop is bound to the rendering record's
+ *   `outreach_status` (which TanStack Query has already optimistically
+ *   replaced on the parent query). On error the parent query is rolled
+ *   back, returning the chip to its previous value automatically. The
+ *   internal local-mirror state handles the brief gap between user
+ *   click and parent re-render.
+ *
+ * Loading state:
+ *   While the mutation is pending, the chip displays a small Loader2
+ *   spinner alongside the (already optimistically updated) Select.
+ *
+ * Disabled state:
+ *   For soft-deleted records, the chip is disabled (cannot mutate
+ *   status of a deleted record). Provided via the `disabled` prop.
  *
  * Conventions per AAP Sec 0.7.7:
  *   - Strict TypeScript; no `any`; explicit `JSX.Element` return.
  *   - Named exports only (no default export).
  *   - clsx for conditional className composition.
  *   - TailwindCSS utility classes only (no inline `style`).
+ *   - Lucide-React for the loading spinner icon.
  *   - Double quotes per project Prettier configuration.
  *   - Path imports use the `@/` alias declared in `vite.config.ts`.
  *   - Type-only imports use `import type` per `verbatimModuleSyntax`.
  *
  * Coordinates with:
- *   - `frontend/src/components/ui/Badge.tsx` - the wrapped primitive
- *     that owns the variant-to-Tailwind-class mapping.
- *   - `frontend/src/schemas/connection.ts` - source of the
- *     `OutreachStatusValue` literal-union type and `OUTREACH_STATUS_VALUES`
- *     array that mirrors the backend pydantic / PostgreSQL enum.
- *   - `frontend/src/api/connections.ts` - source of
- *     `useUpdateStatusMutation()` which fires the
- *     `PATCH /api/connections/:id/status` request and applies the
- *     optimistic cache update.
- *   - `frontend/src/auth/AuthProvider.tsx` - source of `useRole()`
- *     which surfaces the current user's role. Hidden for
- *     Contributors per the AAP F-005 RBAC matrix.
+ *   - `frontend/src/api/connections.ts`           - `useUpdateStatusMutation`
+ *     (PATCH /api/connections/:id/status with optimistic update + rollback).
+ *   - `frontend/src/auth/RoleGate.tsx`            - `RoleGate` wrapper that
+ *     gates the editable Select to Admin and Viewer (Sales Rep) roles only.
+ *   - `frontend/src/components/ui/Badge.tsx`      - read-only badge used in
+ *     the fallback path with the appropriate `outreach-*` color variant.
+ *   - `frontend/src/components/ui/Select.tsx`     - generic-typed select
+ *     primitive used in editable mode with proper keyboard semantics.
+ *   - `frontend/src/schemas/connection.ts`        - `OUTREACH_STATUS_VALUES`
+ *     drives Select options; `OutreachStatusValue` provides the type-safe
+ *     enum for the four status values.
  *   - `frontend/src/features/connections/ConnectionFeed.tsx` - per-row
  *     consumer; renders one StatusChip in the status column.
- *   - `frontend/src/features/connections/ConnectionDetail.tsx` -
- *     header consumer; renders one StatusChip in the detail header.
+ *   - `frontend/src/features/connections/ConnectionDetail.tsx` - header
+ *     consumer; renders one StatusChip next to the connection summary.
  */
 
-import { useEffect, useId, useMemo, useRef, useState, type JSX } from "react";
-import { ChevronDown } from "lucide-react";
+import { useState, type JSX } from "react";
+import { Loader2 } from "lucide-react";
 import clsx from "clsx";
 
-import { Badge, type BadgeVariant } from "@/components/ui/Badge";
-import { useRole } from "@/auth/AuthProvider";
 import { useUpdateStatusMutation } from "@/api/connections";
+import { RoleGate } from "@/auth/RoleGate";
+import { Badge } from "@/components/ui/Badge";
+import { Select } from "@/components/ui/Select";
 import { OUTREACH_STATUS_VALUES, type OutreachStatusValue } from "@/schemas/connection";
 
 // ---------------------------------------------------------------------------
@@ -85,49 +92,49 @@ import { OUTREACH_STATUS_VALUES, type OutreachStatusValue } from "@/schemas/conn
  * `readonly` is applied to every prop so consumers cannot accidentally
  * mutate the props object inside event handlers (defensive programming
  * convention shared with Button.tsx, Badge.tsx, InvolvementBadge.tsx).
+ *
+ * Members exposed (per the file schema in the AAP):
+ *   - recordId   The record id whose status this chip represents.
+ *   - value      Current outreach status value.
+ *   - disabled   Disable mutation (e.g., for soft-deleted records).
+ *   - className  Optional className for visual integration.
  */
 export interface StatusChipProps {
   /**
    * The id of the connection record whose outreach status is shown.
-   * Required even on the read-only path because the dropdown action
-   * dispatches the mutation against this id.
+   * Required even on the read-only path because the Select dispatches
+   * the mutation against this id when the role admits editing.
    */
   readonly recordId: string;
 
   /**
    * The outreach status value to display. Must be one of the four
    * F-005 literal strings exported from `@/schemas/connection`. The
-   * string itself is the user-facing label rendered inside the
-   * badge.
+   * string itself is the user-facing label rendered inside the Badge
+   * (read-only mode) or inside the Select option (editable mode).
    */
   readonly value: OutreachStatusValue;
 
   /**
-   * Badge size. Defaults to "sm" because the most common consumer
-   * (the connection feed table) needs compact rows; larger contexts
-   * such as the detail header pass "md" or "lg" explicitly.
+   * When true, disables status mutation. Typically passed for
+   * soft-deleted records, which an admin can still see but should
+   * not be able to re-classify without first restoring them. Defaults
+   * to false (i.e., the chip is editable when the user's role admits).
    */
-  readonly size?: "sm" | "md" | "lg";
+  readonly disabled?: boolean;
 
   /**
-   * When true (the default), the chip renders as an editable control
-   * IF the current user's role admits status mutation. When false,
-   * the chip is read-only regardless of role. Useful for read-only
-   * contexts (e.g., audit trail rows showing historical status
-   * values).
-   */
-  readonly editable?: boolean;
-
-  /**
-   * Optional additional className merged into the wrapper. Lets
-   * consumers layer alignment, margin, or width utilities without
-   * forking this component.
+   * Optional additional className merged into the chip's outermost
+   * span. Lets consumers layer alignment, margin, or width utilities
+   * (e.g., `w-full`, `justify-center`) without forking this primitive.
+   * Conflicting Tailwind classes are resolved by source order (later
+   * classes win in the cascade).
    */
   readonly className?: string;
 }
 
 // ---------------------------------------------------------------------------
-// Internal types and variant map
+// Internal types and constants
 // ---------------------------------------------------------------------------
 
 /**
@@ -136,10 +143,15 @@ export interface StatusChipProps {
  * `BadgeVariant` outreach-* members declared in
  * `frontend/src/components/ui/Badge.tsx`. Listing them here as a
  * dedicated narrowed type (rather than reusing the broader
- * `BadgeVariant`) lets the `OUTREACH_TO_VARIANT` map below provide
+ * `BadgeVariant`) lets the `STATUS_TO_VARIANT` map below provide
  * compile-time exhaustiveness over `OutreachStatusValue`.
+ *
+ * If a fifth outreach status value is ever introduced upstream, the
+ * `Record<OutreachStatusValue, StatusBadgeVariant>` constraint will
+ * fail to type-check until this union is updated in lockstep with the
+ * Zod schema and the backend pydantic / PostgreSQL enum.
  */
-type OutreachBadgeVariant =
+type StatusBadgeVariant =
   | "outreach-not-started"
   | "outreach-in-progress"
   | "outreach-contacted"
@@ -148,12 +160,12 @@ type OutreachBadgeVariant =
 /**
  * Translation table from the Zod-derived `OutreachStatusValue` literal
  * union to the corresponding Badge variant. The TypeScript
- * `Record<OutreachStatusValue, OutreachBadgeVariant>` constraint
- * enforces exhaustiveness across the four F-005 values:
- *   - "Not Started"  -> "outreach-not-started"
- *   - "In Progress"  -> "outreach-in-progress"
- *   - "Contacted"    -> "outreach-contacted"
- *   - "Closed"       -> "outreach-closed"
+ * `Record<OutreachStatusValue, StatusBadgeVariant>` constraint enforces
+ * exhaustiveness across the four F-005 values:
+ *   - "Not Started" -> "outreach-not-started"
+ *   - "In Progress" -> "outreach-in-progress"
+ *   - "Contacted"   -> "outreach-contacted"
+ *   - "Closed"      -> "outreach-closed"
  *
  * Declared as a module-level `const` so the lookup is a single object
  * dereference at render time and so future contributors can audit the
@@ -161,7 +173,7 @@ type OutreachBadgeVariant =
  * the value-to-variant translation; consumers should never duplicate
  * it.
  */
-const OUTREACH_TO_VARIANT: Record<OutreachStatusValue, OutreachBadgeVariant> = {
+const STATUS_TO_VARIANT: Record<OutreachStatusValue, StatusBadgeVariant> = {
   "Not Started": "outreach-not-started",
   "In Progress": "outreach-in-progress",
   Contacted: "outreach-contacted",
@@ -169,251 +181,255 @@ const OUTREACH_TO_VARIANT: Record<OutreachStatusValue, OutreachBadgeVariant> = {
 };
 
 /**
- * The two roles authorized by the F-005 spec to mutate outreach
- * status. Per AAP Sec 0.1.1 F-005:
+ * Select options derived from `OUTREACH_STATUS_VALUES`.
  *
- *   "Outreach status is updatable only by Sales Rep or Admin roles,
- *    never by the original submitter without Admin rights, in order
- *    to preserve sales team accountability."
- *
- * Sales Rep maps to the `Viewer` role per AAP Sec 0.5.2 Layer 6.
- *
- * The frontend hides the dropdown for Contributors as a UX courtesy;
- * the backend `@requires_role(UserRole.VIEWER, UserRole.ADMIN)`
- * decorator on `PATCH /api/connections/:id/status` is the
- * authoritative gate per AAP Sec 0.7.1 invariant 7.
+ * The label and the value are intentionally identical because the
+ * stored enum values ("Not Started", "In Progress", "Contacted",
+ * "Closed") are already user-facing strings; localizing the label
+ * would require translating the enum at the Zod / pydantic boundary
+ * too, which is out of scope for MVP.
  */
-const STATUS_MUTATION_ROLES = ["Admin", "Viewer"] as const;
+const STATUS_OPTIONS: ReadonlyArray<{
+  readonly value: OutreachStatusValue;
+  readonly label: string;
+}> = OUTREACH_STATUS_VALUES.map((v) => ({ value: v, label: v }));
 
 // ---------------------------------------------------------------------------
-// StatusChip component
+// ReadOnlyStatusBadge - read-only fallback subcomponent
 // ---------------------------------------------------------------------------
 
 /**
- * Render a colored pill badge for a single F-005 outreach status
- * value, with optional inline edit dropdown for admitted roles.
+ * Props for the read-only fallback path.
  *
- * Rendering modes:
- *
- *   1. Read-only Badge (Contributor, or `editable={false}`):
- *      The chip renders as a static Badge with the appropriate
- *      `outreach-*` variant and the current value as the label.
- *
- *   2. Editable dropdown trigger (Admin/Viewer with `editable=true`):
- *      The chip wraps the Badge in a `<button type="button">` with
- *      a chevron icon. Clicking opens a small popover with the four
- *      OutreachStatusValue options. Picking one fires the mutation
- *      and closes the popover. The current value is dim-styled in
- *      the popover so the user sees their selection.
- *
- * Mutation state:
- *   - During mutation, the trigger button is `disabled` and shows
- *     the optimistically-updated value (TanStack Query's `onMutate`
- *     in `useUpdateStatusMutation` updates the detail cache in
- *     place; the consumer typically subscribes to the same cache
- *     and re-renders this component with the new `value` prop).
- *   - On error, the parent's cache is rolled back (handled by the
- *     mutation hook) and the toast surface in `@/api/connections`
- *     emits a user-facing error.
- *
- * Accessibility:
- *   - The trigger button has `aria-haspopup="listbox"` and
- *     `aria-expanded` reflecting the popover state.
- *   - The popover has `role="listbox"` and each option has
- *     `role="option"` with `aria-selected` set to the current value.
- *   - Keyboard interactions: Enter / Space opens the popover;
- *     Escape closes it; ArrowUp / ArrowDown move focus between
- *     options (handled by the browser's native listbox behavior
- *     when the user is focused on options).
- *   - The chevron icon is `aria-hidden` so it does not duplicate
- *     the button label.
- *
- * @example In a read-only context (audit history row)
- *   <StatusChip recordId={record.id} value="Contacted" editable={false} />
- *
- * @example In ConnectionFeed (Sales Rep / Admin clicks to change)
- *   <StatusChip recordId={record.id} value={record.outreach_status} />
+ * Marked internal; not exported.
  */
-export function StatusChip({
+interface ReadOnlyStatusBadgeProps {
+  readonly value: OutreachStatusValue;
+  readonly className?: string;
+  readonly testIdSuffix?: string;
+}
+
+/**
+ * Render a static, non-interactive Badge with the appropriate
+ * outreach-* variant for the given status. Used as the `<RoleGate>`
+ * fallback so non-permitted roles (Contributor) still SEE the
+ * connection's current outreach status without being able to mutate
+ * it. The Badge primitive does not expose `data-testid` on its public
+ * props interface, so the testid is placed on the wrapping `<span>`
+ * instead - matching the convention used by InvolvementBadge.tsx.
+ */
+function ReadOnlyStatusBadge({
+  value,
+  className,
+  testIdSuffix,
+}: ReadOnlyStatusBadgeProps): JSX.Element {
+  const variant = STATUS_TO_VARIANT[value];
+  return (
+    <span
+      className={clsx("inline-flex", className)}
+      data-testid={testIdSuffix ? `status-chip-readonly-${testIdSuffix}` : "status-chip-readonly"}
+    >
+      <Badge variant={variant} size="sm" withDot>
+        {value}
+      </Badge>
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// EditableStatusSelect - role-admitted editable subcomponent
+// ---------------------------------------------------------------------------
+
+/**
+ * Props for the editable subcomponent. Internal; not exported.
+ *
+ * `disabled` is non-optional here because the parent `StatusChip`
+ * applies a default at the prop boundary; this lets the inner
+ * function focus on event semantics without re-defaulting.
+ */
+interface EditableStatusSelectProps {
+  readonly recordId: string;
+  readonly value: OutreachStatusValue;
+  readonly disabled: boolean;
+  readonly className?: string;
+}
+
+/**
+ * Render the editable status Select for users with Admin or Viewer
+ * (Sales Rep) role. Selecting a value fires `useUpdateStatusMutation`
+ * with the record id and the new outreach status; the mutation hook
+ * owns optimistic cache update, rollback on error, success/error
+ * toasts, and post-mutation invalidation of the list / detail caches.
+ *
+ * Local mirror state:
+ *   The parent connection query (`useConnectionQuery` / `useConnectionsQuery`)
+ *   is the source of truth. The mutation hook's `onMutate` optimistically
+ *   updates the parent cache, so the next render arrives with the new
+ *   value already on the `value` prop. The `localValue` mirror handles
+ *   the brief sub-frame gap between the user's click and the parent
+ *   re-render so the chip never appears "stuck" on the old value. The
+ *   `localValue !== value && !mutation.isPending` reconciliation pattern
+ *   handles external value changes (e.g., another tab updates the
+ *   record, the cache refetches, and the parent query returns a
+ *   different value) without an explicit `useEffect`.
+ *
+ * Click event propagation:
+ *   When the chip is rendered inside a `<Table>` row whose `onRowClick`
+ *   navigates to the connection-detail page, opening the Select must
+ *   NOT trigger that navigation. The wrapping span captures click
+ *   events at the wrapper boundary and stops their propagation so the
+ *   Select's native picker opens cleanly without a route change.
+ *
+ * Mutation rollback:
+ *   The hook's `onError` restores the previous detail cache value, AND
+ *   we re-mirror the parent value via `setLocalValue(value)` for
+ *   defense in depth. Either path alone returns the UI to the
+ *   pre-mutation state; combined they guarantee the visible chip never
+ *   diverges from the authoritative cache.
+ */
+function EditableStatusSelect({
   recordId,
   value,
-  size = "sm",
-  editable = true,
+  disabled,
   className,
-}: StatusChipProps): JSX.Element {
-  const variant: BadgeVariant = OUTREACH_TO_VARIANT[value];
+}: EditableStatusSelectProps): JSX.Element {
+  const updateStatus = useUpdateStatusMutation();
+  const [localValue, setLocalValue] = useState<OutreachStatusValue>(value);
 
-  // Stable id for ARIA wiring between the trigger button and the
-  // listbox. `useId` is the React 18+ SSR-safe primitive.
-  const reactId = useId();
-  const triggerId = `status-chip-trigger-${reactId}`;
-  const listboxId = `status-chip-listbox-${reactId}`;
-
-  // Local UI state.
-  const [open, setOpen] = useState(false);
-  const triggerRef = useRef<HTMLButtonElement | null>(null);
-  const popoverRef = useRef<HTMLUListElement | null>(null);
-
-  // Resolve the current user's role and decide whether the chip is
-  // editable. The frontend role check is a UX courtesy; the backend
-  // RBAC decorator is authoritative per AAP Sec 0.7.1 invariant 7.
-  const { role } = useRole();
-  const roleAdmitsMutation = useMemo(
-    () => role !== null && (STATUS_MUTATION_ROLES as ReadonlyArray<string>).includes(role),
-    [role],
-  );
-  const isEditable = editable && roleAdmitsMutation;
-
-  // Wire the mutation hook. The hook handles optimistic updates,
-  // rollback on error, success/error toasts, and cache invalidation.
-  const mutation = useUpdateStatusMutation();
-  const isMutating = mutation.isPending;
-
-  // Click-outside / Escape handling for the popover. We listen on
-  // the document so clicks inside the popover (which dispatch onMouseDown
-  // before the document handler) keep the popover open, while clicks
-  // anywhere else close it. The cleanup on unmount prevents memory
-  // leaks when the parent unmounts mid-interaction.
-  useEffect(() => {
-    if (!open) return undefined;
-
-    const handlePointerDown = (event: MouseEvent): void => {
-      const target = event.target as Node | null;
-      if (!target) return;
-      if (popoverRef.current?.contains(target)) return;
-      if (triggerRef.current?.contains(target)) return;
-      setOpen(false);
-    };
-
-    const handleKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") {
-        setOpen(false);
-        // Restore focus to the trigger so keyboard users do not lose
-        // their place in the tab order.
-        triggerRef.current?.focus();
-      }
-    };
-
-    document.addEventListener("mousedown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [open]);
-
-  // ---- Read-only branch -----------------------------------------------
-  // Either the consumer explicitly disabled editing, or the user's
-  // role does not admit mutation. Render the static Badge.
-  if (!isEditable) {
-    return (
-      <span className={clsx("inline-flex", className)} data-testid={`status-chip-${variant}`}>
-        <Badge variant={variant} size={size} withDot={value === "In Progress"}>
-          {value}
-        </Badge>
-      </span>
-    );
+  // Reconcile the local mirror with the parent value when the parent
+  // changes the value out from under us (e.g., a list refetch returned
+  // a different value, or a sibling chip mutation invalidated the
+  // shared list cache). Setting state during render is supported by
+  // React 18+ and avoids a useEffect; the schedule-then-rerender
+  // semantics ensure we converge before paint without flicker. We
+  // skip the reconciliation while a mutation is pending so the chip
+  // does not snap back to the old value mid-flight.
+  if (localValue !== value && !updateStatus.isPending) {
+    setLocalValue(value);
   }
 
-  // ---- Editable branch ------------------------------------------------
-  // Render the Badge wrapped in a button with a chevron, plus a
-  // dropdown listbox of the four status values when open.
-  const handleSelect = (next: OutreachStatusValue): void => {
-    setOpen(false);
-    if (next === value) {
-      // No-op selection (user clicked the current value). Skip the
-      // network round-trip; the optimistic update would be a no-op
-      // anyway.
-      return;
-    }
-    mutation.mutate({
-      id: recordId,
-      payload: { outreach_status: next },
-    });
+  /**
+   * Handle the typed onChange callback from the Select primitive.
+   * `next` is already typed as `OutreachStatusValue` because Select
+   * is generic over its value type and we instantiate it as
+   * `Select<OutreachStatusValue>` below. No `as` cast required.
+   *
+   * Short-circuits when the user picked the same value (no-op) or
+   * when a previous mutation is still in flight (avoid request
+   * collisions; the in-flight one will settle and we will catch up
+   * via cache invalidation).
+   */
+  const handleChange = (next: OutreachStatusValue): void => {
+    if (next === value || updateStatus.isPending) return;
+    setLocalValue(next);
+    updateStatus.mutate(
+      { id: recordId, payload: { outreach_status: next } },
+      {
+        onError: () => {
+          // Rollback in the parent cache is performed by the hook's
+          // own onError handler (see useUpdateStatusMutation). We
+          // additionally re-mirror the parent's pre-mutation value
+          // here as defense in depth so the visible chip never
+          // diverges from the authoritative cache state.
+          setLocalValue(value);
+        },
+      },
+    );
   };
 
   return (
     <span
-      className={clsx("relative inline-flex", className)}
-      data-testid={`status-chip-${variant}`}
+      className={clsx("relative inline-flex items-center gap-2", className)}
+      // Stop propagation so a click on the Select (to open it, or on
+      // any of its options) does not bubble up to a parent row click
+      // handler in the feed table. Without this, clicking the chip
+      // would simultaneously open the picker and navigate to the
+      // detail page - a confusing dual outcome.
+      onClick={(event) => event.stopPropagation()}
+      data-testid={`status-chip-editable-${recordId}`}
     >
-      <button
-        ref={triggerRef}
-        id={triggerId}
-        type="button"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-controls={listboxId}
-        aria-label={`Outreach status: ${value}. Click to change.`}
-        disabled={isMutating}
-        onClick={() => setOpen((prev) => !prev)}
-        className={clsx(
-          "inline-flex items-center gap-1 rounded-full",
-          "focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500",
-          "disabled:opacity-60 disabled:cursor-progress",
-          "cursor-pointer",
+      <Select<OutreachStatusValue>
+        value={localValue}
+        onChange={handleChange}
+        options={STATUS_OPTIONS}
+        disabled={disabled || updateStatus.isPending}
+        selectClassName={clsx(
+          // Compact dimensions for a chip-like footprint.
+          "h-8 min-w-[140px] text-xs font-medium",
+          // Subtle styling so the chip looks like a chip, not a full
+          // form input. Hover affordance reinforces the editable
+          // nature without dominating the row.
+          "border-slate-300 bg-white hover:bg-slate-50",
         )}
-      >
-        <Badge variant={variant} size={size} withDot={value === "In Progress"}>
-          {value}
-        </Badge>
-        <ChevronDown
-          className={clsx("h-3 w-3 text-slate-500 transition-transform", open && "rotate-180")}
+        aria-label="Outreach status"
+        data-testid={`status-chip-select-${recordId}`}
+      />
+      {updateStatus.isPending && (
+        <Loader2
           aria-hidden="true"
+          className="h-3.5 w-3.5 animate-spin text-slate-500"
+          data-testid="status-chip-spinner"
         />
-      </button>
-
-      {open && (
-        <ul
-          ref={popoverRef}
-          id={listboxId}
-          role="listbox"
-          aria-labelledby={triggerId}
-          tabIndex={-1}
-          className={clsx(
-            "absolute z-10 mt-1 top-full left-0",
-            "min-w-[10rem] rounded-md border border-slate-200 bg-white shadow-lg",
-            "py-1",
-          )}
-        >
-          {OUTREACH_STATUS_VALUES.map((option) => {
-            const optionVariant = OUTREACH_TO_VARIANT[option];
-            const isCurrent = option === value;
-            return (
-              <li
-                key={option}
-                role="option"
-                aria-selected={isCurrent}
-                data-testid={`status-chip-option-${optionVariant}`}
-                onMouseDown={(event) => {
-                  // Use mouseDown (not click) so the selection
-                  // dispatches BEFORE the document mouseDown listener
-                  // closes the popover. This avoids the
-                  // click-target-disappearing race seen in TagInput.tsx.
-                  event.preventDefault();
-                  handleSelect(option);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    handleSelect(option);
-                  }
-                }}
-                tabIndex={0}
-                className={clsx(
-                  "px-2 py-1.5 cursor-pointer hover:bg-slate-50",
-                  "focus:outline-none focus:bg-slate-100",
-                  isCurrent && "bg-slate-50",
-                )}
-              >
-                <Badge variant={optionVariant} size={size} withDot={option === "In Progress"}>
-                  {option}
-                </Badge>
-              </li>
-            );
-          })}
-        </ul>
       )}
     </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// StatusChip - top-level component
+// ---------------------------------------------------------------------------
+
+/**
+ * Render the F-005 outreach status chip with role-conditional
+ * editability.
+ *
+ * Decision logic:
+ *
+ *   user role        | rendered subtree
+ *   ---------------- | ----------------------------------------
+ *   Admin            | <EditableStatusSelect>
+ *   Viewer (Sales)   | <EditableStatusSelect>
+ *   Contributor      | <ReadOnlyStatusBadge>  (RoleGate fallback)
+ *   no session       | <ReadOnlyStatusBadge>  (RoleGate fallback)
+ *
+ * `<RoleGate role={['Admin', 'Viewer']}>` is the canonical role-gating
+ * primitive per the assigned-folder Conventions; using inline
+ * `useRole().has(...)` would also work but the wrapper centralizes the
+ * check and keeps the predicate uniform across the SPA.
+ *
+ * The fallback prop is set explicitly to a `<ReadOnlyStatusBadge>` so
+ * non-permitted roles still see the connection's current status (just
+ * cannot change it) - the default `<RoleGate>` fallback of `null` would
+ * elide the chip entirely, which would mislead Contributors into
+ * thinking the field is absent rather than read-only.
+ *
+ * @example In a feed row
+ *   <StatusChip recordId={record.id} value={record.outreach_status} />
+ *
+ * @example For a soft-deleted record (admin-only moderation view)
+ *   <StatusChip
+ *     recordId={record.id}
+ *     value={record.outreach_status}
+ *     disabled={record.deleted_at !== null}
+ *   />
+ */
+export function StatusChip({
+  recordId,
+  value,
+  disabled = false,
+  className,
+}: StatusChipProps): JSX.Element {
+  return (
+    <RoleGate
+      role={["Admin", "Viewer"]}
+      fallback={<ReadOnlyStatusBadge value={value} className={className} testIdSuffix={recordId} />}
+    >
+      <EditableStatusSelect
+        recordId={recordId}
+        value={value}
+        disabled={disabled}
+        className={className}
+      />
+    </RoleGate>
   );
 }

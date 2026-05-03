@@ -22,10 +22,7 @@ function makeWrapper(client: QueryClient) {
   };
 }
 
-function makeJsonResponse(
-  body: unknown,
-  status: number = 200,
-): Response {
+function makeJsonResponse(body: unknown, status: number = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json" },

@@ -36,10 +36,7 @@ function makeWrapper(client: QueryClient) {
   };
 }
 
-function makeJsonResponse(
-  body: unknown,
-  status: number = 200,
-): Response {
+function makeJsonResponse(body: unknown, status: number = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json" },
@@ -120,8 +117,8 @@ describe("useConnectionQuery", () => {
   it("calls GET /api/connections/:id", async () => {
     fetchSpy.mockResolvedValue(makeJsonResponse(makeMockConnectionRead()));
 
-    const { result } = renderHook(() =>
-      useConnectionQuery("11111111-1111-1111-1111-111111111111"),
+    const { result } = renderHook(
+      () => useConnectionQuery("11111111-1111-1111-1111-111111111111"),
       { wrapper: makeWrapper(client) },
     );
 
@@ -167,10 +164,9 @@ describe("useDuplicateCheckQuery", () => {
   it("disabled by default (enabled: false)", () => {
     fetchSpy.mockResolvedValue(makeJsonResponse({ duplicate_found: false }));
 
-    renderHook(
-      () => useDuplicateCheckQuery("https://linkedin.com/in/test"),
-      { wrapper: makeWrapper(client) },
-    );
+    renderHook(() => useDuplicateCheckQuery("https://linkedin.com/in/test"), {
+      wrapper: makeWrapper(client),
+    });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 

@@ -83,9 +83,7 @@ describe("ProtectedRoute", () => {
       );
       // The redirect lands on /login.
       expect(screen.getByText("Login Page")).toBeInTheDocument();
-      expect(
-        screen.queryByText("Protected Content"),
-      ).not.toBeInTheDocument();
+      expect(screen.queryByText("Protected Content")).not.toBeInTheDocument();
     });
 
     it("redirects with next param URL-encoded", () => {
@@ -133,14 +131,10 @@ describe("ProtectedRoute", () => {
         { isLoading: true },
       );
       // While loading, we render NEITHER children NOR the login page.
-      expect(
-        screen.queryByText("Protected Content"),
-      ).not.toBeInTheDocument();
+      expect(screen.queryByText("Protected Content")).not.toBeInTheDocument();
       expect(screen.queryByText("Login Page")).not.toBeInTheDocument();
       // The spinner uses role="status".
-      expect(
-        screen.getByRole("status", { hidden: true }),
-      ).toBeInTheDocument();
+      expect(screen.getByRole("status", { hidden: true })).toBeInTheDocument();
     });
   });
 

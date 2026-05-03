@@ -71,9 +71,7 @@ describe("RoleGate", () => {
         </RoleGate>,
         adminSession,
       );
-      expect(
-        screen.getByRole("button", { name: "Admin Action" }),
-      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Admin Action" })).toBeInTheDocument();
     });
 
     it("hides children when role does not match", () => {
@@ -83,9 +81,7 @@ describe("RoleGate", () => {
         </RoleGate>,
         contributorSession,
       );
-      expect(
-        screen.queryByRole("button", { name: "Admin Action" }),
-      ).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Admin Action" })).not.toBeInTheDocument();
     });
 
     it("renders fallback when role does not match", () => {
@@ -96,9 +92,7 @@ describe("RoleGate", () => {
         contributorSession,
       );
       expect(screen.getByText("Admin only")).toBeInTheDocument();
-      expect(
-        screen.queryByRole("button", { name: "Admin Action" }),
-      ).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Admin Action" })).not.toBeInTheDocument();
     });
   });
 
@@ -110,9 +104,7 @@ describe("RoleGate", () => {
         </RoleGate>,
         viewerSession,
       );
-      expect(
-        screen.getByRole("button", { name: "Status Mutation" }),
-      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Status Mutation" })).toBeInTheDocument();
     });
 
     it("renders children for Admin in array", () => {
@@ -122,9 +114,7 @@ describe("RoleGate", () => {
         </RoleGate>,
         adminSession,
       );
-      expect(
-        screen.getByRole("button", { name: "Status Mutation" }),
-      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Status Mutation" })).toBeInTheDocument();
     });
 
     it("hides children when NO role matches", () => {
@@ -134,9 +124,7 @@ describe("RoleGate", () => {
         </RoleGate>,
         contributorSession,
       );
-      expect(
-        screen.queryByRole("button", { name: "Status Mutation" }),
-      ).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Status Mutation" })).not.toBeInTheDocument();
     });
   });
 
@@ -148,9 +136,7 @@ describe("RoleGate", () => {
         </RoleGate>,
         null,
       );
-      expect(
-        screen.queryByRole("button", { name: "Admin Action" }),
-      ).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Admin Action" })).not.toBeInTheDocument();
     });
 
     it("renders fallback when session is null", () => {
@@ -172,9 +158,7 @@ describe("RoleGate", () => {
         </RoleGate>,
         contributorSession,
       );
-      expect(
-        screen.queryByRole("button", { name: "Hard Delete" }),
-      ).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Hard Delete" })).not.toBeInTheDocument();
     });
 
     it("hides Admin-only UI from Viewer", () => {
@@ -184,9 +168,7 @@ describe("RoleGate", () => {
         </RoleGate>,
         viewerSession,
       );
-      expect(
-        screen.queryByRole("button", { name: "Hard Delete" }),
-      ).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Hard Delete" })).not.toBeInTheDocument();
     });
 
     it("shows status mutation to Admin and Viewer (sales rep), hides from Contributor", () => {
@@ -197,9 +179,7 @@ describe("RoleGate", () => {
         </RoleGate>,
         adminSession,
       );
-      expect(
-        screen.getByRole("button", { name: "Update Status" }),
-      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Update Status" })).toBeInTheDocument();
 
       // Viewer (sales rep) can see it.
       rerender(
@@ -207,9 +187,7 @@ describe("RoleGate", () => {
           <button>Update Status</button>
         </RoleGate>,
       );
-      expect(
-        screen.getByRole("button", { name: "Update Status" }),
-      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Update Status" })).toBeInTheDocument();
     });
   });
 
@@ -226,12 +204,8 @@ describe("RoleGate", () => {
         adminSession,
       );
       expect(screen.getByText("Admin Panel")).toBeInTheDocument();
-      expect(
-        screen.getByRole("button", { name: "Manage Users" }),
-      ).toBeInTheDocument();
-      expect(
-        screen.getByRole("button", { name: "View Analytics" }),
-      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Manage Users" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "View Analytics" })).toBeInTheDocument();
     });
 
     it("hides complex children when role does not match", () => {
@@ -245,9 +219,7 @@ describe("RoleGate", () => {
         contributorSession,
       );
       expect(screen.queryByText("Admin Panel")).not.toBeInTheDocument();
-      expect(
-        screen.queryByRole("button", { name: "Manage Users" }),
-      ).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Manage Users" })).not.toBeInTheDocument();
     });
   });
 });

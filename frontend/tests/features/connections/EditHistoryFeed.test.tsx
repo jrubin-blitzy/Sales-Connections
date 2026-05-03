@@ -81,10 +81,7 @@ describe("EditHistoryFeed", () => {
         data: undefined,
         error: null,
       });
-      renderWithMockedSession(
-        <EditHistoryFeed recordId={RECORD_ID} />,
-        minimalSession,
-      );
+      renderWithMockedSession(<EditHistoryFeed recordId={RECORD_ID} />, minimalSession);
       const status = screen.getByRole("status");
       expect(status).toBeInTheDocument();
     });
@@ -100,10 +97,7 @@ describe("EditHistoryFeed", () => {
         data: undefined,
         error: { message: "Failed to load history" },
       });
-      renderWithMockedSession(
-        <EditHistoryFeed recordId={RECORD_ID} />,
-        minimalSession,
-      );
+      renderWithMockedSession(<EditHistoryFeed recordId={RECORD_ID} />, minimalSession);
       expect(screen.getByRole("alert")).toBeInTheDocument();
     });
   });
@@ -124,10 +118,7 @@ describe("EditHistoryFeed", () => {
         },
         error: null,
       });
-      renderWithMockedSession(
-        <EditHistoryFeed recordId={RECORD_ID} />,
-        minimalSession,
-      );
+      renderWithMockedSession(<EditHistoryFeed recordId={RECORD_ID} />, minimalSession);
       // Empty state uses role=status (informational).
       expect(screen.getByRole("status")).toBeInTheDocument();
     });
@@ -148,10 +139,7 @@ describe("EditHistoryFeed", () => {
         },
         error: null,
       });
-      renderWithMockedSession(
-        <EditHistoryFeed recordId={RECORD_ID} />,
-        minimalSession,
-      );
+      renderWithMockedSession(<EditHistoryFeed recordId={RECORD_ID} />, minimalSession);
       // The create event renders a list item; multiple "create"-like
       // strings can match (label, action), so we use getAllByText.
       const matches = screen.getAllByText(/create/i);
@@ -178,10 +166,7 @@ describe("EditHistoryFeed", () => {
         },
         error: null,
       });
-      renderWithMockedSession(
-        <EditHistoryFeed recordId={RECORD_ID} />,
-        minimalSession,
-      );
+      renderWithMockedSession(<EditHistoryFeed recordId={RECORD_ID} />, minimalSession);
       // Should show the status transition.
       expect(screen.getByText(/Not Started/)).toBeInTheDocument();
       expect(screen.getByText(/In Progress/)).toBeInTheDocument();
@@ -208,10 +193,7 @@ describe("EditHistoryFeed", () => {
         },
         error: null,
       });
-      renderWithMockedSession(
-        <EditHistoryFeed recordId={RECORD_ID} />,
-        minimalSession,
-      );
+      renderWithMockedSession(<EditHistoryFeed recordId={RECORD_ID} />, minimalSession);
       // Each row renders as a list item.
       expect(screen.getAllByRole("listitem").length).toBeGreaterThan(0);
     });
@@ -244,10 +226,7 @@ describe("EditHistoryFeed", () => {
         },
         error: null,
       });
-      renderWithMockedSession(
-        <EditHistoryFeed recordId={RECORD_ID} />,
-        minimalSession,
-      );
+      renderWithMockedSession(<EditHistoryFeed recordId={RECORD_ID} />, minimalSession);
       // PII MUST NOT appear in the rendered HTML.
       const html = document.body.innerHTML;
       expect(html).not.toContain(SECRET);
@@ -280,10 +259,7 @@ describe("EditHistoryFeed", () => {
         },
         error: null,
       });
-      renderWithMockedSession(
-        <EditHistoryFeed recordId={RECORD_ID} />,
-        minimalSession,
-      );
+      renderWithMockedSession(<EditHistoryFeed recordId={RECORD_ID} />, minimalSession);
       const html = document.body.innerHTML;
       // PII MUST NOT appear, even though it's in the payload.
       expect(html).not.toContain(PII);
@@ -308,10 +284,7 @@ describe("EditHistoryFeed", () => {
         },
         error: null,
       });
-      renderWithMockedSession(
-        <EditHistoryFeed recordId={RECORD_ID} />,
-        minimalSession,
-      );
+      renderWithMockedSession(<EditHistoryFeed recordId={RECORD_ID} />, minimalSession);
       // The pagination controls render Previous and/or Next buttons.
       const allButtons = screen.queryAllByRole("button");
       expect(allButtons.length).toBeGreaterThan(0);
@@ -331,10 +304,7 @@ describe("EditHistoryFeed", () => {
         },
         error: null,
       });
-      renderWithMockedSession(
-        <EditHistoryFeed recordId={RECORD_ID} />,
-        minimalSession,
-      );
+      renderWithMockedSession(<EditHistoryFeed recordId={RECORD_ID} />, minimalSession);
       // No prev/next buttons.
       const allButtons = screen.queryAllByRole("button");
       expect(allButtons.length).toBe(0);

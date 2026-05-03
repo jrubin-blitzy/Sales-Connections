@@ -14,12 +14,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 import { LoginScreen } from "@/features/auth/LoginScreen";
 import type { SessionRead } from "@/schemas/auth";
-import {
-  renderWithMockedSession,
-  screen,
-  userEvent,
-  waitFor,
-} from "../../test-utils";
+import { renderWithMockedSession, screen, userEvent, waitFor } from "../../test-utils";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -30,9 +25,7 @@ const mockLoginMutate = vi.fn();
 const mockLoginMutateAsync = vi.fn();
 
 vi.mock("@/api/auth", async () => {
-  const actual = await vi.importActual<typeof import("@/api/auth")>(
-    "@/api/auth",
-  );
+  const actual = await vi.importActual<typeof import("@/api/auth")>("@/api/auth");
   return {
     ...actual,
     useLoginMutation: () => ({
@@ -142,9 +135,7 @@ describe("LoginScreen", () => {
       // the Google OAuth button which has type="button"). When multiple
       // buttons match, we use type-specific filtering.
       const allButtons = screen.getAllByRole("button");
-      const submitButton = allButtons.find(
-        (b) => (b as HTMLButtonElement).type === "submit",
-      );
+      const submitButton = allButtons.find((b) => (b as HTMLButtonElement).type === "submit");
       expect(submitButton).toBeDefined();
       await user.click(submitButton!);
 
@@ -186,18 +177,16 @@ describe("LoginScreen", () => {
       renderWithMockedSession(<LoginScreen />, null);
       const emailInput = screen.getByLabelText(/email/i);
       // Either aria-required or required HTML attribute.
-      expect(
-        emailInput.hasAttribute("aria-required") ||
-          emailInput.hasAttribute("required"),
-      ).toBe(true);
+      expect(emailInput.hasAttribute("aria-required") || emailInput.hasAttribute("required")).toBe(
+        true,
+      );
     });
 
     it("password input has aria-required", () => {
       renderWithMockedSession(<LoginScreen />, null);
       const passwordInput = screen.getByLabelText(/password/i);
       expect(
-        passwordInput.hasAttribute("aria-required") ||
-          passwordInput.hasAttribute("required"),
+        passwordInput.hasAttribute("aria-required") || passwordInput.hasAttribute("required"),
       ).toBe(true);
     });
   });
