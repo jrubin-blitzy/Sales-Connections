@@ -246,7 +246,11 @@ class TestLogin:
         assert len(events) >= 1
         evt = events[0]
         assert evt.after_payload["method"] == "password"
-        assert evt.after_payload["outcome"] == "success"
+        # ``record_login_audit`` writes ``result`` per the service-layer
+        # schema (see backend/app/services/auth.py). Earlier versions of
+        # the API handler emitted ``outcome`` directly; that convention
+        # has been retired in favor of the canonical service-emitted key.
+        assert evt.after_payload["result"] == "success"
 
 
 # ---------------------------------------------------------------------------
@@ -269,8 +273,7 @@ class TestLogout:
         set_cookie = response.headers.get("Set-Cookie", "")
         assert "session=" in set_cookie
         # Either an empty value or Max-Age=0 indicates clearance.
-        assert ("Max-Age=0" in set_cookie or 'session="";' in set_cookie
-                or "session=;" in set_cookie)
+        assert "Max-Age=0" in set_cookie or 'session="";' in set_cookie or "session=;" in set_cookie
 
     def test_logout_returns_200_without_session(
         self,
@@ -330,9 +333,7 @@ class TestGoogleCallback:
         client: FlaskClient,
     ) -> None:
         """Callback without the state cookie is rejected."""
-        response = client.get(
-            "/auth/google/callback?code=fake-code&state=fake-state"
-        )
+        response = client.get("/auth/google/callback?code=fake-code&state=fake-state")
         # 401 (state mismatch) or 4xx (validation) - just not 200.
         assert response.status_code != 200
 
@@ -370,9 +371,7 @@ class TestGoogleCallback:
         by inspecting the error message which is OAuth-specific, not the
         generic "missing session cookie" message.
         """
-        response = client.get(
-            "/auth/google/callback?code=test&state=test"
-        )
+        response = client.get("/auth/google/callback?code=test&state=test")
         # If 401, it must be OAuth-specific (state validation), NOT
         # the generic auth middleware "missing cookie" 401.
         if response.status_code == 401:
@@ -383,8 +382,10 @@ class TestGoogleCallback:
             # validation failed" or similar - assert specifically NOT
             # the middleware message.
             assert (
-                ("session cookie" not in message
-                and "session" not in message.split("oauth")[0].lower())
+                (
+                    "session cookie" not in message
+                    and "session" not in message.split("oauth")[0].lower()
+                )
                 or "oauth" in message
                 or "state" in message
             ), f"Unexpected 401 source: {message}"
