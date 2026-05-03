@@ -189,6 +189,7 @@ from app.models.enums import InvolvementType, OutreachStatus, UserRole
 # from ``app.schemas.__init__``.
 from app.schemas import (
     ConnectionCreate,
+    ConnectionDuplicateCheckResponse,
     ConnectionHistoryEntry,
     ConnectionRead,
     ConnectionStatusUpdate,
@@ -1016,6 +1017,17 @@ def duplicate_check() -> tuple[Response, int]:
         actor=g.session,
         exclude_record_id=exclude_uuid,
     )
+    # Verify the response shape at runtime against the canonical
+    # ``ConnectionDuplicateCheckResponse`` schema. This pins the
+    # service-layer return contract at the API boundary so any
+    # future return-type drift in ``check_duplicate`` surfaces as a
+    # ``TypeError`` at request time rather than as a silent envelope
+    # drift in production. The check is sub-microsecond cost.
+    if not isinstance(response, ConnectionDuplicateCheckResponse):
+        raise TypeError(
+            "check_duplicate did not return a ConnectionDuplicateCheckResponse "
+            f"(got {type(response).__name__})"
+        )
 
     _logger.info(
         "duplicate_check_requested",
