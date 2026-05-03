@@ -429,6 +429,71 @@ ORDER BY event_timestamp DESC;
 
 The application user has only `INSERT` on `audit_events`; ad-hoc inspection requires a read-only role. The `app_readonly` role provided in the migration has `SELECT` on `audit_events` and is the right tool for this query.
 
+### Audit immutability invariant — role provisioning order
+
+The F-013 audit-immutability invariant (AAP §0.7.1 invariant 5: "No code path issues `UPDATE` or `DELETE` against `audit_events`") is enforced at the database layer by the `0002_token_version_and_app_role` migration, which runs:
+
+```sql
+GRANT SELECT, INSERT ON audit_events TO sales_connections_app;
+REVOKE UPDATE, DELETE, TRUNCATE ON audit_events FROM sales_connections_app;
+```
+
+**The invariant is silently violated if the `sales_connections_app` role is created with default DML privileges AFTER migration 0002 has already run.** This can happen in CI environments and dev-bootstrap scripts that:
+
+1. Run `alembic upgrade head` first (which fires `REVOKE UPDATE, DELETE, TRUNCATE` while the role does not yet exist — the REVOKE is a NOTICE, not an error, but it has no effect).
+2. Provision the `sales_connections_app` role afterwards via a separate setup script.
+3. That setup script applies a blanket `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO sales_connections_app` to make the application work — overwriting the audit-table protection.
+
+When this ordering bug occurs, `DELETE FROM audit_events` succeeds as the application role and the audit trail is no longer append-only. This was QA Issue #9 of Checkpoint 2 and was observed silently corrupting 35 audit rows before detection.
+
+#### Detection
+
+Run this query against the live database (or the CI database) to verify the invariant:
+
+```sql
+SELECT grantee, privilege_type
+FROM information_schema.role_table_grants
+WHERE table_name = 'audit_events'
+  AND grantee = 'sales_connections_app'
+ORDER BY privilege_type;
+```
+
+Expected output (exactly two rows):
+
+```
+       grantee        | privilege_type
+----------------------+----------------
+ sales_connections_app | INSERT
+ sales_connections_app | SELECT
+```
+
+If `UPDATE`, `DELETE`, or `TRUNCATE` appears in the output, the invariant is violated.
+
+#### Remediation
+
+Re-run migration 0002 to re-apply the GRANT/REVOKE block (the migration's "Phase 3" block is idempotent):
+
+```bash
+cd backend
+.venv/bin/alembic upgrade head
+```
+
+Alternatively apply the GRANT/REVOKE manually:
+
+```sql
+GRANT SELECT, INSERT ON audit_events TO sales_connections_app;
+REVOKE UPDATE, DELETE, TRUNCATE ON audit_events FROM sales_connections_app;
+```
+
+#### Permanent prevention
+
+The recommended provisioning order is:
+
+1. Create the `sales_connections_app` role first (via `infra/terraform/modules/database/main.tf` for production, or via the conftest `_provision_app_role` helper for tests).
+2. Run `alembic upgrade head` second.
+
+Additionally, the test `backend/tests/api/test_connections.py::TestAuditInvariantOnAppRole` connects to the database AS the `sales_connections_app` role and asserts that `UPDATE` and `DELETE` against `audit_events` raise permission-denied errors. If a CI environment ever drifts into the violated state, this test fails fast.
+
 ### Common queries
 
 Find normalized URLs that appear more than once across the organization:
