@@ -15,17 +15,17 @@ for the Sales-Connections backend. It provides:
   ``from app.middleware.rbac import ForbiddenError, requires_role``
   rather than splitting imports across two modules.
 
-The Flask error handler that converts ``ForbiddenError`` into a 403
-JSON envelope is registered exclusively by
-:func:`app.middleware.error_handlers.register_error_handlers`. This
-module deliberately does NOT register a duplicate handler: registering
-the same exception class twice produces a silent last-write-wins
-override at the Flask error_handler_spec level, which makes it harder
-to audit which handler actually fires at runtime. Consolidating
-registration to a single source of truth in ``error_handlers.py``
-eliminates that risk while still producing the canonical
-``{"error": {"code": "forbidden", ...}}`` envelope mandated by AAP
-Section 0.4.3.
+* ``register_rbac_error_handlers(app)`` -- a thin idempotent helper
+  that registers the ``ForbiddenError`` -> 403 envelope handler on a
+  Flask app. The canonical full handler suite is registered by
+  :func:`app.middleware.error_handlers.register_error_handlers`; this
+  helper exists so test scaffolding (and ad-hoc apps that want only
+  the RBAC envelope) can wire the handler with a single call without
+  pulling in the full suite. Calling both ``register_error_handlers``
+  and ``register_rbac_error_handlers`` is safe -- Flask's
+  ``register_error_handler`` is keyed by class identity (last-write
+  wins) so the second registration replaces the first with the same
+  function, producing identical behaviour.
 
 Performance contract (AAP Section 0.7.3):
 
@@ -113,11 +113,15 @@ from flask import g
 # ``ForbiddenError`` is the canonical "permission denied" exception
 # raised by ``requires_role`` and re-exported by this module so
 # consumers can ``from app.middleware.rbac import ForbiddenError,
-# requires_role`` in a single statement. The Flask error handler that
-# converts ``ForbiddenError`` -> 403 JSON envelope is registered by
-# :func:`app.middleware.error_handlers.register_error_handlers`; this
-# module does NOT register a duplicate handler.
-from app.middleware.error_handlers import ForbiddenError
+# requires_role`` in a single statement.
+#
+# ``_handle_forbidden_error`` is the canonical handler that converts a
+# ``ForbiddenError`` instance into the uniform 403 JSON envelope. The
+# private import is intentional: ``register_rbac_error_handlers``
+# below registers exactly this handler so the envelope shape produced
+# by either ``register_rbac_error_handlers`` or the broader
+# ``register_error_handlers`` is byte-identical.
+from app.middleware.error_handlers import ForbiddenError, _handle_forbidden_error
 
 # ``UserRole`` is the three-role authorization enum (ADMIN,
 # CONTRIBUTOR, VIEWER). Used both for type-safe argument validation
@@ -129,9 +133,12 @@ from app.models.enums import UserRole
 # these are NEVER evaluated at runtime (PEP 563), so they live in a
 # ``TYPE_CHECKING`` block to satisfy the project's strict
 # ``flake8-type-checking`` configuration. ``Callable`` types the
-# decorator factory return.
+# decorator factory return; ``Flask`` is the parameter type of
+# ``register_rbac_error_handlers``.
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from flask import Flask
 
 
 # ---------------------------------------------------------------------------
@@ -168,12 +175,16 @@ R = TypeVar("R")
 # ``__all__`` is sorted alphabetically (RUF022 "isort-style" sorting).
 # ``ForbiddenError`` is re-exported so consumers can write
 # ``from app.middleware.rbac import ForbiddenError, requires_role``
-# rather than splitting imports across two modules. Note: this module
-# deliberately does NOT export a ``register_*_error_handlers``
-# function -- the canonical ``ForbiddenError`` -> 403 envelope handler
-# is registered by :func:`app.middleware.error_handlers.register_error_handlers`.
+# rather than splitting imports across two modules.
+# ``register_rbac_error_handlers`` is a thin idempotent helper that
+# registers the ``ForbiddenError`` -> 403 envelope handler; the full
+# handler suite is registered by
+# :func:`app.middleware.error_handlers.register_error_handlers`, and
+# calling both is safe (Flask's error-handler registry is keyed by
+# class identity, last-write-wins).
 __all__ = [
     "ForbiddenError",
+    "register_rbac_error_handlers",
     "requires_role",
 ]
 
@@ -362,9 +373,15 @@ def requires_role(
                         "handler": func.__name__,
                     },
                 )
-                raise ForbiddenError(
-                    message=("No authenticated session for this request; cannot evaluate role.")
-                )
+                # Use the default generic 403 message so the response
+                # body NEVER leaks internal context (e.g., the
+                # required role names, or "no session"). The
+                # structured log line above carries the full diagnostic
+                # context for security audit; the user-facing message
+                # is the stable generic phrase
+                # ``_GENERIC_FORBIDDEN_MESSAGE`` from
+                # ``app.middleware.error_handlers``.
+                raise ForbiddenError()
 
             # ``session.role`` may be a ``UserRole`` enum (preferred,
             # set by the auth middleware) or a raw string (defensive
@@ -395,9 +412,16 @@ def requires_role(
                         "org_id": str(getattr(session, "org_id", "")),
                     },
                 )
-                raise ForbiddenError(
-                    message=(f"Unknown role {actual_role_raw!r} on session; request rejected.")
-                ) from None
+                # Use the default generic 403 message rather than
+                # echoing the unknown role string back to the client.
+                # The actual_role raw value is logged above (with
+                # forensic context) but MUST NOT appear in the
+                # response body: a tampered or stale role claim is a
+                # security signal that belongs in audit logs, not in
+                # user-facing text. ``from None`` suppresses the
+                # underlying ValueError chain so the client envelope
+                # is not polluted by an internal traceback.
+                raise ForbiddenError() from None
 
             # The actual authorization decision: membership check
             # against the closure-captured allowlist.
@@ -418,9 +442,15 @@ def requires_role(
                         "org_id": str(getattr(session, "org_id", "")),
                     },
                 )
-                raise ForbiddenError(
-                    message=(f"Role {actual_role.value!r} is not permitted for this operation.")
-                )
+                # Use the default generic 403 message rather than
+                # echoing the actual role name OR the required role
+                # names back to the client. Per AAP Section 0.7.4
+                # security invariants the response body MUST NOT leak
+                # the role topology of the application; SIEM/audit
+                # tools consume the structured log line above for
+                # forensic detail, the SPA renders only the generic
+                # phrase from ``_GENERIC_FORBIDDEN_MESSAGE``.
+                raise ForbiddenError()
 
             # Authorized: delegate to the wrapped handler with the
             # original arguments unchanged.
@@ -435,3 +465,52 @@ def requires_role(
         return cast("Callable[P, R]", wrapper)
 
     return decorator
+
+
+# ---------------------------------------------------------------------------
+# Public registration helper: register_rbac_error_handlers
+# ---------------------------------------------------------------------------
+
+
+def register_rbac_error_handlers(app: Flask) -> None:
+    """Register the ``ForbiddenError`` -> 403 envelope handler on ``app``.
+
+    This is a thin idempotent helper that registers exactly one
+    handler -- the ``ForbiddenError`` -> 403 JSON envelope mapping.
+    The full handler suite (``AuthError``, ``NotFoundError``,
+    ``ConflictError``, ``ValidationFailedError``, ``HTTPException``,
+    pydantic ``ValidationError``, generic ``Exception``, etc.) is
+    registered by
+    :func:`app.middleware.error_handlers.register_error_handlers`.
+
+    Calling both is safe: Flask's ``register_error_handler`` is keyed
+    by the exception class identity, so the second registration
+    replaces the first with the same function -- the runtime behaviour
+    is identical regardless of registration order or count.
+
+    Use this helper when you want ONLY the RBAC envelope wired (e.g.,
+    test scaffolding that constructs a bare Flask app and only needs
+    to assert ``ForbiddenError`` -> 403). Use
+    :func:`app.middleware.error_handlers.register_error_handlers` for
+    the full production wiring inside ``app.create_app``.
+
+    The handler installed is the canonical
+    ``app.middleware.error_handlers._handle_forbidden_error`` so the
+    envelope shape produced by either registration path is
+    byte-identical: ``{"error": {"code": "forbidden", "message": ...,
+    "correlation_id": ..., "fields": []}}``.
+
+    Args:
+        app: The Flask application instance on which to register the
+            handler. Mutates ``app.error_handler_spec`` in place.
+
+    Returns:
+        None. Side effects: mutates ``app.error_handler_spec`` so that
+        any ``ForbiddenError`` raised inside a request context is
+        converted to a 403 JSON envelope.
+    """
+    # Register the canonical handler from ``error_handlers.py``. The
+    # private import is intentional and centralized at module level
+    # (above) -- duplicating it here would risk drift between the two
+    # registration paths.
+    app.register_error_handler(ForbiddenError, _handle_forbidden_error)
