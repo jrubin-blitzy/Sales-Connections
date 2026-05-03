@@ -101,18 +101,41 @@ from app.services.auth import (
 )
 
 # ---------------------------------------------------------------------------
-# Connection record service (F-001)
+# Connection record service (F-001, F-004, F-005, F-007, F-011)
 # ---------------------------------------------------------------------------
-# ``create_record`` is the sole writer of new ``records`` rows, opening
-# its own ``with session.begin():`` block and emitting the
-# corresponding ``CREATE`` audit event in the same transaction per AAP
-# Section 0.7.1 invariant 6 (atomic state-change + audit pair).
-# ``DuplicateRecordError`` is the AppError subclass raised when the
-# unique partial index on ``normalized_linkedin_url`` fires (mapped to
-# HTTP 409).
+# This module owns the entire lifecycle of ``records`` and
+# ``record_tags``:
+#
+# * ``create_record`` is the sole writer of new ``records`` rows
+#   (F-001), opening its own ``with session.begin():`` block and
+#   emitting the corresponding ``CREATE`` audit event in the same
+#   transaction per AAP Section 0.7.1 invariant 6 (atomic
+#   state-change + audit pair).
+# * ``get_record`` and ``list_records`` are the read paths backing
+#   the F-004 feed and the F-011 detail view; both inject the
+#   org-scope and soft-delete-scope predicates uniformly.
+# * ``update_record`` (F-007 edit), ``update_status`` (F-005
+#   outreach-status mutation), and ``soft_delete_record`` (F-007
+#   soft delete) are the three state-changing mutation paths
+#   beyond CREATE; each emits its own typed audit event in the
+#   parent transaction.
+# * ``get_record_history`` powers the F-011 edit-history feed by
+#   surfacing audit events filtered to a single record id.
+# * ``ConnectionFilters`` is the frozen dataclass carrying the
+#   seven optional filter parameters consumed by the feed query.
+# * ``DuplicateRecordError`` is the AppError subclass raised when
+#   the unique partial index on ``normalized_linkedin_url`` fires
+#   (mapped to HTTP 409).
 from app.services.connections import (
+    ConnectionFilters,
     DuplicateRecordError,
     create_record,
+    get_record,
+    get_record_history,
+    list_records,
+    soft_delete_record,
+    update_record,
+    update_status,
 )
 
 # ---------------------------------------------------------------------------
@@ -129,6 +152,7 @@ __all__ = [
     "AIServiceUnavailableError",
     "AuditEmissionError",
     "AuthenticationError",
+    "ConnectionFilters",
     "DuplicateRecordError",
     "LastAdminError",
     "SelfDemotionError",
@@ -138,10 +162,16 @@ __all__ = [
     "find_duplicate",
     "generate_outreach_notes",
     "get_analytics_snapshot",
+    "get_record",
+    "get_record_history",
     "hard_delete_record",
     "hash_password",
     "list_org_users",
+    "list_records",
     "mint_session_jwt",
+    "soft_delete_record",
+    "update_record",
+    "update_status",
     "update_user_role",
     "upsert_oauth_user",
     "verify_password",
