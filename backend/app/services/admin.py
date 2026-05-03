@@ -1,54 +1,65 @@
-"""Admin panel aggregation and moderation services (F-014, F-009).
+"""Admin panel service-layer operations (F-014, F-009, F-007).
 
 This module provides the data-tier helpers that back the admin panel
-endpoints :mod:`app.api.admin` (CP5 deliverable). Per AAP Section 0.5.2
-Layer 6:
+endpoints in :mod:`app.api.admin` (F-014). Every function in this
+module is intended to be called by handlers behind the
+``@requires_role(UserRole.ADMIN)`` decorator. The decorator is the
+authoritative authorization gate per AAP Section 0.7.1 invariant 7;
+this module performs additional org-scope checks defensively.
 
-    "services/admin.py - Aggregation queries for analytics and
-     record-moderation operations."
+Public surface (handler-facing API per the file schema):
 
-Aggregation queries (F-014):
+* :func:`list_all_users` -- list all users in the actor's organization.
+* :func:`update_user_role` -- mutate a user's role; emits the F-013
+  ``role_change`` audit event in the same transaction.
+* :func:`list_records_for_moderation` -- admin moderation view of
+  records, including soft-deleted ones by default.
+* :func:`hard_delete_record` -- physically remove a record; emits the
+  F-013 ``hard_delete`` audit event in the same transaction.
+* :func:`compute_analytics` -- aggregate the three analytics panels
+  (most active contributors, leads by status, weekly activity) into
+  a single :class:`AnalyticsResponse`.
 
-* :func:`get_analytics_snapshot` returns the three-panel response
-  shape (most active contributors, leads by status, weekly activity)
-  consumed by ``GET /api/admin/analytics``. The query plan hits the
-  composite ``(org_id, deleted_at, submission_date DESC)`` index per
-  AAP Section 0.7.3 so the call remains responsive at the 10K-record
-  scale ceiling.
+Lower-level service helpers (used by tests and by the handler-facing
+wrappers above):
 
-User management (F-009 + F-014):
+* :func:`list_org_users` -- paginated user list with explicit
+  session/org parameters.
+* :func:`get_analytics_snapshot` -- raw three-panel aggregation with
+  explicit session/org/weeks parameters.
 
-* :func:`list_org_users` paginates the users in an organization for
-  the admin user-management view.
-* :func:`update_user_role` mutates a user's role and emits the F-013
-  ``role_change`` audit event in the same transaction. Enforces two
-  organizational invariants:
-      1. The "last admin" guarantee: an Admin cannot be demoted if
-         they are the SOLE Admin in the organization. This prevents
-         lockout scenarios.
-      2. The self-demotion guard: an Admin cannot demote themselves.
-         Demotion always flows through another admin to preserve
-         four-eyes governance.
+Domain exceptions:
 
-Record moderation (F-007 + F-014):
+* :class:`LastAdminError` (subclass of
+  :class:`app.middleware.error_handlers.ConflictError`, mapped to
+  HTTP 409) -- raised by :func:`update_user_role` when demoting a
+  user would leave the organization without any Admin.
+* :class:`SelfDemotionError` (subclass of
+  :class:`app.middleware.error_handlers.ForbiddenError`, mapped to
+  HTTP 403) -- raised by :func:`update_user_role` when an Admin
+  attempts to demote themselves.
 
-* :func:`hard_delete_record` permanently removes a record from the
-  database (admin-only path per AAP Section 0.5.2). Unlike the soft
-  delete handled by service-level connection update flow, hard delete
-  emits ``audit_events.event_type = 'hard_delete'`` with the full
-  record payload preserved in ``before_payload`` so the audit history
-  retains the row's content even after the row is gone.
+State-changing functions (:func:`update_user_role`,
+:func:`hard_delete_record`) emit audit events inside the parent
+transaction per AAP Section 0.7.1 invariant 6 (atomic state-change
+plus audit-emit pair). Read-only functions
+(:func:`list_all_users`, :func:`list_records_for_moderation`,
+:func:`compute_analytics`) do not require an open transaction.
 
-Per AAP Section 0.5.3 ("service functions own transactions"), every
-state-changing function in this module opens its own ``with
-session.begin():`` block when called outside an active transaction
-and invokes :func:`emit_audit_event` inside that transaction so the
-state change and the audit row commit (or roll back) atomically.
+Org-scoping (AAP Section 0.7.1 invariant 3): every read and every
+write injects ``WHERE org_id = :org_id`` either explicitly or via
+the caller-supplied ``actor.org_id``. Cross-org access surfaces as
+404 from the calling handler so the response never leaks the
+existence of cross-org entities.
 
-Per AAP Section 0.7.1 invariant 3 (org-scoped queries), every read
-and every write in this module injects ``WHERE org_id = ...`` either
-explicitly or via the caller-supplied ``org_id`` parameter. Cross-org
-access would surface as a 404 from the calling handler.
+Soft-delete awareness (AAP Section 0.7.1 invariant 4): the analytics
+inventory panels (contributors, leads-by-status) filter
+``deleted_at IS NULL`` because they measure active inventory. The
+weekly-activity sparkline does NOT filter ``deleted_at`` because it
+measures contributor activity (a record submitted then later
+soft-deleted still counts as a contribution). The moderation view
+defaults to ``include_deleted=True`` because admins frequently need
+to review soft-deleted records.
 
 This module deliberately has no module-level side effects beyond the
 exception class declarations. Importing :mod:`app.services.admin`
@@ -60,88 +71,215 @@ from __future__ import annotations
 
 # Standard library imports.
 #
-# ``datetime`` provides timezone-aware UTC timestamps for the
-# weekly-activity sparkline and the analytics snapshot timestamp.
-# ``timedelta`` computes the trailing-N-weeks window. ``UUID``
-# annotates the org/user/record identity parameters.
+# ``OrderedDict`` provides deterministic key ordering for analytics
+# aggregations; used in :func:`get_analytics_snapshot` to guarantee
+# a stable response shape ordered by the canonical
+# :class:`OutreachStatus` enum sequence.
+#
+# ``UTC``, ``datetime``, ``timedelta`` provide the date/time
+# primitives for the 12-week sparkline window, the current ISO
+# Monday computation, and the ``generated_at`` UTC stamp on
+# :class:`AnalyticsResponse`. ``date`` is type-only (annotation
+# inside ``dict[date, int]``).
+#
+# ``Any`` annotates the JSON-shaped audit payload dicts
+# (``before_payload``, ``after_payload``) where heterogeneous values
+# defy a stricter type. ``TYPE_CHECKING`` gates the type-only
+# imports below.
+from collections import OrderedDict
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+# SQLAlchemy 2.x Core/ORM constructs:
+# * ``Date`` and ``cast`` coerce DATE_TRUNC's ``timestamptz`` return
+#   to a plain DATE for ``week_start`` serialization.
+# * ``and_`` composes filter expressions when multiple predicates
+#   are required in a single ``WHERE`` clause.
+# * ``asc`` and ``desc`` provide explicit ordering directives on
+#   columns and labeled aggregates.
+# * ``func`` exposes SQL aggregate functions (COUNT, DATE_TRUNC).
+# * ``select`` is the SQLAlchemy 2.x query builder.
+# * ``Select`` is the type for query statements; gated to
+#   :data:`TYPE_CHECKING` because it appears only in return-type
+#   annotations.
+from sqlalchemy import Date, and_, asc, cast, desc, func, select
 
 # Third-party runtime imports.
 #
-# ``sqlalchemy.func`` provides DATE_TRUNC, COUNT, and other SQL
-# aggregates used in :func:`get_analytics_snapshot`. ``select`` is
-# the SQLAlchemy 2.x query builder. ``and_`` composes filter
-# expressions. ``cast`` and ``Date`` coerce DATE_TRUNC's return
-# (timestamptz) to a plain DATE for week_start serialization.
-from sqlalchemy import Date, and_, cast, func, select
+# ``structlog.get_logger(__name__)`` produces a JSON-emitting bound
+# logger. The ``merge_contextvars`` processor configured in
+# :mod:`app.observability.logging` automatically surfaces the
+# request-scoped ``correlation_id``, ``user_id``, and ``org_id``
+# bound by the correlation/auth middleware so log lines emitted
+# here are automatically correlated by request without per-call
+# bookkeeping.
 import structlog
 
-# First-party imports.
+# First-party imports - absolute paths only per the project's
+# ``flake8-tidy-imports`` configuration (relative imports are banned
+# under AAP Section 0.3.7).
 #
-# ``AppError`` is the base class extended by the two domain
-# exceptions defined here (LastAdminError, SelfDemotionError).
-# ``Record``, ``User`` are the SQLAlchemy declarative models the
-# aggregation queries operate on. ``OutreachStatus`` and ``UserRole``
-# are the Python enums mirroring the PostgreSQL enum types.
-# ``AuditEventType`` powers the F-013 audit emission. ``emit_audit_event``
-# is the SOLE writer of the audit_events table per AAP Section 0.7.1
-# invariant 5. The :class:`app.schemas.admin` schemas (UserRead,
-# AnalyticsResponse, etc.) are imported only for type annotations
-# of the public return shapes.
-from app.middleware.error_handlers import ConflictError, ForbiddenError, NotFoundError
+# ``db`` is the SQLAlchemy wrapper singleton; provides
+# ``db.session()`` for opening short-lived sessions in the
+# handler-facing wrappers (``list_all_users``, ``compute_analytics``,
+# ``list_records_for_moderation``). The lower-level helpers receive
+# an open session from the caller per AAP Section 0.5.3.
+#
+# ``ConflictError``, ``ForbiddenError``, and ``NotFoundError`` are
+# the application's HTTP-mapped exception classes raised by this
+# module. ``LastAdminError`` and ``SelfDemotionError`` below
+# subclass ``ConflictError`` and ``ForbiddenError`` respectively so
+# they participate in the standard JSON error envelope produced by
+# the registered Flask error handlers.
+#
+# ``Record`` and ``User`` are the SQLAlchemy ORM classes queried by
+# this module. The :mod:`app.models` re-export package is imported
+# so ``Base.metadata`` is fully populated before any query touches
+# the registry.
+#
+# :mod:`app.models.enums` provides ``AuditEventType.ROLE_CHANGE``
+# and ``AuditEventType.HARD_DELETE`` for the audit emission, the
+# :class:`OutreachStatus` enum used to enumerate all four leads-by-
+# status entries (regardless of whether records exist for each
+# status), and :class:`UserRole.ADMIN` for the anti-lockout
+# admin-count check.
+#
+# :class:`app.schemas.admin` schemas are the response shapes returned
+# by the public functions. ``UserRoleUpdate`` is accepted by
+# :func:`update_user_role` as a convenience for handlers that pass
+# the validated request payload directly without unpacking ``.role``.
+#
+# :func:`emit_audit_event` is the SOLE writer of ``audit_events`` per
+# AAP Section 0.7.1 invariant 5 (append-only audit table); admin
+# state-changes invoke it inside the parent transaction so the
+# state change and the audit row commit (or roll back) atomically
+# per invariant 6.
+from app.extensions import db
+from app.middleware.error_handlers import (
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+)
 from app.models import Record, User
 from app.models.enums import AuditEventType, OutreachStatus, UserRole
-from app.schemas import (
+from app.schemas.admin import (
     AnalyticsResponse,
     ContributorActivity,
     LeadsByStatusEntry,
     UserRead,
+    UserRoleUpdate,
     WeeklyActivityEntry,
 )
 from app.services.audit import emit_audit_event
 
-# Type-only imports.
+# Type-only imports. Under ``from __future__ import annotations`` all
+# annotations are strings (PEP 563) and the symbols inside the
+# ``TYPE_CHECKING`` block are never evaluated at runtime, satisfying
+# the project's strict ``flake8-type-checking`` configuration.
+#
+# ``date`` annotates the lookup-table type ``dict[date, int]`` in the
+# weekly-activity padding pass.
+#
+# ``UUID`` annotates the user_id and record_id parameters of
+# :func:`update_user_role` and :func:`hard_delete_record`.
+#
+# ``Select`` is the type for SQLAlchemy query statements; used in
+# the :func:`_build_moderation_base_stmt` return annotation.
+#
+# ``Session`` is the :class:`app.middleware.auth.Session` typed
+# dataclass populated on ``flask.g.session``. The handler-facing
+# wrappers read ``actor.user_id`` and ``actor.org_id`` from it.
+#
+# ``sqlalchemy.orm.Session`` (aliased ``DBSession``) is the type of
+# the caller's open session passed to the lower-level helpers. The
+# alias avoids name collision with ``app.middleware.auth.Session``.
 if TYPE_CHECKING:
+    from datetime import date
     from uuid import UUID
 
+    from sqlalchemy import Select
     from sqlalchemy.orm import Session as DBSession
+
+    from app.middleware.auth import Session
 
 
 # ---------------------------------------------------------------------------
 # Module logger
 # ---------------------------------------------------------------------------
-_logger = structlog.get_logger(__name__)
+# structlog's ``merge_contextvars`` processor (configured in
+# :mod:`app.observability.logging`) automatically surfaces the
+# request-scoped ``correlation_id``, ``user_id``, and ``org_id``
+# bound by the correlation/auth middleware so log lines emitted here
+# are automatically correlated by request without per-call work.
+logger = structlog.get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Module constants
+# Module-level constants
 # ---------------------------------------------------------------------------
 
-# Cap on the most-active-contributors panel size. Larger orgs would
-# overwhelm the SPA's small panel layout; the panel is intended as an
-# at-a-glance leaderboard, not an exhaustive list.
+# Number of contributor entries returned by the analytics panels.
+# Bounds the response payload at the AAP Section 0.7.3 10K-records
+# scale ceiling. Matches the SPA's small leaderboard panel layout;
+# the cap is a UX bound, not a security one.
+_TOP_CONTRIBUTORS_LIMIT: int = 10
+
+# Hard cap on the contributors list size in the schema-required
+# wrapper. Larger orgs would overwhelm the SPA's panel layout; the
+# cap is a UX bound, not a security one. The schema declares
+# ``_MAX_CONTRIBUTORS_RANK = 50`` for back-end validation; the
+# service layer enforces the more restrictive ``_TOP_CONTRIBUTORS_LIMIT``
+# by default.
 _MAX_CONTRIBUTORS_RANK: int = 50
 
 # Number of trailing weeks shown in the sparkline panel. 12 matches
-# the SPA's small panel width.
+# the SPA's small panel width and is the default for
+# :func:`compute_analytics`. The lower-level
+# :func:`get_analytics_snapshot` accepts a ``weeks`` override (capped
+# at :data:`_MAX_WEEKLY_WEEKS`).
 _DEFAULT_WEEKLY_WEEKS: int = 12
 
 # Hard cap on the trailing-weeks parameter to prevent pathological
 # inputs (e.g., 10000 weeks) from producing an oversized response.
+# The pydantic schema enforces ``_MAX_WEEKLY_ENTRIES = 52`` (see
+# ``app/schemas/admin.py``); we mirror it here as a service-layer
+# defensive bound.
 _MAX_WEEKLY_WEEKS: int = 52
+
+# Default and maximum page sizes for the moderation view. The
+# admin panel renders one row per record and shows up to 50 records
+# per page by default; admins can request larger pages up to 200 for
+# bulk review workflows. The cap is a UX bound, not a security one.
+_DEFAULT_MODERATION_PAGE: int = 1
+_DEFAULT_MODERATION_PAGE_SIZE: int = 50
+_MAX_MODERATION_PAGE_SIZE: int = 200
+
+# Default page size for ``list_org_users`` / ``list_all_users``.
+# Matches the SPA's user-management panel layout (paginated at 100).
+_DEFAULT_USER_LIST_LIMIT: int = 100
+_MAX_USER_LIST_LIMIT: int = 500
 
 
 # ---------------------------------------------------------------------------
 # Public surface
 # ---------------------------------------------------------------------------
+# ``__all__`` is sorted alphabetically per ruff RUF022 (isort-style
+# sorting). The public surface is the union of the schema-required
+# exports (:func:`list_all_users`, :func:`update_user_role`,
+# :func:`list_records_for_moderation`, :func:`hard_delete_record`,
+# :func:`compute_analytics`) and the lower-level service helpers
+# used by the test suite (:func:`get_analytics_snapshot`,
+# :func:`list_org_users`).
 
 __all__ = [
     "LastAdminError",
     "SelfDemotionError",
+    "compute_analytics",
     "get_analytics_snapshot",
     "hard_delete_record",
+    "list_all_users",
     "list_org_users",
+    "list_records_for_moderation",
     "update_user_role",
 ]
 
@@ -163,14 +301,21 @@ class LastAdminError(ConflictError):
     Per AAP Section 0.5.2 Layer 6, the admin panel role-change flow
     must preserve the "at least one admin per org" invariant so the
     organization is never locked out of administrative operations.
+
+    Note: This is an application-level guard, not a database
+    constraint. A bypass via direct SQL (e.g., a raw ``UPDATE users
+    SET role = 'Contributor'`` issued via psql) is not prevented by
+    this class; the database role separation in the initial
+    migration limits such bypasses to the ``DB_ADMIN_ROLE`` (used
+    only for migrations and ad-hoc admin), never to the application
+    role used by the running Flask process.
     """
 
     @property
     def default_message(self) -> str:
         """Return the canonical 'last admin' error message."""
         return (
-            "Cannot demote the last Admin in the organization. "
-            "Promote another user to Admin first."
+            "Cannot demote the last Admin in the organization. Promote another user to Admin first."
         )
 
 
@@ -183,15 +328,18 @@ class SelfDemotionError(ForbiddenError):
     demotion always requires another admin to act, preserving
     four-eyes governance: a single admin's compromised account cannot
     silently downgrade their own role to evade audit oversight.
+
+    Note: This guard fires only on ``actor_user_id == target_user_id``
+    AND a non-trivial role change (i.e., the new role differs from
+    the current role). A no-op self-call (admin -> admin) is allowed
+    because nothing changes; an audit event is also not emitted in
+    that case.
     """
 
     @property
     def default_message(self) -> str:
         """Return the canonical 'self-demotion forbidden' message."""
-        return (
-            "Admins cannot change their own role. "
-            "Another Admin must perform the role change."
-        )
+        return "Admins cannot change their own role. Another Admin must perform the role change."
 
 
 # ---------------------------------------------------------------------------
@@ -210,26 +358,26 @@ def get_analytics_snapshot(
     Three queries, each scoped to ``org_id`` and (for the inventory
     panels) to ``deleted_at IS NULL``:
 
-    1. **Most active contributors** - GROUP BY ``records.owner_user_id``
+    1. **Most active contributors** -- GROUP BY ``records.owner_user_id``
        JOIN ``users`` to project ``display_name``, ORDER BY
        ``record_count DESC`` LIMIT :data:`_MAX_CONTRIBUTORS_RANK`.
        Filtered by ``deleted_at IS NULL`` because the panel measures
-       *active inventory*, not historical activity.
+       active inventory, not historical activity.
 
-    2. **Leads by status** - GROUP BY ``records.outreach_status`` over
-       active records. Always returns exactly 4 entries (one per
-       OutreachStatus value); statuses with zero leads get
-       ``count=0`` placeholders so the SPA renders a complete
+    2. **Leads by status** -- GROUP BY ``records.outreach_status``
+       over active records. Always returns exactly four entries (one
+       per :class:`OutreachStatus` value); statuses with zero leads
+       get ``count=0`` placeholders so the SPA renders a complete
        bar/pie chart even on a quiet org.
 
-    3. **Weekly activity sparkline** - GROUP BY DATE_TRUNC('week',
+    3. **Weekly activity sparkline** -- GROUP BY DATE_TRUNC('week',
        submission_date) over the trailing ``weeks`` window. Includes
        soft-deleted records because the sparkline measures
-       contributor *activity*, not active inventory.
+       contributor activity, not active inventory.
 
     Per AAP Section 0.7.3, the queries hit the composite index
-    ``(org_id, deleted_at, submission_date DESC)`` (panels 1, 2) and
-    a subset of the same index (panel 3, which filters by
+    ``(org_id, deleted_at, submission_date DESC)`` (panels 1 and 2)
+    and a subset of the same index (panel 3, which filters by
     submission_date range), keeping execution time sub-second at the
     10K-record scale ceiling.
 
@@ -242,8 +390,8 @@ def get_analytics_snapshot(
         org_id: The organization whose records are aggregated. All
             queries inject ``WHERE org_id = :org_id``.
         weeks: Number of trailing weeks for the sparkline. Capped at
-            :data:`_MAX_WEEKLY_WEEKS` (52). Defaults to 12 (SPA panel
-            width).
+            :data:`_MAX_WEEKLY_WEEKS` (52). Defaults to 12 (the SPA's
+            small panel width).
 
     Returns:
         An :class:`AnalyticsResponse` carrying the three panel lists
@@ -260,10 +408,11 @@ def get_analytics_snapshot(
     # ----- Panel 1: most active contributors --------------------------
     # JOIN users to project display_name, GROUP BY owner_user_id,
     # filter to active records, order by count DESC, LIMIT to the
-    # rank cap. Using ``users.display_name`` (not records.owner_display_name)
-    # so that a recent rename surfaces in the analytics on the next
-    # refresh per the AAP Section 0.5.2 Layer 6 specification of the
-    # ContributorActivity schema's display_name field.
+    # rank cap. Using ``users.display_name`` (not
+    # ``records.owner_display_name``) so that a recent rename surfaces
+    # in the analytics on the next refresh per the AAP Section 0.5.2
+    # Layer 6 specification of the ``ContributorActivity`` schema's
+    # ``display_name`` field.
     contributor_count = func.count(Record.id).label("record_count")
     contributors_stmt = (
         select(
@@ -279,7 +428,7 @@ def get_analytics_snapshot(
             )
         )
         .group_by(Record.owner_user_id, User.display_name)
-        .order_by(contributor_count.desc())
+        .order_by(desc(contributor_count), asc(User.display_name))
         .limit(_MAX_CONTRIBUTORS_RANK)
     )
     contributors_rows = db_session.execute(contributors_stmt).all()
@@ -293,11 +442,11 @@ def get_analytics_snapshot(
     ]
 
     # ----- Panel 2: leads by status -----------------------------------
-    # GROUP BY outreach_status over active records. Build a lookup
-    # table from the SQL result then synthesize four entries (one per
-    # enum value) so statuses with zero leads still appear with
-    # count=0. This guarantees the SPA's bar/pie chart always renders
-    # a complete view.
+    # GROUP BY outreach_status over active records. Build an
+    # OrderedDict from the SQL result then synthesize four entries
+    # (one per enum value) so statuses with zero leads still appear
+    # with count=0. This guarantees the SPA's bar/pie chart always
+    # renders a complete view.
     status_count = func.count(Record.id).label("status_count")
     status_stmt = (
         select(Record.outreach_status, status_count)
@@ -310,9 +459,13 @@ def get_analytics_snapshot(
         .group_by(Record.outreach_status)
     )
     status_rows = db_session.execute(status_stmt).all()
-    status_counts: dict[OutreachStatus, int] = {
-        row.outreach_status: int(row.status_count) for row in status_rows
-    }
+    # OrderedDict gives a deterministic iteration order even if the
+    # SQL row order varies between PostgreSQL versions or hash-aggregate
+    # implementations. The synthesis loop below iterates the canonical
+    # ``OutreachStatus`` enum order, which is the order the SPA expects.
+    status_counts: OrderedDict[OutreachStatus, int] = OrderedDict(
+        (row.outreach_status, int(row.status_count)) for row in status_rows
+    )
     leads_by_status: list[LeadsByStatusEntry] = [
         LeadsByStatusEntry(
             status=status_value,
@@ -326,8 +479,10 @@ def get_analytics_snapshot(
     # week (Monday-anchored in PostgreSQL). The ``records`` table is
     # not filtered by ``deleted_at`` here because the sparkline
     # measures activity (a record submitted then later soft-deleted
-    # STILL counts as a contribution).
-    now_utc = datetime.now(UTC)
+    # STILL counts as a contribution). The ``cast(..., Date)`` coerces
+    # PostgreSQL's ``timestamptz`` return to a plain ``date`` for
+    # serialization through pydantic's ``WeeklyActivityEntry`` schema.
+    now_utc = datetime.now(tz=UTC)
     window_start = now_utc - timedelta(weeks=capped_weeks)
     weekly_count = func.count(Record.id).label("weekly_count")
     week_bin = func.date_trunc("week", Record.submission_date).label("week_bin")
@@ -343,7 +498,7 @@ def get_analytics_snapshot(
             )
         )
         .group_by(week_bin)
-        .order_by(week_bin)
+        .order_by(asc(week_bin))
     )
     weekly_rows = db_session.execute(weekly_stmt).all()
     weekly_activity: list[WeeklyActivityEntry] = [
@@ -354,7 +509,7 @@ def get_analytics_snapshot(
         for row in weekly_rows
     ]
 
-    _logger.info(
+    logger.info(
         "analytics_snapshot_generated",
         org_id=str(org_id),
         weeks=capped_weeks,
@@ -379,37 +534,44 @@ def list_org_users(
     *,
     db_session: DBSession,
     org_id: UUID,
-    limit: int = 100,
+    limit: int = _DEFAULT_USER_LIST_LIMIT,
     offset: int = 0,
 ) -> list[UserRead]:
     """Paginate users within the supplied organization.
 
-    Used by ``GET /api/admin/users`` to render the admin user list.
-    Users are returned sorted by ``display_name ASC`` so the list is
-    deterministic across pagination calls.
+    Used by the admin user-management view (F-014). Users are
+    returned sorted by ``display_name ASC`` then ``email ASC`` so the
+    list is deterministic across pagination calls and stable across
+    refreshes.
 
     Per AAP Section 0.7.4 (Security Invariants), the returned
     :class:`UserRead` shape NEVER includes ``password_hash`` or
-    ``org_id`` - those are server-only fields.
+    ``org_id`` -- those are server-only fields. The schema's
+    ``from_attributes=True`` mode reads ONLY the fields declared on
+    the schema; even if the ORM instance carries those attributes,
+    they are not serialized.
 
     Args:
         db_session: An open SQLAlchemy session. Read-only.
         org_id: The organization whose users are listed. Injected as
             ``WHERE org_id = :org_id``.
-        limit: Maximum number of users to return. Defaults to 100;
-            capped at 500 defensively.
-        offset: Number of rows to skip. Defaults to 0.
+        limit: Maximum number of users to return. Defaults to
+            :data:`_DEFAULT_USER_LIST_LIMIT` (100); capped at
+            :data:`_MAX_USER_LIST_LIMIT` (500) defensively.
+        offset: Number of rows to skip. Defaults to 0; clamped to a
+            non-negative value defensively.
 
     Returns:
-        A list of :class:`UserRead` shapes, ordered by display_name.
+        A list of :class:`UserRead` shapes, ordered by display_name
+        ascending then email ascending.
     """
-    safe_limit = max(1, min(limit, 500))
+    safe_limit = max(1, min(limit, _MAX_USER_LIST_LIMIT))
     safe_offset = max(0, offset)
 
     stmt = (
         select(User)
         .where(User.org_id == org_id)
-        .order_by(User.display_name.asc())
+        .order_by(asc(User.display_name), asc(User.email))
         .limit(safe_limit)
         .offset(safe_offset)
     )
@@ -422,19 +584,21 @@ def update_user_role(
     db_session: DBSession,
     org_id: UUID,
     target_user_id: UUID,
-    new_role: UserRole,
+    new_role: UserRole | UserRoleUpdate,
     actor_user_id: UUID,
 ) -> User:
-    """Mutate a user's role and emit a F-013 audit event.
+    """Mutate a user's role and emit a F-013 ``role_change`` audit event.
 
     Used by ``PATCH /api/admin/users/:id`` (Admin-only). Enforces two
     organizational invariants per AAP Section 0.5.2 Layer 6:
 
     1. The "last admin" guarantee: an Admin cannot be demoted if they
        are the SOLE Admin in the organization. Surface as
-       :class:`LastAdminError` (HTTP 409).
+       :class:`LastAdminError` (HTTP 409, mapped to
+       :class:`ConflictError`).
     2. The self-demotion guard: an Admin cannot demote themselves.
-       Surface as :class:`SelfDemotionError` (HTTP 403). The handler's
+       Surface as :class:`SelfDemotionError` (HTTP 403, mapped to
+       :class:`ForbiddenError`). The handler's
        ``@requires_role(Admin)`` decorator already gates the endpoint;
        this guard is the secondary defense against an admin issuing
        the call through their own session.
@@ -442,63 +606,77 @@ def update_user_role(
     The function emits ``audit_events.event_type = role_change``
     inside the caller's transaction. The ``before_payload`` carries
     the prior role and the ``after_payload`` carries the new role
-    plus the target user_id, so the audit history reconstructs the
-    full role change without joining to the users table.
+    plus the target ``user_id`` so the audit history reconstructs
+    the full role change without joining to the users table.
+
+    For convenience, ``new_role`` accepts EITHER a :class:`UserRole`
+    enum value OR a :class:`UserRoleUpdate` pydantic payload (which
+    has a ``.role`` attribute); the latter form lets handlers pass
+    the validated request payload directly without unpacking
+    ``payload.role`` first.
 
     Args:
         db_session: An open SQLAlchemy session with an active
-            transaction (caller-owned per AAP Section 0.5.3).
-        org_id: The organization scope.
+            transaction (caller-owned per AAP Section 0.5.3). The
+            audit emit and the role mutation must commit (or roll
+            back) atomically, so the caller MUST wrap this call in
+            a ``with session.begin():`` block.
+        org_id: The organization scope. Injected as
+            ``WHERE org_id = :org_id`` on the target lookup and on
+            the admin-count query.
         target_user_id: The id of the user whose role is being
             mutated.
-        new_role: The new role to assign. One of UserRole.
+        new_role: The new role to assign. Either a :class:`UserRole`
+            enum value or a :class:`UserRoleUpdate` payload.
         actor_user_id: The id of the admin issuing the change. Used
             for the self-demotion guard and for the audit event's
             ``actor_user_id`` field.
 
     Returns:
-        The mutated :class:`User` ORM instance, refreshed by the
-        caller's transaction.
+        The mutated :class:`User` ORM instance, with the new role
+        applied. The caller can serialize it via
+        ``UserRead.model_validate(...)`` for the response payload.
 
     Raises:
         NotFoundError: When ``target_user_id`` does not exist in the
             organization (could be cross-org or non-existent; both
-            surface as 404 to avoid leaking the existence of cross-org
-            users per AAP Section 0.5.2 NotFoundError contract).
-        SelfDemotionError: When ``actor_user_id == target_user_id``.
-            Mapped to HTTP 403.
+            surface as 404 to avoid leaking the existence of cross-
+            org users per AAP Section 0.5.2 ``NotFoundError`` contract).
+        SelfDemotionError: When ``actor_user_id == target_user_id``
+            and the role would actually change. Mapped to HTTP 403.
         LastAdminError: When demoting the SOLE Admin in the
             organization. Mapped to HTTP 409.
     """
-    # Self-demotion guard. Runs FIRST so the most actionable error
-    # surfaces before any database round-trips.
-    if actor_user_id == target_user_id:
-        _logger.warning(
-            "update_user_role_self_demotion_blocked",
-            org_id=str(org_id),
-            actor_user_id=str(actor_user_id),
-        )
-        raise SelfDemotionError()
+    # Coerce a UserRoleUpdate payload into a UserRole enum value so
+    # the rest of the function can treat ``new_role`` uniformly. The
+    # isinstance check accepts the pydantic model directly; the
+    # alternate path (already a UserRole) is the typical test/
+    # internal call site.
+    if isinstance(new_role, UserRoleUpdate):
+        new_role = new_role.role
 
-    # Lookup the target user, scoped to the org.
-    target_stmt = select(User).where(
-        User.id == target_user_id,
-        User.org_id == org_id,
-    )
+    # Lookup the target user, scoped to the org. We perform this
+    # FIRST so that NotFoundError fires before SelfDemotionError when
+    # the target id is unknown -- the more actionable diagnostic
+    # surfaces first.
+    target_stmt = select(User).where(and_(User.id == target_user_id, User.org_id == org_id))
     target_user: User | None = db_session.scalar(target_stmt)
     if target_user is None:
-        # Per AAP Section 0.5.2 NotFoundError contract: return 404 for
-        # both non-existent IDs and cross-org IDs so the response
+        # Per AAP Section 0.5.2 NotFoundError contract: return 404
+        # for both non-existent IDs and cross-org IDs so the response
         # never reveals whether a UUID exists in a different
         # organization.
         raise NotFoundError(message="User not found.")
 
     previous_role: UserRole = target_user.role
+
+    # No-op short-circuit. Setting the role to its current value is
+    # permitted (idempotent) but does NOT emit an audit event because
+    # nothing changed. Returning here also bypasses the self-demotion
+    # guard (which only fires on a genuine role change) and the
+    # last-admin guard (which only fires on a demotion FROM Admin).
     if previous_role == new_role:
-        # No-op role change. Still permitted (idempotent), but no
-        # audit event is emitted because nothing changed. The handler
-        # surfaces the unchanged user back to the SPA.
-        _logger.info(
+        logger.info(
             "update_user_role_noop",
             org_id=str(org_id),
             target_user_id=str(target_user_id),
@@ -506,18 +684,32 @@ def update_user_role(
         )
         return target_user
 
+    # Self-demotion guard. Fires AFTER the no-op check so an admin
+    # who calls with their current role doesn't trigger the guard.
+    # Fires BEFORE the last-admin guard because a self-demotion is
+    # the more specific (and more actionable) error.
+    if actor_user_id == target_user_id:
+        logger.warning(
+            "update_user_role_self_demotion_blocked",
+            org_id=str(org_id),
+            actor_user_id=str(actor_user_id),
+        )
+        raise SelfDemotionError()
+
     # Last-admin guard: only fires when DEMOTING from Admin (i.e.,
     # previous role is Admin and new role is anything else). Counts
     # admins in the org BEFORE the mutation; if the count is exactly
-    # 1, we would lock the org out by demoting.
+    # 1, demoting would lock the org out of admin operations.
     if previous_role == UserRole.ADMIN and new_role != UserRole.ADMIN:
         admin_count_stmt = select(func.count(User.id)).where(
-            User.org_id == org_id,
-            User.role == UserRole.ADMIN,
+            and_(
+                User.org_id == org_id,
+                User.role == UserRole.ADMIN,
+            )
         )
         admin_count = db_session.scalar(admin_count_stmt) or 0
         if admin_count <= 1:
-            _logger.warning(
+            logger.warning(
                 "update_user_role_last_admin_blocked",
                 org_id=str(org_id),
                 target_user_id=str(target_user_id),
@@ -528,32 +720,35 @@ def update_user_role(
     # Apply the mutation. The flush below ensures the role change is
     # observable in the same transaction (so the audit event sees the
     # post-mutation state if it queries) without committing the
-    # transaction.
+    # transaction. The caller's ``with session.begin():`` block is
+    # responsible for the commit.
     target_user.role = new_role
     db_session.flush()
 
     # Emit the F-013 role_change audit event inside the caller's
     # transaction. The before/after payloads capture the role
     # transition plus the target user_id so audit history is
-    # reconstructable without joining to users.
+    # reconstructable without joining to ``users``. ``target_record_id``
+    # is None because role_change targets a user, not a record; the
+    # user identity is captured inside the payload.
+    before_payload: dict[str, Any] = {
+        "user_id": str(target_user_id),
+        "role": previous_role.value,
+    }
+    after_payload: dict[str, Any] = {
+        "user_id": str(target_user_id),
+        "role": new_role.value,
+    }
     emit_audit_event(
         db_session=db_session,
         event_type=AuditEventType.ROLE_CHANGE,
         actor_user_id=actor_user_id,
-        # ROLE_CHANGE has no record target; the user is identified in
-        # the payload below.
         target_record_id=None,
-        before_payload={
-            "user_id": str(target_user_id),
-            "role": previous_role.value,
-        },
-        after_payload={
-            "user_id": str(target_user_id),
-            "role": new_role.value,
-        },
+        before_payload=before_payload,
+        after_payload=after_payload,
     )
 
-    _logger.info(
+    logger.info(
         "update_user_role_applied",
         org_id=str(org_id),
         target_user_id=str(target_user_id),
@@ -570,6 +765,48 @@ def update_user_role(
 # ---------------------------------------------------------------------------
 
 
+def _record_snapshot(record: Record) -> dict[str, Any]:
+    """Serialize a :class:`Record` ORM instance to a JSON-safe dict.
+
+    Used to populate the ``before_payload`` of the ``hard_delete``
+    audit event so the audit history retains the row's content even
+    after the row itself is gone. UUIDs are stringified, datetimes
+    are ISO-8601 formatted, and enum values are unwrapped to their
+    string representation.
+
+    Args:
+        record: The :class:`Record` ORM instance to snapshot.
+
+    Returns:
+        A JSON-safe ``dict[str, Any]`` carrying every business field
+        plus the operational fields (``id``, ``org_id``,
+        ``owner_user_id``, ``owner_display_name``,
+        ``normalized_linkedin_url``, ``deleted_at``,
+        ``submission_date``).
+    """
+    return {
+        "id": str(record.id),
+        "org_id": str(record.org_id),
+        "owner_user_id": str(record.owner_user_id),
+        "owner_display_name": record.owner_display_name,
+        "full_name": record.full_name,
+        "linkedin_url": record.linkedin_url,
+        "normalized_linkedin_url": record.normalized_linkedin_url,
+        "company": record.company,
+        "job_title": record.job_title,
+        "relationship_context": record.relationship_context,
+        "ai_notes": record.ai_notes,
+        "involvement": (record.involvement.value if record.involvement is not None else None),
+        "outreach_status": (
+            record.outreach_status.value if record.outreach_status is not None else None
+        ),
+        "submission_date": (
+            record.submission_date.isoformat() if record.submission_date is not None else None
+        ),
+        "deleted_at": (record.deleted_at.isoformat() if record.deleted_at is not None else None),
+    }
+
+
 def hard_delete_record(
     *,
     db_session: DBSession,
@@ -582,7 +819,10 @@ def hard_delete_record(
     Used by ``DELETE /api/admin/records/:id`` (Admin-only per AAP
     Section 0.5.2 Layer 6). Unlike soft delete (which sets
     ``deleted_at`` on the row), hard delete physically removes the
-    row from the ``records`` table.
+    row from the ``records`` table. Cascade-deletion on the
+    ``record_tags`` association rows is handled by the FK
+    ``ondelete=CASCADE`` declared on ``RecordTag.record_id``;
+    this function does not need to remove tag links explicitly.
 
     Per AAP Section 0.5.2 Layer 6, the F-013 ``hard_delete`` audit
     event captures the FULL record payload in ``before_payload``
@@ -590,82 +830,68 @@ def hard_delete_record(
     content even after the row itself is gone. The audit event has
     ``target_record_id = None`` because the record ceases to exist
     after the transaction commits and a non-null FK would conflict
-    with the post-commit row state.
+    with the post-commit row state. The record's ``id`` is
+    captured inside ``before_payload`` so forensic queries can still
+    correlate the audit row to its target.
 
     Per AAP Section 0.7.1 invariant 5 (append-only audit), the audit
     row INSERT happens inside the same transaction as the record
     DELETE so they commit (or roll back) atomically. The transaction
     fence is the caller's responsibility per AAP Section 0.5.3.
 
+    The audit emit happens BEFORE the physical delete so an emit
+    failure (e.g., constraint violation, connectivity loss) leaves
+    the record intact rather than orphaning it without an audit
+    trail.
+
     Args:
         db_session: An open SQLAlchemy session with an active
-            transaction.
-        org_id: The organization scope. Injected as ``WHERE org_id =
-            :org_id`` on the SELECT and DELETE.
+            transaction (caller-owned per AAP Section 0.5.3).
+        org_id: The organization scope. Injected as
+            ``WHERE org_id = :org_id`` on the SELECT and DELETE so
+            cross-org access surfaces as 404.
         record_id: The id of the record to hard-delete.
         actor_user_id: The id of the admin issuing the delete.
 
     Raises:
         NotFoundError: When the record does not exist or is not in
-            the supplied organization. Both cases surface as 404 per
-            AAP Section 0.5.2 NotFoundError contract.
+            the supplied organization. Both cases surface as 404
+            per AAP Section 0.5.2 ``NotFoundError`` contract so the
+            response never reveals whether a UUID exists in a
+            different organization.
     """
     # Lookup the record, scoped to the org. We include soft-deleted
     # records in this query because hard delete must be able to
-    # operate on any row regardless of soft-delete state - admins
+    # operate on any row regardless of soft-delete state -- admins
     # may want to purge a soft-deleted record permanently from the
     # database (e.g., for GDPR right-to-erasure compliance).
-    record_stmt = select(Record).where(
-        Record.id == record_id,
-        Record.org_id == org_id,
-    )
+    record_stmt = select(Record).where(and_(Record.id == record_id, Record.org_id == org_id))
     record: Record | None = db_session.scalar(record_stmt)
     if record is None:
         raise NotFoundError(message="Record not found.")
 
     # Snapshot the record payload BEFORE the delete so the audit
     # row can preserve it. The snapshot uses string forms of UUIDs
-    # and enums so the JSONB column accepts them without custom
-    # encoders.
-    before_payload = {
-        "id": str(record.id),
-        "org_id": str(record.org_id),
-        "owner_user_id": str(record.owner_user_id),
-        "owner_display_name": record.owner_display_name,
-        "full_name": record.full_name,
-        "linkedin_url": record.linkedin_url,
-        "normalized_linkedin_url": record.normalized_linkedin_url,
-        "company": record.company,
-        "job_title": record.job_title,
-        "relationship_context": record.relationship_context,
-        "ai_notes": record.ai_notes,
-        "involvement": (
-            record.involvement.value if record.involvement is not None else None
-        ),
-        "outreach_status": (
-            record.outreach_status.value if record.outreach_status is not None else None
-        ),
-        "submission_date": (
-            record.submission_date.isoformat() if record.submission_date is not None else None
-        ),
-        "deleted_at": (
-            record.deleted_at.isoformat() if record.deleted_at is not None else None
-        ),
-    }
+    # and enum values so the JSONB column accepts them without
+    # custom encoders.
+    before_payload = _record_snapshot(record)
 
     # Emit the audit event FIRST so the audit row's INSERT runs
-    # inside the same transaction as the record DELETE. If the
-    # audit emission fails, the DELETE never fires and the caller's
+    # inside the same transaction as the record DELETE. If the audit
+    # emission fails, the DELETE never fires and the caller's
     # transaction rolls back atomically per AAP Section 0.7.1
     # invariant 6.
+    #
+    # ``target_record_id`` is None because the row ceases to exist
+    # after commit; populating the FK would conflict with the
+    # post-commit row state given ``audit_events.target_record_id``
+    # uses ``ondelete=RESTRICT`` per the AuditEvent model. The
+    # record id is captured inside ``before_payload`` so forensic
+    # queries can still correlate the audit row to its target.
     emit_audit_event(
         db_session=db_session,
         event_type=AuditEventType.HARD_DELETE,
         actor_user_id=actor_user_id,
-        # Per AAP Section 0.5.2 Layer 6: target_record_id is None
-        # for hard_delete because the row ceases to exist after
-        # commit; populating the FK would conflict with the
-        # post-commit row state.
         target_record_id=None,
         before_payload=before_payload,
         after_payload=None,
@@ -673,10 +899,14 @@ def hard_delete_record(
 
     # Physical delete. SQLAlchemy issues a DELETE statement on the
     # next flush; the caller's ``with session.begin():`` block
-    # commits the transaction once this function returns.
+    # commits the transaction once this function returns. Cascade
+    # deletion on ``record_tags`` happens at the database layer via
+    # the FK ``ondelete=CASCADE``; we do not need to delete tag links
+    # explicitly.
     db_session.delete(record)
+    db_session.flush()
 
-    _logger.info(
+    logger.info(
         "hard_delete_record_applied",
         org_id=str(org_id),
         record_id=str(record_id),
@@ -684,4 +914,293 @@ def hard_delete_record(
     )
 
 
+def _build_moderation_base_stmt(
+    org_id: UUID,
+    *,
+    include_deleted: bool,
+    full_name_search: str | None,
+    company_search: str | None,
+) -> Select[tuple[Record]]:
+    """Construct the base ``SELECT`` for the moderation list query.
 
+    Centralized here so the count and page queries share the same
+    filter predicates, ensuring the totals returned by the count
+    query match the rows returned by the page query.
+
+    Args:
+        org_id: The organization scope.
+        include_deleted: When True, include soft-deleted records;
+            when False, restrict to active records only.
+        full_name_search: Optional case-insensitive substring filter
+            on ``full_name``. ``None`` disables the filter.
+        company_search: Optional case-insensitive substring filter
+            on ``company``. ``None`` disables the filter.
+
+    Returns:
+        A typed ``Select`` statement carrying the filter predicates.
+        The caller adds ordering, limit, and offset as needed.
+    """
+    base: Select[tuple[Record]] = select(Record).where(Record.org_id == org_id)
+    if not include_deleted:
+        base = base.where(Record.deleted_at.is_(None))
+    if full_name_search:
+        base = base.where(Record.full_name.ilike(f"%{full_name_search}%"))
+    if company_search:
+        base = base.where(Record.company.ilike(f"%{company_search}%"))
+    return base
+
+
+# ---------------------------------------------------------------------------
+# Schema-required handler-facing API
+# ---------------------------------------------------------------------------
+# The functions below are the handler-facing public API per the file's
+# exports schema (AAP Section 0.5.2 Layer 6). They take an
+# :class:`app.middleware.auth.Session` as the actor parameter and
+# open their own short-lived session via ``db.session()``. The
+# transaction lifecycle is owned by the service layer per AAP
+# Section 0.5.3 ("Service functions own transactions").
+#
+# Read-only wrappers (``list_all_users``, ``compute_analytics``,
+# ``list_records_for_moderation``) do not open a transaction; they
+# rely on PostgreSQL's per-statement implicit transactions to keep
+# read consistency.
+#
+# Soft-deleted weekly-activity inclusion (per AAP Section 0.5.2
+# Layer 6 spec) is documented in :func:`get_analytics_snapshot`.
+
+
+def list_all_users(actor: Session) -> list[UserRead]:
+    """List all users in the actor's organization (F-014).
+
+    Org-scoped per AAP Section 0.7.1 invariant 3. The returned
+    :class:`UserRead` shape NEVER includes ``password_hash`` or
+    ``org_id`` -- those are server-only fields per AAP Section 0.7.4
+    Security Invariants. The schema's ``from_attributes=True`` mode
+    reads ONLY the fields declared on the schema; even if the ORM
+    instance carries those attributes, they are not serialized.
+
+    The endpoint that calls this function is gated by the
+    ``@requires_role(UserRole.ADMIN)`` decorator (per AAP Section
+    0.5.2 Layer 6); the org-scope check here is defense in depth
+    against any future weakening of the decorator.
+
+    Args:
+        actor: Authenticated :class:`Session` populated by
+            :mod:`app.middleware.auth`. ``actor.org_id`` is the
+            multi-tenant scope; no other attribute is consumed.
+
+    Returns:
+        A list of :class:`UserRead` shapes for every user in
+        ``actor.org_id``, ordered by display_name ascending then
+        email ascending. Returns up to
+        :data:`_MAX_USER_LIST_LIMIT` (500) users; orgs larger than
+        that should switch to the paginated
+        :func:`list_org_users` API.
+    """
+    with db.session() as session:
+        return list_org_users(
+            db_session=session,
+            org_id=actor.org_id,
+            limit=_MAX_USER_LIST_LIMIT,
+            offset=0,
+        )
+
+
+def compute_analytics(actor: Session) -> AnalyticsResponse:
+    """Compute the three basic admin analytics panels (F-014).
+
+    Wrapper around :func:`get_analytics_snapshot` that opens a
+    short-lived database session, fetches the raw aggregation, and
+    pads the weekly-activity panel so the response always contains
+    exactly :data:`_DEFAULT_WEEKLY_WEEKS` (12) entries -- one per
+    ISO-8601 calendar week in the trailing window, including weeks
+    with zero activity. Padding gives the SPA's sparkline chart a
+    continuous domain without per-render gap-filling.
+
+    Panels:
+      1. Most active contributors (top contributors by record count).
+      2. Leads by outreach status (count grouped by status, all four
+         enum values present).
+      3. Weekly activity sparkline (record submissions per ISO week,
+         last 12 weeks, every week present including zero-count
+         weeks).
+
+    Per AAP Section 0.7.1 invariant 3 (org-scoped queries), all
+    panel queries filter on ``actor.org_id``. Per invariant 4
+    (soft-delete-aware queries), the inventory panels (contributors,
+    leads-by-status) filter ``deleted_at IS NULL``; the activity
+    sparkline does NOT filter ``deleted_at`` because it measures
+    contributor activity, not active inventory.
+
+    Args:
+        actor: Authenticated :class:`Session` populated by
+            :mod:`app.middleware.auth`. ``actor.org_id`` is the
+            multi-tenant scope; no other attribute is consumed.
+
+    Returns:
+        An :class:`AnalyticsResponse` with all three panels populated.
+        The ``weekly_activity`` list contains exactly
+        :data:`_DEFAULT_WEEKLY_WEEKS` (12) entries; the
+        ``leads_by_status`` list contains exactly four entries (one
+        per :class:`OutreachStatus` value); the
+        ``most_active_contributors`` list contains 0 to
+        :data:`_MAX_CONTRIBUTORS_RANK` (50) entries depending on the
+        org's record population.
+    """
+    with db.session() as session:
+        snapshot = get_analytics_snapshot(
+            db_session=session,
+            org_id=actor.org_id,
+            weeks=_DEFAULT_WEEKLY_WEEKS,
+        )
+
+    # Pad the weekly_activity panel so the response contains exactly
+    # ``_DEFAULT_WEEKLY_WEEKS`` entries. The raw aggregation only
+    # returns weeks with at least one record; the SPA's sparkline
+    # expects a continuous domain (one entry per week in the trailing
+    # window), so we synthesize zero-count entries for empty weeks.
+    #
+    # Anchor on the Monday of the current ISO week (PostgreSQL's
+    # ``DATE_TRUNC('week', ...)`` returns the Monday-anchored bin).
+    today_utc = datetime.now(tz=UTC).date()
+    monday_this_week = today_utc - timedelta(days=today_utc.weekday())
+    earliest_monday = monday_this_week - timedelta(weeks=_DEFAULT_WEEKLY_WEEKS - 1)
+
+    # Build a lookup table from the raw result. The raw entries
+    # carry ``date`` objects (PostgreSQL's ``timestamptz`` was
+    # ``cast``-ed to ``date`` in ``get_analytics_snapshot``).
+    by_week: dict[date, int] = {
+        entry.week_start: entry.record_count for entry in snapshot.weekly_activity
+    }
+
+    # Synthesize the dense series, oldest-to-newest.
+    padded_weekly: list[WeeklyActivityEntry] = []
+    cursor = earliest_monday
+    while cursor <= monday_this_week:
+        padded_weekly.append(
+            WeeklyActivityEntry(
+                week_start=cursor,
+                record_count=by_week.get(cursor, 0),
+            )
+        )
+        cursor = cursor + timedelta(weeks=1)
+
+    return AnalyticsResponse(
+        most_active_contributors=snapshot.most_active_contributors,
+        leads_by_status=snapshot.leads_by_status,
+        weekly_activity=padded_weekly,
+        generated_at=snapshot.generated_at,
+    )
+
+
+def list_records_for_moderation(
+    actor: Session,
+    *,
+    include_deleted: bool = True,
+    page: int = _DEFAULT_MODERATION_PAGE,
+    page_size: int = _DEFAULT_MODERATION_PAGE_SIZE,
+    full_name_search: str | None = None,
+    company_search: str | None = None,
+) -> tuple[list[Record], int]:
+    """Admin moderation view of records (F-014 records tab; F-007 admin path).
+
+    Unlike the public feed (``app.services.connections.list_records``,
+    F-004), this view defaults to ``include_deleted=True`` so admins
+    can review and (in a future flow) restore soft-deleted records.
+    Pagination defaults to the moderation panel's layout
+    (:data:`_DEFAULT_MODERATION_PAGE_SIZE` = 50 records per page;
+    capped at :data:`_MAX_MODERATION_PAGE_SIZE` = 200 for bulk review
+    workflows).
+
+    Org-scoped per AAP Section 0.7.1 invariant 3. The endpoint that
+    calls this function is gated by the
+    ``@requires_role(UserRole.ADMIN)`` decorator (per AAP Section
+    0.5.2 Layer 6); the org-scope check here is defense in depth.
+
+    Optional filters:
+
+    * ``full_name_search`` -- case-insensitive substring match on
+      ``records.full_name``. Powered by ``ILIKE`` so admins can
+      search "smit" and find both "Smith" and "Smithson".
+    * ``company_search`` -- case-insensitive substring match on
+      ``records.company``. Same semantics as ``full_name_search``.
+
+    Both filters are applied with leading and trailing ``%``
+    wildcards. They are intentionally NOT injected into the public
+    feed query (which uses exact-match filters per the F-004
+    specification) because the moderation flow is admin-only and
+    benefits from the more flexible substring search.
+
+    Pagination is offset-based with the moderation defaults. The
+    ``ORDER BY`` is ``submission_date DESC, id ASC`` so the result
+    is deterministic across pagination calls (the ``id`` tiebreaker
+    handles records with identical ``submission_date``).
+
+    Args:
+        actor: Authenticated :class:`Session` populated by
+            :mod:`app.middleware.auth`. ``actor.org_id`` is the
+            multi-tenant scope; no other attribute is consumed.
+        include_deleted: When True (default), the result includes
+            soft-deleted records. When False, the result is
+            equivalent to the public feed query (active records
+            only). Admins typically want True so they can see and
+            moderate soft-deleted records.
+        page: 1-based page number. Clamped to a minimum of 1.
+        page_size: Maximum number of records per page. Clamped to
+            the range [1, :data:`_MAX_MODERATION_PAGE_SIZE`].
+        full_name_search: Optional case-insensitive substring filter
+            on ``full_name``. ``None`` (default) or empty string
+            disables the filter.
+        company_search: Optional case-insensitive substring filter
+            on ``company``. ``None`` (default) or empty string
+            disables the filter.
+
+    Returns:
+        A tuple of ``(records, total_count)``:
+
+        * ``records`` -- the page of :class:`Record` ORM instances
+          (raw entities; the caller serializes via
+          :class:`app.schemas.connection.ConnectionRead` if a rich
+          representation is needed).
+        * ``total_count`` -- the unpaginated total count of records
+          matching the filter predicates. The SPA uses this to
+          render pagination controls (page count, "showing X of Y").
+
+        ``records`` is empty when ``page > total_count / page_size``
+        (i.e., the requested page is past the end of the result set).
+    """
+    safe_page = max(1, page)
+    safe_page_size = max(1, min(page_size, _MAX_MODERATION_PAGE_SIZE))
+
+    # Build the base statement once so the count and page queries
+    # share the same filter predicates. This guarantees the totals
+    # returned by the count query match the rows returned by the
+    # page query.
+    base = _build_moderation_base_stmt(
+        actor.org_id,
+        include_deleted=include_deleted,
+        full_name_search=full_name_search,
+        company_search=company_search,
+    )
+
+    # Count query: wraps the base SELECT in a subquery so the COUNT
+    # respects the filter predicates without re-encoding them. The
+    # subquery is necessary because PostgreSQL's COUNT(*) over a
+    # JOIN-free SELECT would otherwise count rows from the FROM
+    # clause directly, ignoring the WHERE predicates.
+    count_stmt = select(func.count()).select_from(base.subquery())
+
+    # Page query: same predicates as the base, plus deterministic
+    # ordering and offset/limit pagination. The ``id ASC`` tiebreaker
+    # handles records with identical ``submission_date`` (which can
+    # happen when bulk-imported records share a server timestamp).
+    page_stmt = (
+        base.order_by(desc(Record.submission_date), asc(Record.id))
+        .limit(safe_page_size)
+        .offset((safe_page - 1) * safe_page_size)
+    )
+
+    with db.session() as session:
+        total = session.execute(count_stmt).scalar_one()
+        rows = list(session.execute(page_stmt).scalars().all())
+    return rows, total
