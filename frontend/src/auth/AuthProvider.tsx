@@ -140,8 +140,11 @@ export interface UseRoleReturn {
 // ---------------------------------------------------------------------------
 
 /**
- * Internal context value. Not exported because consumers always go
- * through the typed hooks (useSession, useSessionLoading, useRole).
+ * Internal context value. Application code consumes it via the typed
+ * hooks (useSession, useSessionLoading, useRole); the type is exported
+ * primarily so the test harness at `frontend/tests/test-utils.tsx`
+ * (specifically `MockAuthProvider`) can construct a synchronous, fully
+ * typed mock context value without having to round-trip through MSW.
  *
  * The `session` field is `null` in two distinct cases:
  *   - Initial mount before /api/me has resolved (also: `isLoading` is true)
@@ -149,7 +152,7 @@ export interface UseRoleReturn {
  *
  * Consumers gate on `isLoading` first to distinguish these two states.
  */
-interface AuthContextValue {
+export interface AuthContextValue {
   /** The hydrated session, or `null` if unauthenticated/loading. */
   session: SessionRead | null;
   /** True during the initial /api/me hydration query. */
@@ -166,8 +169,16 @@ interface AuthContextValue {
  * A `null` initial value would be ambiguous (no session vs. no provider).
  * `undefined` lets us throw a clear error in the hook helpers when
  * `useContext` returns the initial value (i.e., the provider is missing).
+ *
+ * Exported (alongside `AuthContextValue`) so the test harness at
+ * `frontend/tests/test-utils.tsx` can re-provide the context with a
+ * synchronously controlled value via `MockAuthProvider`. Production
+ * code MUST continue to consume the context only through the typed
+ * hooks (useSession, useSessionLoading, useRole) - direct
+ * `useContext(AuthContext)` reads outside the test harness would
+ * bypass the missing-provider safety net those hooks implement.
  */
-const AuthContext = createContext<AuthContextValue | undefined>(undefined);
+export const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 // ---------------------------------------------------------------------------
 // AuthProvider component
