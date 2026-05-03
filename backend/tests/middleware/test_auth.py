@@ -360,6 +360,7 @@ class TestSessionFromClaims:
             "role": "Admin",
             "email": "test@example.com",
             "display_name": "Test User",
+            "tv": 0,
         }
         session = _build_session_from_claims(claims)
         assert isinstance(session, Session)
@@ -368,6 +369,7 @@ class TestSessionFromClaims:
         assert session.role == UserRole.ADMIN
         assert session.email == "test@example.com"
         assert session.display_name == "Test User"
+        assert session.token_version == 0
 
     def test_missing_user_id_raises(self) -> None:
         """Missing user_id claim raises ValueError."""
@@ -427,9 +429,28 @@ class TestSessionFromClaims:
             "user_id": str(uuid.uuid4()),
             "org_id": str(uuid.uuid4()),
             "role": UserRole.VIEWER,
+            "tv": 0,
         }
         session = _build_session_from_claims(claims)
         assert session.role == UserRole.VIEWER
+
+    def test_missing_tv_claim_raises(self) -> None:
+        """Missing ``tv`` (token_version) claim raises ValueError.
+
+        Per AAP section 0.7.4 (Security Invariants), the ``tv`` claim
+        is mandatory for every session JWT. A pre-rotation token (one
+        minted by a build that did not yet include ``tv``) MUST be
+        rejected at the build_session boundary so the auth middleware
+        cannot admit a stale-version JWT.
+        """
+        with pytest.raises(ValueError, match="tv"):
+            _build_session_from_claims(
+                {
+                    "user_id": str(uuid.uuid4()),
+                    "org_id": str(uuid.uuid4()),
+                    "role": "Admin",
+                }
+            )
 
     def test_session_is_frozen(self) -> None:
         """Session is frozen — attempts to mutate raise FrozenInstanceError."""
@@ -440,6 +461,7 @@ class TestSessionFromClaims:
                 "user_id": str(uuid.uuid4()),
                 "org_id": str(uuid.uuid4()),
                 "role": "Admin",
+                "tv": 0,
             }
         )
         with pytest.raises(FrozenInstanceError):

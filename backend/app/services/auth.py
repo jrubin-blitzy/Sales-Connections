@@ -228,40 +228,63 @@ _BCRYPT_INPUT_MAX_BYTES: int = 72
 # lookup fails. Calling ``bcrypt.checkpw`` against this hash takes
 # approximately the same wall-clock time as a real hash check, so an
 # adversary cannot enumerate valid emails by measuring response-time
-# differences (CWE-208 timing side-channel). The dummy is hashed at
-# import-time using bcrypt cost-4 (TestingConfig minimum) so the
-# constant-time path itself is fast; production cost-12 hashes take
-# ~250ms each, which would bloat startup. The cost difference doesn't
-# defeat the timing-attack defense because adversaries cannot
-# distinguish the cost factor from the response time at this scale -
-# the variance from network jitter dominates the per-cost-factor
-# difference. Computed lazily via a function so import-time work
-# stays at zero.
-_DUMMY_BCRYPT_HASH: bytes | None = None
+# differences (CWE-208 timing side-channel). Per AAP section 0.7.4
+# (Security Invariants), the response time of an unknown-email
+# rejection MUST be indistinguishable from a wrong-password rejection
+# - any measurable difference allows remote enumeration of valid
+# email addresses.
+#
+# CRITICAL: the dummy hash MUST be computed at the SAME bcrypt cost
+# factor that ``verify_password`` uses against real password_hash
+# values; otherwise ``bcrypt.checkpw`` returns in materially
+# different wall-clock time on the unknown-email path vs the
+# wrong-password path. The QA Checkpoint 1 measurement showed a
+# 27x timing differential (~10ms vs ~270ms) when a single shared
+# cost-4 hash was used regardless of the configured BCRYPT_COST.
+#
+# We cache the dummy hash per cost factor so the first authenticate
+# call at each cost pays the one-time hash cost and every subsequent
+# call reuses the cached value. Production typically sees one cost
+# (12); tests see two (4 in TestingConfig, 12 if BCRYPT_COST is
+# overridden). The cache size is therefore bounded at 2-3 entries.
+_DUMMY_BCRYPT_HASH_CACHE: dict[int, bytes] = {}
 
 
-def _get_dummy_bcrypt_hash() -> bytes:
-    """Return a stable cost-4 bcrypt hash used for the constant-time path.
+def _get_dummy_bcrypt_hash(cost: int) -> bytes:
+    """Return a stable bcrypt hash at the requested cost for constant-time auth.
 
-    Computed lazily on first use so module import remains side-effect
-    free. The returned bytes are reused across all subsequent calls.
+    The hash is computed lazily on first use at each distinct cost
+    and cached in :data:`_DUMMY_BCRYPT_HASH_CACHE` for the lifetime
+    of the process. The cost MUST match the cost used by
+    :func:`verify_password` (read from ``BCRYPT_COST`` Flask config
+    or the configured default) so the wall-clock duration of
+    ``bcrypt.checkpw`` is identical on the unknown-email path and
+    the known-email-wrong-password path.
+
+    Per AAP section 0.7.4 (Security Invariants), any timing
+    difference allowing an adversary to enumerate valid emails by
+    response time is a CWE-208 side-channel defect.
+
+    Args:
+        cost: The bcrypt cost factor to match. Typical values are
+            12 (production) and 4 (TestingConfig). The cost MUST be
+            in bcrypt's accepted range (4-31).
 
     Returns:
-        A bcrypt-encoded byte string of a fixed plaintext at cost 4.
-        The exact plaintext is irrelevant - the hash is never compared
-        to a real password; it merely makes ``bcrypt.checkpw`` perform
-        a real CPU-bound comparison so the response time of an unknown
-        email matches the response time of a known email.
+        A bcrypt-encoded byte string at the requested cost factor.
+        The hash itself is not compared against any real password;
+        its sole purpose is to make ``bcrypt.checkpw`` execute an
+        equivalent amount of CPU work as on the real-password path.
     """
-    global _DUMMY_BCRYPT_HASH  # noqa: PLW0603 - intentional lazy cache
-    cached = _DUMMY_BCRYPT_HASH
-    if cached is None:
-        # Hash a fixed throwaway plaintext at cost 4. The plaintext
-        # itself is never sensitive; the hash is used only for timing
-        # parity on the user-not-found path.
-        cached = bcrypt.hashpw(b"constant-time-dummy-plaintext", bcrypt.gensalt(rounds=4))
-        _DUMMY_BCRYPT_HASH = cached
-    return cached
+    cached = _DUMMY_BCRYPT_HASH_CACHE.get(cost)
+    if cached is not None:
+        return cached
+    # Compute the hash at the requested cost. The plaintext itself is
+    # never sensitive; the hash is used only for timing parity on the
+    # user-not-found path.
+    new_hash = bcrypt.hashpw(b"constant-time-dummy-plaintext", bcrypt.gensalt(rounds=cost))
+    _DUMMY_BCRYPT_HASH_CACHE[cost] = new_hash
+    return new_hash
 
 
 # ---------------------------------------------------------------------------
@@ -509,8 +532,15 @@ def authenticate_password(
         # bcrypt.checkpw against a dummy hash so the response time of
         # the negative path matches the positive path. The dummy
         # plaintext is irrelevant - it never matches, but the CPU
-        # work performed is comparable.
-        bcrypt.checkpw(b"constant-time-probe", _get_dummy_bcrypt_hash())
+        # work performed is comparable. CRITICAL: the dummy hash MUST
+        # be computed at the SAME cost factor as ``verify_password``
+        # uses for real passwords so the wall-clock durations match
+        # (per AAP section 0.7.4 anti-enumeration invariant; the QA
+        # Checkpoint 1 finding was a 27x timing differential because
+        # a fixed cost-4 dummy was used against cost-12 real
+        # password_hash values).
+        cost = _resolve_bcrypt_cost()
+        bcrypt.checkpw(b"constant-time-probe", _get_dummy_bcrypt_hash(cost))
         _logger.info(
             "authenticate_password_user_not_found",
             org_id=str(org_uuid),
@@ -575,6 +605,15 @@ def mint_session_jwt(user: User) -> str:
                           structured-log enrichment; not authoritative).
     * ``display_name``  - the user's display name at mint time
                           (denormalized; not authoritative).
+    * ``tv``            - the user's ``token_version`` at mint time.
+                          Per AAP Section 0.7.4 (Security Invariants),
+                          the auth middleware compares this on every
+                          protected request against the live
+                          ``users.token_version`` value; logout
+                          increments the stored value, invalidating
+                          every previously minted JWT for that user.
+                          Without this claim a stolen JWT remains
+                          valid for the full TTL after logout.
     * ``iat``           - issued-at timestamp (Unix epoch seconds).
     * ``exp``           - expiry timestamp (Unix epoch seconds).
 
@@ -600,6 +639,13 @@ def mint_session_jwt(user: User) -> str:
     now = datetime.now(UTC)
     expires_at = now + timedelta(seconds=ttl_seconds)
 
+    # Resolve the user's token_version. Defaults to 0 for any User
+    # instance that pre-dates the 0002 migration (e.g., legacy test
+    # fixtures that stub User without going through the ORM). New
+    # rows always have an explicit non-null value because the column
+    # is NOT NULL with server_default=0.
+    token_version = int(getattr(user, "token_version", 0) or 0)
+
     claims: dict[str, Any] = {
         "user_id": str(user.id),
         "org_id": str(user.org_id),
@@ -612,6 +658,12 @@ def mint_session_jwt(user: User) -> str:
         "role": user.role.value if isinstance(user.role, UserRole) else str(user.role),
         "email": user.email,
         "display_name": user.display_name,
+        # Per AAP Section 0.7.4 token rotation invariant: the
+        # ``token_version`` snapshot at mint time. The auth middleware
+        # compares this against the user's live ``token_version`` on
+        # every protected request and rejects any JWT whose ``tv``
+        # does not match.
+        "tv": token_version,
         # PyJWT auto-converts datetime to int (Unix epoch) for ``iat``
         # and ``exp`` per RFC 7519. Pass datetimes directly so the
         # encoder produces the correct shape.
@@ -630,6 +682,7 @@ def mint_session_jwt(user: User) -> str:
         user_id=str(user.id),
         org_id=str(user.org_id),
         role=claims["role"],
+        token_version=token_version,
         ttl_seconds=ttl_seconds,
     )
 
@@ -654,8 +707,14 @@ def verify_session_jwt(token: str) -> dict[str, Any]:
 
     * Signature (HMAC-SHA256 against ``JWT_SIGNING_KEY``).
     * Expiry (``exp`` claim; default leeway 0).
-    * Required claim presence: ``user_id``, ``org_id``, ``role``.
+    * Required claim presence: ``user_id``, ``org_id``, ``role``,
+      ``tv``.
     * Role value membership in :class:`UserRole`.
+    * ``tv`` claim parses as a non-negative integer (the live
+      comparison against ``users.token_version`` is performed by the
+      auth middleware, not here, because this function is also
+      called from CLI tools and tests that may not have a database
+      connection).
 
     Args:
         token: The raw JWT string extracted from the session cookie
@@ -716,11 +775,15 @@ def verify_session_jwt(token: str) -> dict[str, Any]:
         _logger.warning("verify_session_jwt_non_dict_claims", claims_type=type(claims).__name__)
         raise AuthenticationError()
 
-    # Required-claim presence check. ``user_id``, ``org_id``, ``role``
-    # are required by the middleware; PyJWT does not enforce custom
-    # claims via ``require`` (it only validates standard RFC 7519
-    # claims), so we check explicitly here.
-    for required_claim in ("user_id", "org_id", "role"):
+    # Required-claim presence check. ``user_id``, ``org_id``, ``role``,
+    # ``tv`` are required by the middleware; PyJWT does not enforce
+    # custom claims via ``require`` (it only validates standard
+    # RFC 7519 claims), so we check explicitly here. ``tv`` is the
+    # token-version claim per AAP section 0.7.4 (Security Invariants);
+    # tokens minted prior to the migration that introduced it MUST be
+    # rejected so a pre-migration JWT cannot be replayed against a
+    # post-migration database where its actor has logged out.
+    for required_claim in ("user_id", "org_id", "role", "tv"):
         if required_claim not in claims:
             _logger.warning(
                 "verify_session_jwt_missing_custom_claim",
@@ -741,6 +804,29 @@ def verify_session_jwt(token: str) -> dict[str, Any]:
             role=str(role_raw),
         )
         raise AuthenticationError() from None
+
+    # ``tv`` claim type check. Must be a non-negative integer-shaped
+    # value. We accept ``int`` directly and ``str`` that parses as
+    # int (some JWT libraries serialize numerics as strings); the
+    # middleware's DB comparison is over an Integer column so we
+    # normalize here. A negative or non-integer ``tv`` is treated as
+    # invalid and the response is a generic 401.
+    tv_raw = claims["tv"]
+    try:
+        tv_int = int(tv_raw)
+    except (TypeError, ValueError):
+        _logger.warning(
+            "verify_session_jwt_invalid_tv_type",
+            tv_type=type(tv_raw).__name__,
+        )
+        raise AuthenticationError() from None
+    if tv_int < 0:
+        _logger.warning("verify_session_jwt_negative_tv", tv=tv_int)
+        raise AuthenticationError()
+    # Re-store the canonical integer value so downstream callers
+    # (middleware) get a consistent type regardless of PyJWT's wire
+    # representation.
+    claims["tv"] = tv_int
 
     return claims
 

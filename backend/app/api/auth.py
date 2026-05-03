@@ -70,6 +70,7 @@ import secrets
 import time
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
+import uuid
 
 # Third-party runtime imports.
 #
@@ -101,17 +102,20 @@ import structlog
 # ``oauth`` is the Authlib OAuth client registered on the application
 # at startup. ``db`` is the SQLAlchemy wrapper used to open a session
 # for the OAuth user upsert.
-# ``AppError``/``AuthError``/``ValidationFailedError`` are the
-# exception classes the handlers raise; the registered Flask error
-# handlers convert them into JSON envelopes.
-# ``UserRole`` and ``AuditEventType`` enums power the audit emission
-# and the response shaping. ``LoginRequest``/``LoginResponse``/
-# ``OAuthCallbackQuery``/``SessionRead``/``UserRead`` are the
-# pydantic schemas mirrored on the SPA via Zod.
+# ``AuthError``/``ServiceUnavailableError``/``ValidationFailedError``
+# are the AppError subclasses raised by handlers in this module; the
+# registered Flask error handlers convert them into JSON envelopes.
+# ``ServiceUnavailableError`` (503) is raised when Google OAuth is
+# not configured (per QA Issue 9 fix: a configuration gap returns a
+# typed 503 with code ``service_unavailable`` rather than a generic
+# 500). ``UserRole`` and ``AuditEventType`` enums power the audit
+# emission and the response shaping. ``LoginRequest``/
+# ``LoginResponse``/``OAuthCallbackQuery``/``SessionRead``/
+# ``UserRead`` are the pydantic schemas mirrored on the SPA via Zod.
 from app.extensions import db, oauth
 from app.middleware.error_handlers import (
-    AppError,
     AuthError,
+    ServiceUnavailableError,
     ValidationFailedError,
 )
 from app.models.enums import AuditEventType
@@ -369,7 +373,7 @@ def login() -> tuple[Response, int]:
 
 @auth_bp.route("/logout", methods=["POST"])
 def logout() -> tuple[Response, int]:
-    """Invalidate the current session by clearing the session cookie.
+    """Invalidate the current session by clearing the cookie and rotating tv.
 
     Per AAP Section 0.7.4 (Security Invariants), logout:
 
@@ -377,6 +381,10 @@ def logout() -> tuple[Response, int]:
       ``max_age=0``. Browsers delete the cookie immediately.
     * Emits a F-013 ``authentication`` audit event when a session is
       present (so we can correlate the logout with the prior login).
+    * INCREMENTS the user's ``token_version`` so every previously
+      minted JWT is invalidated server-side. Without this step, a
+      stolen JWT remains valid for the full 8h TTL after the user
+      logs out from another device.
     * Always returns 200, regardless of whether a session was
       present. This is intentional: a stale-token logout (the
       browser sent an expired or invalid cookie) should still
@@ -387,43 +395,94 @@ def logout() -> tuple[Response, int]:
     handler. (If we required auth, a user with an expired session
     couldn't log out without re-authenticating, which is broken UX.)
 
+    Because the auth middleware bypasses public paths, ``g.session``
+    is NOT populated on the logout request. The handler decodes the
+    cookie itself (best effort) to identify the actor and increment
+    ``token_version``. Decode failures are silently swallowed because
+    the goal is to clear browser state regardless of token validity.
+
     Returns:
         A tuple of (Response, status_code) - 200 with an empty JSON
         ``{}`` body and a cookie-clearing ``Set-Cookie`` header.
     """
+    from app.models.user import User  # noqa: PLC0415
     from app.services.audit import emit_audit_event  # noqa: PLC0415
+    from app.services.auth import (  # noqa: PLC0415
+        AuthenticationError,
+        verify_session_jwt,
+    )
 
-    # If a session is present, emit an audit event for forensic
-    # correlation. Use ``getattr`` because :data:`flask.g.session` is
-    # populated by :mod:`app.middleware.auth` only when a valid token
-    # was presented - on the public-path code path the attribute may
-    # not exist.
-    session = getattr(g, "session", None)
-    if session is not None:
+    # The middleware does not populate ``g.session`` on public paths,
+    # so we decode the cookie ourselves to identify the actor. This
+    # path is best-effort: if the cookie is missing, expired, or
+    # malformed, we still clear the browser-side cookie and return
+    # 200 so the user can proceed (e.g., a user with an expired
+    # session must be able to log out without re-authenticating).
+    cookie_kwargs = _session_cookie_kwargs()
+    cookie_name = cookie_kwargs.get("key", "session")
+    raw_token = request.cookies.get(cookie_name)
+
+    actor_user_id: Any = None
+    if raw_token:
+        try:
+            claims = verify_session_jwt(raw_token)
+            actor_user_id = claims.get("user_id")
+        except AuthenticationError:
+            # Token was present but invalid/expired. We still want to
+            # clear the cookie. Skip the token_version bump and audit
+            # emit because we cannot identify the actor reliably.
+            _logger.info("auth_logout_invalid_token_present")
+        except Exception as exc:  # pragma: no cover - defensive
+            # Never let cookie decode failure break logout.
+            _logger.warning(
+                "auth_logout_decode_failed",
+                error=type(exc).__name__,
+            )
+
+    # If the token decoded successfully, atomically:
+    #   1. Increment ``users.token_version`` so previously minted JWTs
+    #      become stale (the auth middleware rejects them on the next
+    #      request).
+    #   2. Emit the F-013 ``authentication`` audit event for the
+    #      logout, paired with the corresponding login event minted
+    #      at the start of the session.
+    #
+    # Both operations are inside a single transaction; per AAP
+    # section 0.7.1 invariant 6 (Atomic state-change + audit pair),
+    # rollback of either rolls back both.
+    if actor_user_id:
         try:
             with db.session() as db_session, db_session.begin():
-                emit_audit_event(
-                    db_session=db_session,
-                    event_type=AuditEventType.AUTHENTICATION,
-                    actor_user_id=session.user_id,
-                    target_record_id=None,
-                    before_payload=None,
-                    after_payload={
-                        "method": "logout",
-                        "outcome": "success",
-                    },
-                )
-            _logger.info(
-                "auth_logout_succeeded",
-                user_id=str(session.user_id),
-            )
+                user = db_session.get(User, uuid.UUID(str(actor_user_id)))
+                if user is not None:
+                    # Bump token_version to invalidate every JWT
+                    # minted prior to this logout. This is the
+                    # server-side mechanism specified by AAP
+                    # section 0.7.4 ("Tokens rotated on logout.").
+                    user.token_version = int(user.token_version or 0) + 1
+                    emit_audit_event(
+                        db_session=db_session,
+                        event_type=AuditEventType.AUTHENTICATION,
+                        actor_user_id=user.id,
+                        target_record_id=None,
+                        before_payload=None,
+                        after_payload={
+                            "method": "logout",
+                            "outcome": "success",
+                        },
+                    )
+                    _logger.info(
+                        "auth_logout_succeeded",
+                        user_id=str(user.id),
+                        new_token_version=user.token_version,
+                    )
         except Exception as exc:  # pragma: no cover - defensive
-            # Never fail logout because of an audit problem - the
+            # Never fail logout because of a DB problem - the
             # browser-side cookie clear must always succeed. Log the
-            # audit failure for forensic follow-up.
+            # failure for forensic follow-up so operators can
+            # reconcile the audit trail.
             _logger.error(
-                "auth_logout_audit_failed",
-                user_id=str(session.user_id),
+                "auth_logout_persistence_failed",
                 error=type(exc).__name__,
             )
 
@@ -437,7 +496,6 @@ def logout() -> tuple[Response, int]:
     # cookie definition and removes it. ``max_age=0`` causes
     # immediate expiry; setting ``value=""`` makes the cookie value
     # empty in the rare case the browser does not honor max_age=0.
-    cookie_kwargs = _session_cookie_kwargs()
     cookie_kwargs["max_age"] = 0
     response.set_cookie(value="", **cookie_kwargs)
 
@@ -480,9 +538,17 @@ def google_start() -> Response:
     google_client = oauth.create_client("google")
     if google_client is None:
         # Google is not configured - return a 503 telling the SPA
-        # to fall back to the email/password form.
+        # to fall back to the email/password form. Per AAP section
+        # 0.4.3, configuration gaps on optional dependencies surface
+        # as 503 (Service Unavailable) NEVER as 500 (Internal Server
+        # Error): a 500 implies a server-side defect that engineers
+        # must debug, while a 503 communicates a known environmental
+        # condition that operators must address by populating
+        # ``GOOGLE_OAUTH_CLIENT_ID``/``CLIENT_SECRET``.
         _logger.warning("auth_google_start_unavailable")
-        raise AppError(message="Google OAuth is not configured on this server.")
+        raise ServiceUnavailableError(
+            message="Google OAuth is not configured on this server.",
+        )
 
     # Step 1: generate state. ``secrets.token_hex`` produces a
     # cryptographically secure URL-safe string. 32 bytes -> 64 hex
@@ -647,8 +713,13 @@ def google_callback() -> tuple[Response, int] | Response:
     # ``userinfo`` from the ID token's claims.
     google_client = oauth.create_client("google")
     if google_client is None:
+        # Per AAP section 0.4.3, configuration gaps on optional
+        # dependencies surface as 503, never 500. See ``google_start``
+        # for full rationale.
         _logger.error("auth_google_callback_client_unconfigured")
-        raise AppError(message="Google OAuth is not configured on this server.")
+        raise ServiceUnavailableError(
+            message="Google OAuth is not configured on this server.",
+        )
 
     try:
         # Authlib requires the code_verifier to be present in either

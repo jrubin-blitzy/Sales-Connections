@@ -184,20 +184,24 @@ class Session:
     checks while still satisfying the documented "role: str" contract.
 
     Optional fields:
-        email         User's email at login time (denormalized for fast
-                      log/metric labels; NOT used for authorization).
-        display_name  User's display name (denormalized; surfaced in
-                      Owner attribution alongside ``owner_user_id`` but
-                      NOT authoritative for owner identity).
-        issued_at     JWT ``iat`` claim, ISO-8601 UTC string (or empty
-                      when not provided by the verifier).
-        expires_at    JWT ``exp`` claim, ISO-8601 UTC string (or empty
-                      when not provided by the verifier).
-        raw_claims    Defensive escape hatch holding the full JWT
-                      payload for debugging / forensic logging without
-                      re-decoding the token. The structlog redactor
-                      filters secret-named keys, so storing raw claims
-                      here is safe.
+        email          User's email at login time (denormalized for fast
+                       log/metric labels; NOT used for authorization).
+        display_name   User's display name (denormalized; surfaced in
+                       Owner attribution alongside ``owner_user_id`` but
+                       NOT authoritative for owner identity).
+        token_version  JWT ``tv`` claim. The auth middleware compares
+                       this against ``users.token_version`` on every
+                       protected request and rejects (401) any JWT
+                       whose ``tv`` is stale.
+        issued_at      JWT ``iat`` claim, ISO-8601 UTC string (or empty
+                       when not provided by the verifier).
+        expires_at     JWT ``exp`` claim, ISO-8601 UTC string (or empty
+                       when not provided by the verifier).
+        raw_claims     Defensive escape hatch holding the full JWT
+                       payload for debugging / forensic logging without
+                       re-decoding the token. The structlog redactor
+                       filters secret-named keys, so storing raw claims
+                       here is safe.
 
     The dataclass is ``frozen=True`` so handlers cannot accidentally
     mutate the session mid-request (which would cause race conditions
@@ -211,6 +215,7 @@ class Session:
     role: UserRole
     email: str = ""
     display_name: str = ""
+    token_version: int = 0
     issued_at: str = ""
     expires_at: str = ""
     raw_claims: dict[str, Any] = field(default_factory=dict)
@@ -301,6 +306,77 @@ def _extract_token(req: Request, cookie_name: str) -> str | None:
     return None
 
 
+def _verify_token_version(session: Session) -> bool:
+    """Confirm the session JWT's ``tv`` claim matches the live DB value.
+
+    Per AAP section 0.7.4 (Security Invariants), the per-user
+    ``token_version`` is the ONLY mechanism that can invalidate an
+    in-flight JWT before its natural expiry. Logout (and any future
+    revocation event such as a forced sign-out or password change)
+    increments ``users.token_version``; this function MUST reject any
+    JWT whose ``tv`` claim is below the current stored value.
+
+    Implementation notes:
+        * Uses ``app.extensions.db.session()`` to open a fresh
+          short-lived session. The query is a single PK lookup on
+          ``users.id`` which the database services in <1 ms at any
+          tenant scale. We deliberately do NOT reuse a long-lived
+          per-request session because the auth middleware fires
+          BEFORE the request handler establishes its own session
+          context; opening here keeps the lifecycle local.
+        * Returns ``True`` when the user is found AND
+          ``user.token_version == session.token_version`` (typical
+          case). Returns ``False`` when the user does not exist
+          (e.g., the user was hard-deleted between mint and verify)
+          OR the stored version is greater than the JWT's ``tv``
+          (the user has logged out / had their session revoked).
+        * Defensive: any unexpected exception is treated as
+          verification failure (return ``False``). The rationale is
+          that an unrecoverable DB error during auth is itself a
+          fail-safe condition - we MUST NOT silently admit a JWT we
+          could not verify.
+
+    Args:
+        session: The typed :class:`Session` reconstructed from the
+            verified JWT claims via :func:`_build_session_from_claims`.
+
+    Returns:
+        ``True`` if the JWT's ``tv`` claim matches the user's live
+        ``token_version`` in the database; ``False`` otherwise.
+    """
+    # Lazy imports keep the auth-middleware module compile-safe when
+    # the database extension is not available (e.g., tests of the
+    # middleware in isolation).
+    from sqlalchemy import select  # noqa: PLC0415
+
+    from app.extensions import db  # noqa: PLC0415
+    from app.models.user import User  # noqa: PLC0415
+
+    try:
+        with db.session() as db_session:
+            stored = db_session.scalar(
+                # Only fetch the token_version column; avoid loading
+                # the full User row to keep this hot-path query
+                # minimal. ``select(User.token_version).where(...)``
+                # produces a SELECT of a single integer column.
+                select(User.token_version).where(User.id == session.user_id)
+            )
+    except Exception:
+        # Any DB-level failure during auth verification is treated
+        # as a hard reject. We deliberately catch broad Exception
+        # here because admitting a request whose token-version we
+        # could not verify would defeat the rotation invariant.
+        # The broad catch is intentional fail-safety, not lazy
+        # error handling.
+        return False
+
+    if stored is None:
+        # User no longer exists. The JWT references a deleted account.
+        return False
+
+    return int(stored) == int(session.token_version)
+
+
 def _build_session_from_claims(claims: dict[str, Any]) -> Session:
     """Construct a typed ``Session`` from a verified JWT claims dict.
 
@@ -351,12 +427,23 @@ def _build_session_from_claims(claims: dict[str, Any]) -> Session:
     except (KeyError, ValueError) as exc:
         raise ValueError("session JWT missing/invalid role claim") from exc
 
+    # token_version (``tv``) is required - per AAP section 0.7.4 the
+    # token-version mechanism is the only way logout can invalidate
+    # an in-flight JWT. ``verify_session_jwt`` already validated
+    # presence and shape; we coerce to int defensively.
+    try:
+        tv_raw = claims["tv"]
+        token_version = int(tv_raw)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("session JWT missing/invalid tv claim") from exc
+
     return Session(
         user_id=user_id,
         org_id=org_id,
         role=role,
         email=str(claims.get("email", "")),
         display_name=str(claims.get("display_name", "")),
+        token_version=token_version,
         issued_at=str(claims.get("iat", "")),
         expires_at=str(claims.get("exp", "")),
         # Defensive copy so subsequent mutation of the claims dict by
@@ -468,6 +555,29 @@ def _before_request_authenticate() -> None:
             error=str(exc),
         )
         raise AuthError(message="Session token has malformed claims.") from exc
+
+    # Per AAP section 0.7.4 (Security Invariants): "Tokens rotated on
+    # logout. Logout invalidates the cookie and (for the email/password
+    # flow) advances the per-user signing-key version."
+    #
+    # We MUST compare the JWT's ``tv`` claim against the live
+    # ``users.token_version`` value on every protected request. A
+    # mismatch means the user has logged out (or had their token_version
+    # bumped for any other revocation reason) AFTER this JWT was minted;
+    # the token must therefore be rejected even though its signature
+    # and expiry are still valid.
+    #
+    # The DB read is cheap: a single PK lookup on the indexed
+    # ``users.id`` column, sub-millisecond at any tenant scale. The
+    # added latency is well within the AAP's per-request budget.
+    if not _verify_token_version(session):
+        logger.info(
+            "auth_token_version_stale",
+            path=path,
+            method=request.method,
+            user_id=str(session.user_id),
+        )
+        raise AuthError(message="Session has been invalidated; please log in again.")
 
     # Stash the typed session on ``g`` so downstream handlers and the
     # RBAC decorator can read it via ``g.session``.

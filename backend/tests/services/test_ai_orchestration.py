@@ -9,7 +9,7 @@ This file exercises:
       ``langchain_anthropic`` are LAZY imports.
     - Outcome metrics: ``ai_request_duration_seconds.labels(outcome=...)``
       is observed for success, timeout, error, and validation paths.
-    - Error handling: provider 5xx -> AIServiceUnavailableError(code='ai_error').
+    - Error handling: provider 5xx -> AIServiceUnavailableError(code='ai_unavailable').
 
 Markers:
     - ``@pytest.mark.unit`` for pure-function and mocking-only tests.
@@ -974,7 +974,7 @@ class TestProviderErrors:
 
     The production code catches any non-timeout exception from
     ``_invoke_with_timeout`` and re-raises as
-    ``AIServiceUnavailableError(code='ai_error', status_code=502)``.
+    ``AIServiceUnavailableError(code='ai_unavailable', status_code=502)``.
     Both happen synchronously in the same thread that holds the Flask
     app context, so the catch reaches the original cause via
     ``__cause__``.

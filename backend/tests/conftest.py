@@ -201,6 +201,86 @@ def _create_schema_directly(database_url: str) -> None:
     engine.dispose()
 
 
+def _provision_app_role(database_url: str) -> None:
+    """Best-effort provision of the ``sales_connections_app`` role.
+
+    Per AAP section 0.7.1 invariant 5 (Append-only audit table) the
+    Alembic migration grants SELECT, INSERT and revokes UPDATE,
+    DELETE, TRUNCATE on ``audit_events`` for an application role
+    distinct from the database OWNER. The migration creates the role
+    when it doesn't exist, but only if the connecting role has
+    CREATEROLE privilege; in environments where it does not, this
+    helper attempts the same provisioning as a no-op safety net so
+    integration tests of the append-only invariant can connect AS
+    the app role without provisioning steps outside pytest.
+
+    The function NEVER fails the test session - any
+    ``insufficient_privilege`` or other DDL error is swallowed; the
+    test that depends on the role's existence will fail with a clear
+    ``permission denied`` instead of a confusing setup-time crash.
+
+    Args:
+        database_url: SQLAlchemy DSN for the test database.
+    """
+    from sqlalchemy import create_engine  # noqa: PLC0415
+
+    app_role = os.environ.get("APP_DB_ROLE", "sales_connections_app")
+    app_password = os.environ.get("APP_DB_PASSWORD", "sales_connections_app_dev")
+    engine = create_engine(database_url)
+    try:
+        with engine.begin() as conn:
+            # First, attempt CREATE ROLE. The DO block silently skips
+            # when the role already exists or the connecting role
+            # lacks CREATEROLE privilege.
+            conn.execute(
+                text(
+                    f"""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT FROM pg_roles WHERE rolname = '{app_role}'
+                        ) THEN
+                            BEGIN
+                                EXECUTE format(
+                                    'CREATE ROLE %I LOGIN PASSWORD %L',
+                                    '{app_role}',
+                                    '{app_password}'
+                                );
+                            EXCEPTION
+                                WHEN insufficient_privilege THEN
+                                    RAISE NOTICE
+                                        'Cannot CREATE ROLE %; skipping. '
+                                        'Run as a role with CREATEROLE for '
+                                        'tests of the audit-immutability '
+                                        'invariant to connect as this role.',
+                                        '{app_role}';
+                                WHEN unique_violation THEN
+                                    NULL;
+                            END;
+                        END IF;
+                    END$$;
+                    """
+                )
+            )
+    except Exception as exc:
+        # Test session must continue even if role provisioning fails.
+        # We capture and stringify the exception into a stdlib log so
+        # CI runs surface diagnostic information when the
+        # provisioning is silently skipped (e.g., the connecting
+        # role lacks CREATEROLE in a sandboxed CI environment).
+        # Bind the exception to a local so the structlog-bridge
+        # processor chain captures the failure type without echoing
+        # any arbitrary detail.
+        import logging as _logging  # noqa: PLC0415
+
+        _logging.getLogger(__name__).warning(
+            "test_app_role_provisioning_failed",
+            extra={"error_class": type(exc).__name__},
+        )
+    finally:
+        engine.dispose()
+
+
 # ===========================================================================
 # Fixture: Flask application factory
 # ===========================================================================
@@ -268,6 +348,12 @@ def _setup_test_database() -> Generator[None, None, None]:
     the suite can still run.
     """
     database_url = TestingConfig.DATABASE_URL
+    # Best-effort provision of the application role BEFORE running
+    # the migration. The migration's PHASE 2 also attempts CREATE
+    # ROLE, but its CREATEROLE-check is silent; doing it here too
+    # gives integration tests of the append-only invariant the same
+    # provisioning surface they would have in a production deploy.
+    _provision_app_role(database_url)
     try:
         _run_alembic_upgrade(database_url)
     except Exception:
@@ -455,8 +541,20 @@ def organization(
     factory calls (which default to a fresh OrganizationFactory)
     can override the default by passing ``organization=organization``
     explicitly.
+
+    Idempotent: when the Alembic ``0001_initial_schema`` migration
+    successfully runs (i.e., does not fall back to
+    :func:`_create_schema_directly`) it seeds the default Org row
+    via its PHASE C ``ON CONFLICT DO NOTHING`` insert. The
+    per-test ``TRUNCATE`` in :func:`db_session` clears that row,
+    but the fixture handles both states by checking for an
+    existing row before creating one.
     """
     from app.models import Organization  # noqa: PLC0415
+
+    existing = db_session.get(Organization, _DEFAULT_ORG_ID)
+    if existing is not None:
+        return existing
 
     org = Organization(
         id=_DEFAULT_ORG_ID,

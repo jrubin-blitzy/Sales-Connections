@@ -101,6 +101,21 @@ from app.services.auth import (
 )
 
 # ---------------------------------------------------------------------------
+# Connection record service (F-001)
+# ---------------------------------------------------------------------------
+# ``create_record`` is the sole writer of new ``records`` rows, opening
+# its own ``with session.begin():`` block and emitting the
+# corresponding ``CREATE`` audit event in the same transaction per AAP
+# Section 0.7.1 invariant 6 (atomic state-change + audit pair).
+# ``DuplicateRecordError`` is the AppError subclass raised when the
+# unique partial index on ``normalized_linkedin_url`` fires (mapped to
+# HTTP 409).
+from app.services.connections import (
+    DuplicateRecordError,
+    create_record,
+)
+
+# ---------------------------------------------------------------------------
 # Duplicate detection (F-010)
 # ---------------------------------------------------------------------------
 # ``find_duplicate`` queries the unique partial index
@@ -114,9 +129,11 @@ __all__ = [
     "AIServiceUnavailableError",
     "AuditEmissionError",
     "AuthenticationError",
+    "DuplicateRecordError",
     "LastAdminError",
     "SelfDemotionError",
     "authenticate_password",
+    "create_record",
     "emit_audit_event",
     "find_duplicate",
     "generate_outreach_notes",

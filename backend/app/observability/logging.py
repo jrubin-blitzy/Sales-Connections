@@ -168,9 +168,56 @@ _initialized: bool = False
 
 __all__ = [
     "add_open_telemetry_context",
+    "add_stdlib_record_extras",
     "configure_structlog",
     "redact_secrets_processor",
 ]
+
+
+# Standard ``logging.LogRecord`` attributes that are populated by the
+# stdlib logger itself. Anything in the LogRecord's ``__dict__`` that
+# is NOT in this set was added by a caller via the ``extra={...}``
+# kwarg on ``logger.info(...)`` or similar; that diagnostic context
+# MUST be promoted into the structlog event dict so it surfaces in the
+# JSON log line. Per AAP Section 0.7.5 (Observability rule), every
+# state-changing event MUST log identifying context with the operator
+# (e.g., ``user_id``, ``required_roles``, ``tag_id``); without this
+# extraction step those diagnostics are silently dropped.
+_STDLIB_LOG_RECORD_RESERVED_ATTRS: frozenset[str] = frozenset(
+    {
+        # Standard LogRecord attributes from CPython's
+        # ``logging.LogRecord.__init__`` and downstream computed
+        # attributes. Sourced from
+        # https://docs.python.org/3/library/logging.html#logrecord-attributes
+        "args",
+        "asctime",
+        "created",
+        "exc_info",
+        "exc_text",
+        "filename",
+        "funcName",
+        "levelname",
+        "levelno",
+        "lineno",
+        "message",
+        "module",
+        "msecs",
+        "msg",
+        "name",
+        "pathname",
+        "process",
+        "processName",
+        "relativeCreated",
+        "stack_info",
+        "thread",
+        "threadName",
+        # Python 3.12+ ``taskName`` for asyncio task identification.
+        "taskName",
+        # structlog's own bridging signals - never propagate these.
+        "_record",
+        "_from_structlog",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +259,77 @@ def redact_secrets_processor(
         The mutated event_dict.
     """
     _redact_in_place(event_dict)
+    return event_dict
+
+
+def add_stdlib_record_extras(
+    logger: WrappedLogger,
+    method_name: str,
+    event_dict: EventDict,
+) -> EventDict:
+    """Promote stdlib ``LogRecord`` ``extra={...}`` kwargs into the event dict.
+
+    When a Python stdlib ``logging`` call is bridged through structlog's
+    :class:`structlog.stdlib.ProcessorFormatter`, the original
+    :class:`logging.LogRecord` is exposed on the event dict under the
+    ``_record`` key. Any attributes added to that record via the
+    ``extra={...}`` kwarg on ``logger.info("event_name", extra={"key":
+    "value"})`` end up as instance attributes on the LogRecord but are
+    NOT, by default, copied into the structlog event dict. The result
+    is that operators see ``"event_name"`` in the JSON output but the
+    ``key/value`` pairs they explicitly attached as forensic context
+    are silently dropped.
+
+    Per AAP Section 0.7.5 (Observability rule), every state-changing
+    event MUST log structured diagnostic context (``user_id``,
+    ``required_roles``, ``tag_id``, ``handler``, etc.). This
+    processor ensures that context survives the stdlib->structlog
+    bridge by walking the LogRecord's ``__dict__`` and copying every
+    non-standard attribute (i.e., everything not in the canonical
+    LogRecord field set) into the event dict.
+
+    Native structlog records (those produced via
+    ``structlog.get_logger(...)``) do not carry a ``_record`` key, so
+    this processor is a no-op for them. That is correct: native
+    structlog records already include their kwargs in the event dict
+    by construction; only the stdlib bridge needs the extraction.
+
+    Args:
+        logger: The wrapped logger emitting the record. Unused; the
+            signature is mandated by the structlog processor protocol.
+        method_name: The level-named method invoked on the logger
+            (``"info"``, ``"warning"``, etc.). Unused here.
+        event_dict: The mutable event dict assembled by upstream
+            processors. Mutated in place; same instance is returned.
+
+    Returns:
+        The mutated event_dict. When no stdlib record is attached
+        (native structlog path), the event_dict is returned unchanged.
+    """
+    # ``_record`` is set by ``ProcessorFormatter.format`` when a stdlib
+    # record is being bridged. Native structlog records never set it.
+    record = event_dict.get("_record")
+    if record is None:
+        return event_dict
+    # ``record.__dict__`` contains every attribute set on the LogRecord
+    # at construction time (standard fields populated by the stdlib
+    # logger itself) PLUS any keys supplied by the caller via the
+    # ``extra={...}`` kwarg (which CPython's logging module adds as
+    # individual instance attributes at LogRecord creation time, not as
+    # a nested ``extra`` mapping). We promote only the non-standard
+    # attributes; standard fields are already known to the renderer
+    # and either already in the event_dict or intentionally elided.
+    record_dict: dict[str, Any] = getattr(record, "__dict__", {})
+    for key, value in record_dict.items():
+        # Skip standard LogRecord attributes (would clobber renderer
+        # output) and any private/dunder names defensively.
+        if key in _STDLIB_LOG_RECORD_RESERVED_ATTRS or key.startswith("_"):
+            continue
+        # ``setdefault`` so a caller that explicitly bound a key via
+        # structlog's contextvars (for the same record name) takes
+        # precedence over the stdlib ``extra`` value. This is the same
+        # precedence ordering used by ``add_open_telemetry_context``.
+        event_dict.setdefault(key, value)
     return event_dict
 
 
@@ -377,6 +495,14 @@ def _build_processor_chain(log_format: str, log_level_int: int) -> list[Processo
         add_logger_name,
         add_log_level,
         TimeStamper(fmt="iso", utc=True),
+        # Promote stdlib ``LogRecord`` ``extra={...}`` kwargs into the
+        # event dict. No-op for native structlog records (which carry
+        # no ``_record`` key); critical for stdlib-bridged records so
+        # forensic context (``user_id``, ``required_roles``,
+        # ``tag_id``, ``handler``, ...) reaches the JSON output.
+        # Placed BEFORE redaction so any secret-named ``extra`` keys
+        # go through the redactor.
+        add_stdlib_record_extras,
         add_open_telemetry_context,
         StackInfoRenderer(),
         format_exc_info,
@@ -504,19 +630,22 @@ def configure_structlog(
 
     Processor chain (production, ``log_format="json"``):
 
-    1. ``filter_by_level``      Drop records below the configured level.
-    2. ``merge_contextvars``    Surface bound contextvars
-       (``correlation_id``, ``user_id``, ``org_id``).
-    3. ``add_logger_name``      Add ``logger`` name field.
-    4. ``add_log_level``        Add ``level`` field.
-    5. ``TimeStamper``          ISO-8601 UTC timestamp.
-    6. ``add_open_telemetry_context``  Add ``trace_id``/``span_id`` when
-       a span is active.
-    7. ``StackInfoRenderer``    Format stack info if requested.
-    8. ``format_exc_info``      Render traceback to ``exception`` field.
-    9. ``UnicodeDecoder``       Decode any bytes in event_dict.
-    10. ``redact_secrets_processor``  Replace secret-named values.
-    11. ``ProcessorFormatter.wrap_for_formatter``  Hand off to the
+    1.  ``filter_by_level``      Drop records below the configured level.
+    2.  ``merge_contextvars``    Surface bound contextvars
+        (``correlation_id``, ``user_id``, ``org_id``).
+    3.  ``add_logger_name``      Add ``logger`` name field.
+    4.  ``add_log_level``        Add ``level`` field.
+    5.  ``TimeStamper``          ISO-8601 UTC timestamp.
+    6.  ``add_stdlib_record_extras``  Promote stdlib LogRecord
+        ``extra={...}`` kwargs into the event dict (no-op for native
+        structlog records; critical for stdlib-bridged records).
+    7.  ``add_open_telemetry_context``  Add ``trace_id``/``span_id`` when
+        a span is active.
+    8.  ``StackInfoRenderer``    Format stack info if requested.
+    9.  ``format_exc_info``      Render traceback to ``exception`` field.
+    10. ``UnicodeDecoder``       Decode any bytes in event_dict.
+    11. ``redact_secrets_processor``  Replace secret-named values.
+    12. ``ProcessorFormatter.wrap_for_formatter``  Hand off to the
         stdlib ``ProcessorFormatter`` so the final renderer is applied
         exactly once for BOTH native structlog records and foreign
         stdlib records.
@@ -575,6 +704,15 @@ def configure_structlog(
         add_logger_name,
         add_log_level,
         TimeStamper(fmt="iso", utc=True),
+        # Promote stdlib ``LogRecord`` ``extra={...}`` kwargs into the
+        # event dict for foreign (stdlib-bridged) records. Without this
+        # processor, every ``_logger.info("event", extra={...})`` call
+        # site would have its diagnostic context silently dropped from
+        # the JSON output. See ``add_stdlib_record_extras`` docstring.
+        # Placed BEFORE ``redact_secrets_processor`` so any
+        # secret-named ``extra`` keys (e.g., ``api_key``) are redacted
+        # before rendering.
+        add_stdlib_record_extras,
         add_open_telemetry_context,
         StackInfoRenderer(),
         format_exc_info,

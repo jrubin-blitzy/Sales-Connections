@@ -129,6 +129,14 @@ ERROR_CODE_NOT_FOUND: str = "not_found"
 ERROR_CODE_CONFLICT: str = "conflict"
 ERROR_CODE_INTERNAL: str = "internal_error"
 ERROR_CODE_HTTP_GENERIC: str = "http_error"
+# Stable code for HTTP 503 (Service Unavailable). Used when an
+# upstream dependency (Google OAuth, Anthropic, RDS) is misconfigured
+# or temporarily unreachable. Per AAP section 0.4.3, configuration
+# gaps on optional dependencies surface as 503, never 500: a 500
+# implies a server-side bug needing engineering attention, while a
+# 503 lets the SPA render a non-blocking "feature unavailable"
+# affordance and lets the operator know the issue is environmental.
+ERROR_CODE_SERVICE_UNAVAILABLE: str = "service_unavailable"
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +149,15 @@ ERROR_CODE_HTTP_GENERIC: str = "http_error"
 _GENERIC_INTERNAL_ERROR_MESSAGE: str = (
     "An unexpected error occurred. Please try again or contact support "
     "with the correlation_id from this response."
+)
+
+# Generic 503 message used when an optional upstream dependency
+# (Google OAuth, Anthropic, RDS) is misconfigured or temporarily
+# unreachable. The SPA renders a non-blocking "feature unavailable"
+# affordance for these so the user can continue with alternative
+# flows (e.g., email/password fallback for OAuth).
+_GENERIC_SERVICE_UNAVAILABLE_MESSAGE: str = (
+    "This feature is temporarily unavailable. Please try again later."
 )
 
 # Generic 401 message used when the auth middleware rejects a request
@@ -168,6 +185,7 @@ __all__ = [
     "ERROR_CODE_HTTP_GENERIC",
     "ERROR_CODE_INTERNAL",
     "ERROR_CODE_NOT_FOUND",
+    "ERROR_CODE_SERVICE_UNAVAILABLE",
     "ERROR_CODE_UNAUTHORIZED",
     "ERROR_CODE_VALIDATION",
     "AppError",
@@ -175,6 +193,7 @@ __all__ = [
     "ConflictError",
     "ForbiddenError",
     "NotFoundError",
+    "ServiceUnavailableError",
     "ValidationFailedError",
     "build_error_response",
     "register_error_handlers",
@@ -358,6 +377,38 @@ class ConflictError(AppError):
     def default_message(self) -> str:
         """Return the default conflict message."""
         return "The request conflicts with the current state of the resource."
+
+
+class ServiceUnavailableError(AppError):
+    """Raised when an upstream dependency is misconfigured or unreachable.
+
+    Mapped to HTTP 503 with ``error.code = "service_unavailable"``.
+    Per AAP section 0.4.3, configuration gaps on optional dependencies
+    (e.g., ``GOOGLE_OAUTH_CLIENT_ID`` empty) surface as 503, never as
+    500. A 500 implies a server-side defect that engineers must
+    debug; a 503 communicates a known environmental condition that
+    operators must address by configuring the dependency.
+
+    Use cases:
+        * Google OAuth not configured (``oauth.create_client('google')``
+          returns ``None``) - the SPA falls back to email/password.
+        * Anthropic API key empty (``ANTHROPIC_API_KEY`` not set) -
+          the SPA renders a non-blocking "AI unavailable" affordance.
+        * RDS readiness probe failure - downstream load balancers
+          drain traffic from the unhealthy task.
+
+    Subclasses or callers SHOULD pass an explicit ``message`` and
+    optionally override ``error_code`` for finer-grained dispatch
+    (e.g., ``"oauth_not_configured"``).
+    """
+
+    status_code: int = http.HTTPStatus.SERVICE_UNAVAILABLE.value  # 503
+    error_code: str = ERROR_CODE_SERVICE_UNAVAILABLE
+
+    @property
+    def default_message(self) -> str:
+        """Return the generic 503 message."""
+        return _GENERIC_SERVICE_UNAVAILABLE_MESSAGE
 
 
 # ---------------------------------------------------------------------------

@@ -37,9 +37,9 @@ Security:
 - Provider failures (timeout, error, misconfiguration) raise
   ``AIServiceUnavailableError`` carrying a per-instance
   ``status_code`` (504/503/502) and stable ``error_code``
-  (``ai_timeout``/``ai_not_configured``/``ai_error``); the API layer
-  surfaces this as a non-blocking warning per AAP Section 0.4.4 (AI
-  failure must NOT block form submission).
+  (``ai_timeout``/``ai_not_configured``/``ai_unavailable``); the API
+  layer surfaces this as a non-blocking warning per AAP Section
+  0.4.4 (AI failure must NOT block form submission).
 
 Architectural notes:
 
@@ -264,7 +264,7 @@ class AIServiceUnavailableError(AppError):
 
     - ``code="ai_timeout"`` / ``status_code=504`` -- the provider did
       not respond within the configured timeout.
-    - ``code="ai_error"`` / ``status_code=502`` -- the provider
+    - ``code="ai_unavailable"`` / ``status_code=502`` -- the provider
       responded with an error or the SDK raised a non-timeout
       exception.
     - ``code="ai_not_configured"`` / ``status_code=503`` -- the
@@ -290,9 +290,8 @@ class AIServiceUnavailableError(AppError):
         status_code: HTTP status code (504 / 503 / 502) -- shadows
             the class attribute set by the parent ``AppError``.
         error_code: Stable error code (``ai_timeout`` /
-            ``ai_not_configured`` / ``ai_error`` /
-            ``ai_unavailable``) -- shadows the class attribute set by
-            the parent.
+            ``ai_not_configured`` / ``ai_unavailable``) -- shadows
+            the class attribute set by the parent.
         message: User-facing message inherited from
             ``AppError.__init__``.
         fields: Empty list inherited from ``AppError.__init__`` -- AI
@@ -320,9 +319,8 @@ class AIServiceUnavailableError(AppError):
                 configured timeout.").
             code: Stable error code consumed by the SPA's typed
                 ``ApiError`` dispatch. Expected values:
-                ``ai_timeout`` (504), ``ai_error`` (502),
-                ``ai_not_configured`` (503), ``ai_unavailable``
-                (catch-all default).
+                ``ai_timeout`` (504), ``ai_unavailable`` (502 /
+                catch-all default), ``ai_not_configured`` (503).
             status_code: HTTP status code for the response envelope.
                 504 indicates the provider timed out; 503 indicates
                 misconfiguration; 502 indicates an upstream error.
@@ -511,7 +509,7 @@ def generate_outreach_notes(
            ``AIServiceUnavailableError(code="ai_timeout",
            status_code=504)``.
         7. On any other exception, observe an ``error`` outcome and
-           raise ``AIServiceUnavailableError(code="ai_error",
+           raise ``AIServiceUnavailableError(code="ai_unavailable",
            status_code=502)``. The original exception is chained via
            ``__cause__`` so engineers can debug from CloudWatch via
            the correlation ID.
@@ -638,7 +636,7 @@ def generate_outreach_notes(
     except Exception as exc:
         # Any other exception class -- network error, SDK exception,
         # invalid response shape, etc. -- is mapped to HTTP 502 with
-        # stable code ``ai_error``. The exception class name is
+        # stable code ``ai_unavailable``. The exception class name is
         # logged so engineers can identify the failure mode without
         # the full traceback (which the catch-all handler in
         # ``error_handlers`` will log separately at error level).
@@ -651,7 +649,7 @@ def generate_outreach_notes(
         )
         raise AIServiceUnavailableError(
             message="AI provider returned an error.",
-            code="ai_error",
+            code="ai_unavailable",
             status_code=502,
         ) from exc
 
@@ -701,7 +699,7 @@ def _invoke_with_timeout(
        passed through Langchain's ``ChatAnthropic`` wrapper. Under
        normal conditions this fires first and raises an SDK-internal
        timeout exception, which the calling function maps to
-       ``AIServiceUnavailableError(code="ai_error")``.
+       ``AIServiceUnavailableError(code="ai_unavailable")``.
     2. As defense-in-depth, the call runs in the bounded
        ``_AI_THREAD_POOL`` and the calling thread enforces
        ``timeout_s + _WATCHDOG_GRACE_SECONDS`` via
@@ -820,7 +818,7 @@ def _call_chat_anthropic(
     Raises:
         RuntimeError: the SDK returned ``None`` content or an
             unrecognized content shape. Caught by the caller and
-            mapped to ``AIServiceUnavailableError(code="ai_error")``.
+            mapped to ``AIServiceUnavailableError(code="ai_unavailable")``.
         Exception: any SDK or network-level exception propagates to
             the caller for mapping.
     """
@@ -900,7 +898,7 @@ def _call_chat_anthropic(
         return "".join(parts)
     if not isinstance(content, str):
         # An unrecognized content shape from the SDK. The caller
-        # maps this to ``AIServiceUnavailableError(code="ai_error")``.
+        # maps this to ``AIServiceUnavailableError(code="ai_unavailable")``.
         raise RuntimeError(f"Anthropic returned unexpected content type: {type(content).__name__}")
     return content
 

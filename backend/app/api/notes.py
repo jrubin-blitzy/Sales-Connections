@@ -43,7 +43,7 @@ Behaviour summary
 
   * 504 with ``error.code = "ai_timeout"`` (provider did not respond
     within the 5 s P95 budget per AAP s 0.7.3),
-  * 502 with ``error.code = "ai_error"`` (provider returned a
+  * 502 with ``error.code = "ai_unavailable"`` (provider returned a
     non-timeout error),
   * 503 with ``error.code = "ai_not_configured"`` (the
     ``ANTHROPIC_API_KEY`` Flask config value is empty).
@@ -316,11 +316,11 @@ def generate() -> tuple[Response, int]:
         }
 
     Failure response on AI provider error (HTTP 502, surfaced by
-    global handler from ``AIServiceUnavailableError(code="ai_error")``)::
+    global handler from ``AIServiceUnavailableError(code="ai_unavailable")``)::
 
         {
             "error": {
-                "code": "ai_error",
+                "code": "ai_unavailable",
                 "message": "AI provider returned an error.",
                 "correlation_id": "...",
                 "fields": [],
@@ -459,12 +459,13 @@ def generate() -> tuple[Response, int]:
     # timeout/error/misconfiguration it raises
     # ``AIServiceUnavailableError`` carrying per-instance
     # ``status_code`` (504/502/503) and ``error_code``
-    # (``ai_timeout``/``ai_error``/``ai_not_configured``) that the
-    # global ``AppError`` handler reads to produce the canonical
-    # envelope shape. We NEVER catch ``AIServiceUnavailableError``
-    # locally; letting it propagate preserves the thin-handler
-    # convention from AAP s 0.5.3 and centralizes envelope wiring
-    # in ``app.middleware.error_handlers``.
+    # (``ai_timeout``/``ai_unavailable``/``ai_not_configured``)
+    # that the global ``AppError`` handler reads to produce the
+    # canonical envelope shape. We NEVER catch
+    # ``AIServiceUnavailableError`` locally; letting it propagate
+    # preserves the thin-handler convention from AAP s 0.5.3 and
+    # centralizes envelope wiring in
+    # ``app.middleware.error_handlers``.
     #
     # The intermediate ``Any`` widens the static type so the
     # defensive isinstance branch below is fully reachable per

@@ -22,10 +22,15 @@ Wired blueprints (per AAP Sec 0.4.3 endpoint catalog):
 * :mod:`app.api.tags`    -> mounted under ``/api/tags`` so the routes
   at ``/`` (POST + GET) are reachable at
   ``GET /api/tags`` and ``POST /api/tags``.
+* :mod:`app.api.connections` -> mounted under ``/api/connections``;
+  the ``POST /api/connections`` route delivers F-001 (Connection
+  Idea Form) per AAP Section 0.5.2 Layer 3. Additional routes
+  (``GET``, ``PATCH``, ``DELETE``, ``GET /:id/history``,
+  ``GET /duplicate-check``) ship in Layers 4-6 by appending to the
+  same blueprint.
 
 Future blueprints (Checkpoint 4-5 deliverables):
 
-* :mod:`app.api.connections` -> mounted under ``/api/connections``.
 * :mod:`app.api.admin`       -> mounted under ``/api/admin``.
 
 Per AAP Section 0.5.2 (Layer 0), :func:`register_blueprints` is the
@@ -94,6 +99,7 @@ _PREFIX_AUTH: str = "/auth"
 _PREFIX_API: str = "/api"
 _PREFIX_NOTES: str = "/api/notes"
 _PREFIX_TAGS: str = "/api/tags"
+_PREFIX_CONNECTIONS: str = "/api/connections"
 
 
 __all__ = [
@@ -154,6 +160,7 @@ def register_blueprints(app: Flask) -> None:
     # the blueprints lazily here ensures the import graph is fully
     # constructed before Flask's blueprint-registration assertions run.
     from app.api.auth import auth_bp, me_bp  # noqa: PLC0415
+    from app.api.connections import connections_bp  # noqa: PLC0415
     from app.api.health import health_bp  # noqa: PLC0415
     from app.api.notes import notes_bp  # noqa: PLC0415
     from app.api.tags import tags_bp  # noqa: PLC0415
@@ -188,6 +195,14 @@ def register_blueprints(app: Flask) -> None:
     # default; the SPA hits ``/api/tags`` without a trailing slash.)
     app.register_blueprint(tags_bp, url_prefix=_PREFIX_TAGS)
 
+    # ----- Connection records (mounted at /api/connections) ----------
+    # The connections blueprint declares ``POST /`` (relative path)
+    # so the final URL is ``POST /api/connections``. Per AAP Section
+    # 0.5.2 Layer 3, this is the F-001 (Connection Idea Form)
+    # surface; additional routes for F-004/F-005/F-007/F-010/F-011
+    # are appended to the same blueprint as those layers ship.
+    app.register_blueprint(connections_bp, url_prefix=_PREFIX_CONNECTIONS)
+
     _stdlib_logger.info(
         "api_blueprints_registered",
         extra={
@@ -197,12 +212,14 @@ def register_blueprints(app: Flask) -> None:
                 "me",
                 "notes",
                 "tags",
+                "connections",
             ],
             "prefixes": {
                 "auth": _PREFIX_AUTH,
                 "me": _PREFIX_API,
                 "notes": _PREFIX_NOTES,
                 "tags": _PREFIX_TAGS,
+                "connections": _PREFIX_CONNECTIONS,
             },
         },
     )

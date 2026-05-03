@@ -271,11 +271,11 @@ class TestNotesGenerateAIFailures:
         authed_client: FlaskClient,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """AI provider error yields 502 with ai_error code."""
+        """AI provider error yields 502 with ai_unavailable code."""
 
         def _fake_error(payload, **_kwargs: object):
             raise AIServiceUnavailableError(
-                code="ai_error",
+                code="ai_unavailable",
                 message="Anthropic API error.",
                 status_code=502,
             )
@@ -292,7 +292,7 @@ class TestNotesGenerateAIFailures:
         )
         assert response.status_code == 502
         body = response.get_json()
-        assert body["error"]["code"] == "ai_error"
+        assert body["error"]["code"] == "ai_unavailable"
 
     def test_ai_not_configured_returns_503(
         self,

@@ -57,10 +57,12 @@ from sqlalchemy import (
     DateTime,
     Enum as SQLEnum,
     ForeignKey,
+    Integer,
     String,
     UniqueConstraint,
     Uuid,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship  # noqa: TC002
 
@@ -269,6 +271,40 @@ class User(Base):
     # chars) without a schema migration; bcrypt 4.x output is typically
     # 60 chars.
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # ------------------------------------------------------------------
+    # Token version (F-012 token-revocation mechanism)
+    # ------------------------------------------------------------------
+    # Per AAP section 0.7.4 (Security Invariants): "Tokens rotated on
+    # logout. Logout invalidates the cookie and (for the email/password
+    # flow) advances the per-user signing-key version."
+    #
+    # The ``token_version`` is monotonically incremented on logout, on
+    # forced sign-out (admin-initiated), on password change, and on
+    # role mutation. The session JWT carries the value as a ``tv``
+    # claim at mint time; the auth middleware rejects (401) any
+    # request whose JWT ``tv`` claim does not match the current
+    # database value.
+    #
+    # This is the single mechanism that lets a stolen JWT be
+    # invalidated server-side: without it, a compromised cookie
+    # remains valid until natural expiry (8 hours) regardless of any
+    # logout action, in violation of the AAP. See
+    # :mod:`app.middleware.auth` for the per-request comparison and
+    # :func:`app.api.auth.logout` for the increment site.
+    #
+    # ``server_default=text("0")`` ensures existing rows added prior
+    # to this migration get a deterministic baseline value at
+    # ``ALTER TABLE ... ADD COLUMN`` time, matching the application
+    # default. ``Integer`` (32-bit signed) gives a counter range of
+    # ~2 billion increments per user, far exceeding any practical
+    # rotation rate over the lifetime of an account.
+    token_version: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
 
     # ------------------------------------------------------------------
     # Authorization role (F-009)
