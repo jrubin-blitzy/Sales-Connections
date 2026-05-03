@@ -1,225 +1,374 @@
 /**
  * RoleGate.test.tsx - Vitest tests for the F-009 role-gating UI component.
  *
- * Targets `frontend/src/auth/RoleGate.tsx` - a UX-only courtesy component
- * that hides controls from users whose role does not match. Per AAP Sec
- * 0.7.1 invariant 7, this is NOT a security boundary. The tests verify:
+ * Targets `frontend/src/auth/RoleGate.tsx`. Per AAP Sec 0.7.1 invariant 7,
+ * RoleGate is the UX-only secondary defense layer; the backend's
+ * @requires_role decorator is the authoritative authorization gate. These
+ * tests verify the SECONDARY defense semantics:
  *
- *   - Renders children when session.user.role matches the role prop
- *   - Renders fallback when role does not match
- *   - Renders null when role does not match and no fallback
- *   - Single-role string and array-of-roles both work (OR semantics)
- *   - Null session (unauthenticated) hides children
- *   - Multi-role array admits when ANY role matches
- *   - Hides Admin-only UI from Contributor/Viewer
- *   - Hides Viewer-only UI from Contributor (sales rep status mutation)
+ *   - Single allowed role renders children.
+ *   - Single denied role hides children (or renders fallback when supplied).
+ *   - Array of allowed roles uses OR semantics: child renders if user
+ *     matches ANY entry.
+ *   - Array of denied roles hides children (or renders fallback).
+ *   - No-session state (role === null) hides children regardless of role
+ *     prop, including when the role array is empty.
+ *   - fallback prop renders when present and the gate is closed; renders
+ *     nothing when absent.
+ *   - Backend role names ('Admin' | 'Contributor' | 'Viewer') are honored;
+ *     'Sales Rep' is NOT a valid role string.
+ *   - children may be ANY ReactNode (string, single element, array, JSX
+ *     tree).
+ *
+ * Strategy: Mock `useRole` from '@/auth/AuthProvider' via vi.mock at module
+ * scope. Tests synchronously control what useRole() returns by calling
+ * vi.mocked(useRole).mockReturnValue({ role, has }) per case. This keeps
+ * the suite isolated from the production AuthProvider's TanStack Query
+ * round-trip; we only need synchronous control over useRole() to exercise
+ * RoleGate's rendering branches.
  */
 
-import { describe, it, expect } from "vitest";
+import { type ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
 
-import { RoleGate } from "@/auth/RoleGate";
-import type { SessionRead } from "@/schemas/auth";
-import { renderWithMockedSession, screen } from "../test-utils";
-
-// ---------------------------------------------------------------------------
-// Test fixtures
-// ---------------------------------------------------------------------------
-
-const adminSession: SessionRead = {
-  user: {
-    id: "00000000-0000-0000-0000-000000000001",
-    email: "admin@example.com",
-    display_name: "Admin User",
-    role: "Admin",
-    created_at: "2026-01-01T00:00:00Z",
-  },
-  authenticated: true,
-};
-
-const contributorSession: SessionRead = {
-  user: {
-    id: "00000000-0000-0000-0000-000000000002",
-    email: "contributor@example.com",
-    display_name: "Contributor User",
-    role: "Contributor",
-    created_at: "2026-01-01T00:00:00Z",
-  },
-  authenticated: true,
-};
-
-const viewerSession: SessionRead = {
-  user: {
-    id: "00000000-0000-0000-0000-000000000003",
-    email: "viewer@example.com",
-    display_name: "Viewer User",
-    role: "Viewer",
-    created_at: "2026-01-01T00:00:00Z",
-  },
-  authenticated: true,
-};
+import { RoleGate, type UserRole } from "@/auth/RoleGate";
+import { useRole, type UseRoleReturn } from "@/auth/AuthProvider";
 
 // ---------------------------------------------------------------------------
-// Tests
+// Module-scope vi.mock for @/auth/AuthProvider
+// ---------------------------------------------------------------------------
+//
+// CRITICAL: vi.mock calls at module scope are HOISTED by Vitest above any
+// imports, so the mock is in place when RoleGate.tsx resolves its
+// `import { useRole } from "@/auth/AuthProvider"` at module load time.
+//
+// We provide stubs for ALL exports of @/auth/AuthProvider (not just useRole)
+// so that any transitive import of the module from RoleGate.tsx or its
+// imports resolves cleanly without TypeScript errors. RoleGate.tsx only
+// directly uses `useRole`, but we mock the full export surface for safety.
+vi.mock("@/auth/AuthProvider", () => ({
+  AuthProvider: ({ children }: { children: ReactNode }) => children,
+  useRole: vi.fn<() => UseRoleReturn>(),
+  useSession: vi.fn(),
+  useSessionLoading: vi.fn(),
+  useLogout: vi.fn(),
+}));
+
+// ---------------------------------------------------------------------------
+// Helpers
 // ---------------------------------------------------------------------------
 
-describe("RoleGate", () => {
-  describe("single-role string", () => {
-    it("renders children when role matches", () => {
-      renderWithMockedSession(
-        <RoleGate role="Admin">
-          <button>Admin Action</button>
-        </RoleGate>,
-        adminSession,
-      );
-      expect(screen.getByRole("button", { name: "Admin Action" })).toBeInTheDocument();
-    });
+/**
+ * Build a UseRoleReturn matching the production useRole shape.
+ *
+ * The `has` predicate is constructed from the role: exact-match if role
+ * is non-null; always returns false if role is null. This mirrors the
+ * production hook in @/auth/AuthProvider exactly so tests exercise the
+ * same predicate semantics RoleGate sees in production.
+ *
+ * Use `setRole(null)` for the no-session case.
+ */
+function setRole(role: UserRole | null): UseRoleReturn {
+  return {
+    role,
+    has: (target: UserRole): boolean => role !== null && role === target,
+  };
+}
 
-    it("hides children when role does not match", () => {
-      renderWithMockedSession(
-        <RoleGate role="Admin">
-          <button>Admin Action</button>
-        </RoleGate>,
-        contributorSession,
-      );
-      expect(screen.queryByRole("button", { name: "Admin Action" })).not.toBeInTheDocument();
-    });
+/**
+ * Configure useRole() to return the supplied role for the next render.
+ * Call from inside a test before render(...).
+ */
+function mockUseRole(role: UserRole | null): void {
+  vi.mocked(useRole).mockReturnValue(setRole(role));
+}
 
-    it("renders fallback when role does not match", () => {
-      renderWithMockedSession(
-        <RoleGate role="Admin" fallback={<span>Admin only</span>}>
-          <button>Admin Action</button>
-        </RoleGate>,
-        contributorSession,
-      );
-      expect(screen.getByText("Admin only")).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: "Admin Action" })).not.toBeInTheDocument();
-    });
+// ---------------------------------------------------------------------------
+// Setup and teardown
+// ---------------------------------------------------------------------------
+
+beforeEach(() => {
+  // Reset call history and any prior mockReturnValue so each test starts
+  // with a fresh mock and must explicitly call mockUseRole(...) before
+  // rendering. Tests that forget to set the role will see useRole()
+  // return undefined, which throws inside RoleGate - a loud failure
+  // mode is preferable to silent default behavior.
+  vi.mocked(useRole).mockReset();
+});
+
+afterEach(() => {
+  // Unmount any rendered trees and restore mocks for full isolation
+  // between tests. Without cleanup(), DOM nodes from test A leak into
+  // test B's screen queries (jsdom is shared across tests in a worker).
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+// ---------------------------------------------------------------------------
+// Test suite: Single role prop
+// ---------------------------------------------------------------------------
+
+describe("<RoleGate /> with a single role prop", () => {
+  it("renders children when the user role matches the allowed role", () => {
+    mockUseRole("Admin");
+    render(
+      <RoleGate role="Admin">
+        <span data-testid="gated-content">Admin-only content</span>
+      </RoleGate>,
+    );
+    expect(screen.getByTestId("gated-content")).toBeInTheDocument();
+    expect(screen.getByTestId("gated-content")).toHaveTextContent("Admin-only content");
   });
 
-  describe("array-of-roles (OR semantics)", () => {
-    it("renders children when ANY role matches", () => {
-      renderWithMockedSession(
-        <RoleGate role={["Admin", "Viewer"]}>
-          <button>Status Mutation</button>
-        </RoleGate>,
-        viewerSession,
-      );
-      expect(screen.getByRole("button", { name: "Status Mutation" })).toBeInTheDocument();
-    });
-
-    it("renders children for Admin in array", () => {
-      renderWithMockedSession(
-        <RoleGate role={["Admin", "Viewer"]}>
-          <button>Status Mutation</button>
-        </RoleGate>,
-        adminSession,
-      );
-      expect(screen.getByRole("button", { name: "Status Mutation" })).toBeInTheDocument();
-    });
-
-    it("hides children when NO role matches", () => {
-      renderWithMockedSession(
-        <RoleGate role={["Admin", "Viewer"]}>
-          <button>Status Mutation</button>
-        </RoleGate>,
-        contributorSession,
-      );
-      expect(screen.queryByRole("button", { name: "Status Mutation" })).not.toBeInTheDocument();
-    });
+  it("hides children when the user role does not match the allowed role", () => {
+    mockUseRole("Contributor");
+    render(
+      <RoleGate role="Admin">
+        <span data-testid="gated-content">Admin-only content</span>
+      </RoleGate>,
+    );
+    expect(screen.queryByTestId("gated-content")).toBeNull();
   });
 
-  describe("null session (unauthenticated)", () => {
-    it("hides children when session is null", () => {
-      renderWithMockedSession(
-        <RoleGate role="Admin">
-          <button>Admin Action</button>
-        </RoleGate>,
-        null,
-      );
-      expect(screen.queryByRole("button", { name: "Admin Action" })).not.toBeInTheDocument();
-    });
-
-    it("renders fallback when session is null", () => {
-      renderWithMockedSession(
-        <RoleGate role="Admin" fallback={<span>Login required</span>}>
-          <button>Admin Action</button>
-        </RoleGate>,
-        null,
-      );
-      expect(screen.getByText("Login required")).toBeInTheDocument();
-    });
+  it("hides children when there is no session (role === null)", () => {
+    mockUseRole(null);
+    render(
+      <RoleGate role="Admin">
+        <span data-testid="gated-content">Admin-only content</span>
+      </RoleGate>,
+    );
+    expect(screen.queryByTestId("gated-content")).toBeNull();
   });
 
-  describe("documented use cases (AAP Sec 0.5.2 Layer 6)", () => {
-    it("hides Admin-only UI from Contributor", () => {
-      renderWithMockedSession(
-        <RoleGate role="Admin">
-          <button>Hard Delete</button>
-        </RoleGate>,
-        contributorSession,
-      );
-      expect(screen.queryByRole("button", { name: "Hard Delete" })).not.toBeInTheDocument();
-    });
-
-    it("hides Admin-only UI from Viewer", () => {
-      renderWithMockedSession(
-        <RoleGate role="Admin">
-          <button>Hard Delete</button>
-        </RoleGate>,
-        viewerSession,
-      );
-      expect(screen.queryByRole("button", { name: "Hard Delete" })).not.toBeInTheDocument();
-    });
-
-    it("shows status mutation to Admin and Viewer (sales rep), hides from Contributor", () => {
-      // Admin can see it.
-      const { rerender } = renderWithMockedSession(
-        <RoleGate role={["Admin", "Viewer"]}>
-          <button>Update Status</button>
-        </RoleGate>,
-        adminSession,
-      );
-      expect(screen.getByRole("button", { name: "Update Status" })).toBeInTheDocument();
-
-      // Viewer (sales rep) can see it.
-      rerender(
-        <RoleGate role={["Admin", "Viewer"]}>
-          <button>Update Status</button>
-        </RoleGate>,
-      );
-      expect(screen.getByRole("button", { name: "Update Status" })).toBeInTheDocument();
-    });
+  it("renders fallback when the role does not match and fallback is provided", () => {
+    mockUseRole("Contributor");
+    render(
+      <RoleGate role="Admin" fallback={<span data-testid="fallback-content">Locked</span>}>
+        <span data-testid="gated-content">Admin-only content</span>
+      </RoleGate>,
+    );
+    expect(screen.getByTestId("fallback-content")).toBeInTheDocument();
+    expect(screen.getByTestId("fallback-content")).toHaveTextContent("Locked");
+    expect(screen.queryByTestId("gated-content")).toBeNull();
   });
 
-  describe("complex children", () => {
-    it("renders complex children when role matches", () => {
-      renderWithMockedSession(
-        <RoleGate role="Admin">
-          <div>
-            <h2>Admin Panel</h2>
-            <button>Manage Users</button>
-            <button>View Analytics</button>
+  it("renders nothing (no fallback) when role does not match and fallback is omitted", () => {
+    mockUseRole("Contributor");
+    const { container } = render(
+      <RoleGate role="Admin">
+        <span data-testid="gated-content">Admin-only content</span>
+      </RoleGate>,
+    );
+    expect(screen.queryByTestId("gated-content")).toBeNull();
+    // The fragment renders nothing when fallback is undefined; the container
+    // should be empty (or contain only whitespace from React's fragment).
+    expect(container.textContent).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test suite: Array role prop (OR semantics)
+// ---------------------------------------------------------------------------
+
+describe("<RoleGate /> with a role array prop", () => {
+  it("renders children when role matches any entry in the array (Admin in [Admin, Viewer])", () => {
+    mockUseRole("Admin");
+    render(
+      <RoleGate role={["Admin", "Viewer"]}>
+        <span data-testid="gated-content">Status mutator</span>
+      </RoleGate>,
+    );
+    expect(screen.getByTestId("gated-content")).toBeInTheDocument();
+  });
+
+  it("renders children when role matches second entry (Viewer in [Admin, Viewer])", () => {
+    mockUseRole("Viewer");
+    render(
+      <RoleGate role={["Admin", "Viewer"]}>
+        <span data-testid="gated-content">Status mutator</span>
+      </RoleGate>,
+    );
+    expect(screen.getByTestId("gated-content")).toBeInTheDocument();
+  });
+
+  it("hides children when role matches no entry in the array", () => {
+    mockUseRole("Contributor");
+    render(
+      <RoleGate role={["Admin", "Viewer"]}>
+        <span data-testid="gated-content">Status mutator</span>
+      </RoleGate>,
+    );
+    expect(screen.queryByTestId("gated-content")).toBeNull();
+  });
+
+  it("hides children when there is no session and role array is provided", () => {
+    mockUseRole(null);
+    render(
+      <RoleGate role={["Admin", "Viewer", "Contributor"]}>
+        <span data-testid="gated-content">Anyone authenticated</span>
+      </RoleGate>,
+    );
+    // null session never matches any role, even when every role is allowed.
+    expect(screen.queryByTestId("gated-content")).toBeNull();
+  });
+
+  it("renders fallback when role array has no match and fallback is provided", () => {
+    mockUseRole("Contributor");
+    render(
+      <RoleGate
+        role={["Admin", "Viewer"]}
+        fallback={<span data-testid="fallback-content">Sales team only</span>}
+      >
+        <span data-testid="gated-content">Status mutator</span>
+      </RoleGate>,
+    );
+    expect(screen.getByTestId("fallback-content")).toBeInTheDocument();
+    expect(screen.queryByTestId("gated-content")).toBeNull();
+  });
+
+  it("renders children when role array has only one entry that matches", () => {
+    mockUseRole("Admin");
+    render(
+      <RoleGate role={["Admin"]}>
+        <span data-testid="gated-content">Admin only</span>
+      </RoleGate>,
+    );
+    expect(screen.getByTestId("gated-content")).toBeInTheDocument();
+  });
+
+  it("hides children when role array is empty (no roles allowed)", () => {
+    mockUseRole("Admin");
+    render(
+      <RoleGate role={[] as ReadonlyArray<UserRole>}>
+        <span data-testid="gated-content">Should never render</span>
+      </RoleGate>,
+    );
+    // Empty allowedRoles => some(...) returns false => not allowed.
+    // Catches a regression where an accidentally-empty array might
+    // fall through to "all allowed".
+    expect(screen.queryByTestId("gated-content")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test suite: Children variants (string, array, nested JSX tree, JSX fallback)
+// ---------------------------------------------------------------------------
+
+describe("<RoleGate /> children variants", () => {
+  it("renders string children when allowed", () => {
+    mockUseRole("Admin");
+    render(<RoleGate role="Admin">Plain text content</RoleGate>);
+    expect(screen.getByText("Plain text content")).toBeInTheDocument();
+  });
+
+  it("renders array of children when allowed", () => {
+    mockUseRole("Admin");
+    render(
+      <RoleGate role="Admin">
+        <span data-testid="first">First</span>
+        <span data-testid="second">Second</span>
+      </RoleGate>,
+    );
+    expect(screen.getByTestId("first")).toBeInTheDocument();
+    expect(screen.getByTestId("second")).toBeInTheDocument();
+  });
+
+  it("renders nested JSX tree children when allowed", () => {
+    mockUseRole("Admin");
+    render(
+      <RoleGate role="Admin">
+        <div data-testid="outer">
+          <button type="button" data-testid="inner-button">
+            Click me
+          </button>
+        </div>
+      </RoleGate>,
+    );
+    expect(screen.getByTestId("outer")).toBeInTheDocument();
+    expect(screen.getByTestId("inner-button")).toBeInTheDocument();
+  });
+
+  it("renders fallback that is a JSX tree, not a plain string", () => {
+    mockUseRole("Contributor");
+    render(
+      <RoleGate
+        role="Admin"
+        fallback={
+          <div data-testid="fallback-tree">
+            <p>You need Admin role.</p>
+            <a href="/contact" data-testid="fallback-link">
+              Contact admin
+            </a>
           </div>
-        </RoleGate>,
-        adminSession,
-      );
-      expect(screen.getByText("Admin Panel")).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Manage Users" })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "View Analytics" })).toBeInTheDocument();
-    });
+        }
+      >
+        <span data-testid="gated-content">Admin tools</span>
+      </RoleGate>,
+    );
+    expect(screen.getByTestId("fallback-tree")).toBeInTheDocument();
+    expect(screen.getByTestId("fallback-link")).toBeInTheDocument();
+    expect(screen.queryByTestId("gated-content")).toBeNull();
+  });
+});
 
-    it("hides complex children when role does not match", () => {
-      renderWithMockedSession(
-        <RoleGate role="Admin">
-          <div>
-            <h2>Admin Panel</h2>
-            <button>Manage Users</button>
-          </div>
-        </RoleGate>,
-        contributorSession,
-      );
-      expect(screen.queryByText("Admin Panel")).not.toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: "Manage Users" })).not.toBeInTheDocument();
-    });
+// ---------------------------------------------------------------------------
+// Test suite: Three-role permission matrix
+// ---------------------------------------------------------------------------
+
+describe("<RoleGate /> three-role permission matrix", () => {
+  // Verify backend role names exactly. AAP Sec 0.1.2: 'Admin', 'Contributor',
+  // 'Viewer'. 'Viewer' IS the Sales Rep; 'Sales Rep' is NOT a role string.
+  const roles: ReadonlyArray<UserRole> = ["Admin", "Contributor", "Viewer"];
+
+  it.each(roles)("renders children when role matches %s", (role) => {
+    mockUseRole(role);
+    render(
+      <RoleGate role={role}>
+        <span data-testid="gated-content">{role} content</span>
+      </RoleGate>,
+    );
+    expect(screen.getByTestId("gated-content")).toBeInTheDocument();
+  });
+
+  it.each(roles)("hides children when role is %s but allowed roles exclude it", (role) => {
+    mockUseRole(role);
+    const otherRoles = roles.filter((r) => r !== role);
+    render(
+      <RoleGate role={otherRoles}>
+        <span data-testid="gated-content">Not for {role}</span>
+      </RoleGate>,
+    );
+    expect(screen.queryByTestId("gated-content")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test suite: Architectural invariants (no role hierarchy)
+// ---------------------------------------------------------------------------
+
+describe("<RoleGate /> architectural invariants", () => {
+  it("exact-match semantics: Admin role does NOT imply Contributor (no role hierarchy)", () => {
+    mockUseRole("Admin");
+    // RoleGate must reject Admin when only Contributor is allowed.
+    // Backend RBAC also uses exact match; client behavior must mirror.
+    // If hierarchical roles were ever introduced, this test must update
+    // and the change must be coordinated with backend @requires_role.
+    render(
+      <RoleGate role="Contributor">
+        <span data-testid="gated-content">Contributor only</span>
+      </RoleGate>,
+    );
+    expect(screen.queryByTestId("gated-content")).toBeNull();
+  });
+
+  it("exact-match semantics: Contributor does NOT imply Viewer", () => {
+    mockUseRole("Contributor");
+    render(
+      <RoleGate role="Viewer">
+        <span data-testid="gated-content">Viewer only</span>
+      </RoleGate>,
+    );
+    expect(screen.queryByTestId("gated-content")).toBeNull();
   });
 });
