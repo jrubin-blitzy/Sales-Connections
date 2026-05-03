@@ -333,6 +333,33 @@ resource "aws_ecs_service" "backend" {
   deployment_minimum_healthy_percent = 100
   deployment_maximum_percent         = 200
 
+  # ---------------------------------------------------------------------------
+  # Deployment circuit breaker (auto-rollback)
+  # ---------------------------------------------------------------------------
+  # Per the Checkpoint 4 review finding, ECS deployments must enable the
+  # native deployment circuit breaker so that a failed image rollout
+  # auto-reverts to the last known-good task definition rather than
+  # looping the failed deploy indefinitely. The circuit breaker counts
+  # consecutive task failures during a deploy; when the threshold is
+  # exceeded ECS marks the deployment failed AND (with rollback = true)
+  # reverts to the previous successful task definition without operator
+  # intervention.
+  #
+  # rollback = true is essential: enable alone only marks the deployment
+  # failed; without rollback, the bad tasks remain stopped and the
+  # service degrades (no replacement tasks are spawned). With rollback
+  # the service automatically returns to the prior healthy state.
+  #
+  # Per AWS ECS documentation, this block is a SOFT alternative to the
+  # ECS Blue/Green CodeDeploy controller; it costs nothing extra and
+  # works with the rolling-update deployment controller already in use
+  # here. Production-grade ECS services (per the AAP Sec 0.7.3
+  # reliability budgets) MUST configure it.
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+
   propagate_tags = "SERVICE"
 
   tags = merge(local.module_tags, {
@@ -407,6 +434,19 @@ resource "aws_ecs_service" "frontend" {
 
   deployment_minimum_healthy_percent = 100
   deployment_maximum_percent         = 200
+
+  # ---------------------------------------------------------------------------
+  # Deployment circuit breaker (auto-rollback)
+  # ---------------------------------------------------------------------------
+  # Mirrors the backend service's circuit-breaker configuration above so
+  # frontend rollouts that fail health checks (e.g., a Vite build that
+  # produces a broken nginx image) auto-revert to the prior known-good
+  # revision. See the backend service's block above for the full
+  # rationale.
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
 
   propagate_tags = "SERVICE"
 

@@ -143,7 +143,39 @@ resource "aws_db_subnet_group" "main" {
 resource "aws_db_parameter_group" "main" {
   name        = "${var.name_prefix}-postgres${local.engine_version_major}"
   family      = local.parameter_group_family
-  description = "Sales-Connections PostgreSQL ${var.engine_version} parameter group with slow-query logging, connection auditing, and pg_stat_statements"
+  description = "Sales-Connections PostgreSQL ${var.engine_version} parameter group with slow-query logging, connection auditing, pg_stat_statements, and forced SSL"
+
+  # ---------------------------------------------------------------------------
+  # rds.force_ssl: enforce TLS on every client connection
+  # ---------------------------------------------------------------------------
+  # Defense-in-depth security control per the Checkpoint 4 review finding
+  # and AAP Section 0.7.4 Security Invariants ("TLS terminates at the ALB
+  # with ACM-issued certificates. No internal cleartext traffic outside
+  # the VPC"). While VPC isolation already prevents Internet-side
+  # eavesdropping on database traffic, forcing SSL closes the gap where
+  # a misconfigured ECS task could connect without TLS and a compromised
+  # neighbor in the same VPC could observe credentials or query payloads
+  # on the wire.
+  #
+  # AWS RDS interprets ``rds.force_ssl = 1`` by rejecting any connection
+  # that does not present a valid TLS handshake. The Sales-Connections
+  # backend (``backend/app/extensions.py``) constructs its psycopg DSN
+  # via ``DATABASE_URL`` with ``sslmode=require`` (set in ``.env.example``
+  # and the production AWS secrets payload), so this parameter does not
+  # break existing application connectivity - it ONLY rejects clients
+  # that forgot to enable SSL.
+  #
+  # apply_method = "pending-reboot" is REQUIRED because rds.force_ssl is
+  # a static parameter on RDS PostgreSQL: a run-time toggle would leave
+  # in-flight non-SSL sessions in an inconsistent state. The parameter
+  # takes effect on the next instance reboot, which Terraform performs
+  # automatically when modify-and-reboot is required for static
+  # parameter changes.
+  parameter {
+    name         = "rds.force_ssl"
+    value        = "1"
+    apply_method = "pending-reboot"
+  }
 
   # Slow-query logging: emit a log entry for any statement exceeding 1
   # second. Threshold matches the F-013 audit emission budget so slow
