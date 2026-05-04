@@ -154,11 +154,12 @@ The middleware stack registers in this order on every `/api/*` request:
 
 | Order | Middleware | Source |
 |-------|-----------|--------|
-| 1 | Correlation | `app/middleware/correlation.py` |
-| 2 | CORS (preflight short-circuit + allowlist) | `app/middleware/cors.py` |
-| 3 | Security headers (defensive HTTP response headers) | `app/middleware/security_headers.py` |
-| 4 | Auth (JWT validation) | `app/middleware/auth.py` |
-| 5 | RBAC decorator (per-handler) | `app/middleware/rbac.py` |
+| 1 | Compression (Flask-Compress gzip/deflate; runs LAST in after_request via Flask LIFO) | `app/middleware/compression.py` |
+| 2 | Correlation | `app/middleware/correlation.py` |
+| 3 | CORS (preflight short-circuit + allowlist) | `app/middleware/cors.py` |
+| 4 | Security headers (defensive HTTP response headers) | `app/middleware/security_headers.py` |
+| 5 | Auth (JWT validation) | `app/middleware/auth.py` |
+| 6 | RBAC decorator (per-handler) | `app/middleware/rbac.py` |
 | Last | Error handlers | `app/middleware/error_handlers.py` |
 
 ### Database tier
@@ -283,15 +284,16 @@ sequenceDiagram
 
 ### Middleware contract
 
-The middleware stack is defined in `backend/app/__init__.py::create_app()` and applied in this order. Each middleware has a single responsibility and executes in-process.
+The middleware stack is defined in `backend/app/__init__.py::create_app()` and applied in this order. Each middleware has a single responsibility and executes in-process. Note that Flask runs `after_request` hooks in REVERSE registration order (LIFO), so the registration position and the in-chain execution position are inverted: the FIRST-registered hook runs LAST in the after_request chain.
 
-| Middleware | Responsibility | Order |
-|-----------|----------------|-------|
-| Correlation | Extract `X-Correlation-Id` header if present; otherwise generate `uuid4()`; bind into structlog context vars and OpenTelemetry baggage | 1 |
-| CORS | Short-circuit OPTIONS preflight with 204 and the `Access-Control-*` allowlist headers; attach `Access-Control-Allow-Origin` and `Access-Control-Allow-Credentials` to non-preflight responses for allowlisted origins | 2 |
-| Security headers | Attach `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, and `Permissions-Policy: geolocation=(), microphone=(), camera=()` on every response; attach `Cache-Control: no-store, no-cache, must-revalidate, private` on `/api/*` and `/auth/*` non-OPTIONS responses; attach `Strict-Transport-Security: max-age=31536000; includeSubDomains` only when `SESSION_COOKIE_SECURE` is True (production over HTTPS) | 3 |
-| Auth | Extract JWT from the HttpOnly session cookie; validate signature and expiry against `JWT_SIGNING_KEY`; populate `g.session = Session(user_id, org_id, role)`; reject with HTTP 401 if absent or invalid on any `/api/*` endpoint | 4 |
-| RBAC (decorator) | `@requires_role(*roles)` on each handler; checks `g.session.role` against the decorator argument list; raises `PermissionError` on mismatch | 5 (per-handler) |
+| Middleware | Responsibility | Registration Order |
+|-----------|----------------|--------------------|
+| Compression | Flask-Compress gzip/deflate of response bodies above 500 bytes when the client sends `Accept-Encoding: gzip` (or `deflate`); attach `Content-Encoding` and append `Accept-Encoding` to the `Vary` header. Brotli and zstd are deliberately disabled. Registered FIRST so the after_request chain runs it LAST per Flask's LIFO ordering, ensuring the body and all upstream-attached headers are final before compression takes the body off the wire. Closes QA Checkpoint 9 Issue #1 (MINOR) per `docs/decision-log.md` row DL-0046. | 1 (runs last in after_request) |
+| Correlation | Extract `X-Correlation-Id` header if present; otherwise generate `uuid4()`; bind into structlog context vars and OpenTelemetry baggage | 2 |
+| CORS | Short-circuit OPTIONS preflight with 204 and the `Access-Control-*` allowlist headers; attach `Access-Control-Allow-Origin` and `Access-Control-Allow-Credentials` to non-preflight responses for allowlisted origins | 3 |
+| Security headers | Attach `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, and `Permissions-Policy: geolocation=(), microphone=(), camera=()` on every response; attach `Cache-Control: no-store, no-cache, must-revalidate, private` on `/api/*` and `/auth/*` non-OPTIONS responses; attach `Strict-Transport-Security: max-age=31536000; includeSubDomains` only when `SESSION_COOKIE_SECURE` is True (production over HTTPS) | 4 |
+| Auth | Extract JWT from the HttpOnly session cookie; validate signature and expiry against `JWT_SIGNING_KEY`; populate `g.session = Session(user_id, org_id, role)`; reject with HTTP 401 if absent or invalid on any `/api/*` endpoint | 5 |
+| RBAC (decorator) | `@requires_role(*roles)` on each handler; checks `g.session.role` against the decorator argument list; raises `PermissionError` on mismatch | 6 (per-handler) |
 | Error handlers | Map `pydantic.ValidationError` → 422; map `AuthError` → 401; map `PermissionError` → 403; map `NotFound` → 404; map `ConflictError` → 409; map fallback `Exception` → 500; emit the uniform error envelope | last |
 
 ### Error envelope

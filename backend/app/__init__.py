@@ -19,10 +19,23 @@ Per AAP Section 0.5.2 Layer 0, the canonical wiring order is::
     5.  db.init_app(app)               (SQLAlchemy engine + session)
     6.  oauth.init_app(app)            (Authlib OAuth client table)
     7.  init_oauth_clients(app, oauth) (register Google client)
-    8.  register_correlation_middleware (per-request correlation ID)
-    9.  register_cors_middleware       (preflight short-circuit +
+    8.  register_compression_middleware (Flask-Compress gzip/deflate
+                                        on JSON responses >= 500 bytes;
+                                        registered FIRST so the
+                                        after_request chain runs it
+                                        LAST per Flask's LIFO hook
+                                        ordering, ensuring the body
+                                        and all upstream-attached
+                                        headers are final before
+                                        compression takes the body
+                                        off the wire; closes QA
+                                        Checkpoint 9 Issue #1
+                                        (MINOR) per docs/decision-
+                                        log.md DL-0046)
+    9.  register_correlation_middleware (per-request correlation ID)
+    10. register_cors_middleware       (preflight short-circuit +
                                         Access-Control-* headers)
-    10. register_security_headers_middleware
+    11. register_security_headers_middleware
                                        (defensive HTTP response
                                         headers: nosniff,
                                         X-Frame-Options, Referrer-
@@ -33,9 +46,9 @@ Per AAP Section 0.5.2 Layer 0, the canonical wiring order is::
                                         every response -- preflight
                                         included -- carries the
                                         defensive headers)
-    11. register_auth_middleware       (JWT verification +
+    12. register_auth_middleware       (JWT verification +
                                         token_version freshness check)
-    12. register_rbac_error_handlers   (ForbiddenError special-case;
+    13. register_rbac_error_handlers   (ForbiddenError special-case;
                                         registered before
                                         register_error_handlers per
                                         the AAP-mandated middleware
@@ -43,25 +56,25 @@ Per AAP Section 0.5.2 Layer 0, the canonical wiring order is::
                                         cors -> security_headers ->
                                         auth -> rbac ->
                                         error_handlers)
-    13. register_error_handlers        (AppError -> JSON envelope;
+    14. register_error_handlers        (AppError -> JSON envelope;
                                         registered LAST so it sees
                                         exceptions raised by every
                                         upstream middleware)
-    14. register_blueprints            (mount API surfaces AFTER all
+    15. register_blueprints            (mount API surfaces AFTER all
                                         middleware so handlers see
                                         populated ``g.session`` and
                                         the registered error
                                         handlers convert raised
                                         AppErrors)
-    15. init_metrics                   (Prometheus /metrics endpoint
+    16. init_metrics                   (Prometheus /metrics endpoint
                                         + per-request hooks)
-    16. init_tracing                   (OpenTelemetry tracer +
+    17. init_tracing                   (OpenTelemetry tracer +
                                         Flask/SQLAlchemy auto-
                                         instrumentation; gracefully
                                         no-ops when
                                         ``OTLP_EXPORTER_ENDPOINT``
                                         is empty)
-    17. import app.models              (side-effect import that
+    18. import app.models              (side-effect import that
                                         registers every declarative
                                         model class on
                                         ``Base.metadata`` so
@@ -119,6 +132,7 @@ from app.config import (
 )
 from app.extensions import db, init_oauth_clients, oauth
 from app.middleware.auth import register_auth_middleware
+from app.middleware.compression import register_compression_middleware
 from app.middleware.correlation import register_correlation_middleware
 from app.middleware.cors import register_cors_middleware
 from app.middleware.error_handlers import register_error_handlers
@@ -252,17 +266,19 @@ def create_app(config_object: str | type[BaseConfig] | None = None) -> Flask:
         6.  db.init_app(app)
         7.  oauth.init_app(app)
         8.  init_oauth_clients(app, oauth)
-        9.  register_correlation_middleware(app)
-        10. register_cors_middleware(app)
-        11. register_security_headers_middleware(app)
-        12. register_auth_middleware(app)
-        13. register_rbac_error_handlers(app)
-        14. register_error_handlers(app)         -- LAST middleware
-        15. register_blueprints(app)             -- mount API surfaces
-        16. init_metrics(app)                    -- Prometheus /metrics
-        17. init_tracing(app, db.engine)         -- OpenTelemetry tracer
-        18. import app.models                    -- register on metadata
-        19. _register_shell_context(app)         -- flask shell helpers
+        9.  register_compression_middleware(app)  -- FIRST so it runs
+                                                     LAST in after_request
+        10. register_correlation_middleware(app)
+        11. register_cors_middleware(app)
+        12. register_security_headers_middleware(app)
+        13. register_auth_middleware(app)
+        14. register_rbac_error_handlers(app)
+        15. register_error_handlers(app)         -- LAST middleware
+        16. register_blueprints(app)             -- mount API surfaces
+        17. init_metrics(app)                    -- Prometheus /metrics
+        18. init_tracing(app, db.engine)         -- OpenTelemetry tracer
+        19. import app.models                    -- register on metadata
+        20. _register_shell_context(app)         -- flask shell helpers
 
     Per AAP Section 0.5.2 Layer 0, the middleware-then-blueprints
     order is required so that:
@@ -332,16 +348,31 @@ def create_app(config_object: str | type[BaseConfig] | None = None) -> Flask:
 
     # ----- Register middleware in canonical order --------------------
     # Order is significant per AAP Section 0.5.2 Layer 0:
-    #   1. correlation -- generate / extract X-Correlation-Id and
+    #   1. compression -- Flask-Compress gzip/deflate response body
+    #      compression. Registered FIRST so the after_request chain
+    #      runs it LAST per Flask's LIFO hook ordering (the FIRST
+    #      hook registered runs LAST in process_response per the
+    #      ``reversed(after_request_funcs[name])`` iteration in
+    #      ``Flask.process_response``). This ensures the response
+    #      body and all upstream-attached headers (correlation,
+    #      Access-Control-*, X-Frame-Options, Cache-Control, HSTS,
+    #      X-Correlation-Id) are FINAL before compression takes the
+    #      body off the wire and emits Content-Encoding plus Vary.
+    #      Closes QA Checkpoint 9 Issue #1 (MINOR) where backend
+    #      /api/* responses shipped uncompressed because the AWS ALB
+    #      routes those paths directly to Flask without nginx
+    #      interposition per AAP Section 0.4.6. See
+    #      ``docs/decision-log.md`` row DL-0046 for the rationale.
+    #   2. correlation -- generate / extract X-Correlation-Id and
     #      bind on contextvars BEFORE any other middleware logs.
-    #   2. cors -- short-circuit CORS preflight (OPTIONS) requests
+    #   3. cors -- short-circuit CORS preflight (OPTIONS) requests
     #      with 204 + Access-Control-Allow-* headers BEFORE the auth
     #      middleware runs. CORS preflight requests never carry the
     #      session cookie so they would otherwise be rejected with
     #      401 by the auth middleware (QA Issue 12). Also attaches
     #      Access-Control-Allow-Origin / -Credentials to non-preflight
     #      responses for allowlisted origins.
-    #   3. security_headers -- attach defensive HTTP response headers
+    #   4. security_headers -- attach defensive HTTP response headers
     #      (X-Content-Type-Options nosniff, X-Frame-Options DENY,
     #      Referrer-Policy, Permissions-Policy on every response;
     #      Cache-Control no-store on /api/* and /auth/*; HSTS in
@@ -355,10 +386,10 @@ def create_app(config_object: str | type[BaseConfig] | None = None) -> Flask:
     #      /api/* responses lacked these headers because the AWS ALB
     #      routes /api/* directly to Flask without nginx interposition
     #      per AAP Section 0.4.6.
-    #   4. auth -- decode the session JWT, verify token_version, and
+    #   5. auth -- decode the session JWT, verify token_version, and
     #      populate ``g.session``. Public paths (``/healthz``,
     #      ``/readyz``, ``/metrics``, ``/auth/*``) are skipped.
-    #   5. rbac_error_handlers -- special-case for ForbiddenError so
+    #   6. rbac_error_handlers -- special-case for ForbiddenError so
     #      RBAC denials carry the structured ``required_roles`` /
     #      ``actual_role`` log context. Registered BEFORE
     #      ``register_error_handlers`` so that the comprehensive
@@ -369,13 +400,14 @@ def create_app(config_object: str | type[BaseConfig] | None = None) -> Flask:
     #      identical regardless of order, but matching the AAP-
     #      mandated sequence is important for documentation and
     #      future contributors).
-    #   6. error_handlers -- convert raised AppError subclasses,
+    #   7. error_handlers -- convert raised AppError subclasses,
     #      pydantic ``ValidationError``, werkzeug ``HTTPException``,
     #      and any unhandled ``Exception`` into the canonical JSON
     #      envelope. Registered LAST in the middleware sequence so
     #      it sees exceptions raised by every upstream middleware
     #      (correlation, cors, security_headers, auth, rbac) and by
     #      every handler.
+    register_compression_middleware(flask_app)
     register_correlation_middleware(flask_app)
     register_cors_middleware(flask_app)
     register_security_headers_middleware(flask_app)
