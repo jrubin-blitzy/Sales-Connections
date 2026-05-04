@@ -421,6 +421,11 @@ class TestUpsertOAuthUser:
                 db_session=db_session,
                 id_token_claims={
                     "email": "newuser@example.com",
+                    # email_verified=True is required by DL-0045
+                    # service-layer enforcement; the API handler
+                    # forwards this claim from Google's validated
+                    # ID token.
+                    "email_verified": True,
                     "name": "New User",
                     "sub": "google-id-12345",
                 },
@@ -457,6 +462,8 @@ class TestUpsertOAuthUser:
                 db_session=db_session,
                 id_token_claims={
                     "email": "existing@example.com",
+                    # email_verified=True per DL-0045.
+                    "email_verified": True,
                     "name": "New Name",
                     "sub": "google-id-67890",
                 },
@@ -488,6 +495,8 @@ class TestUpsertOAuthUser:
                 db_session=db_session,
                 id_token_claims={
                     "email": "hybrid@example.com",
+                    # email_verified=True per DL-0045.
+                    "email_verified": True,
                     "name": "Hybrid User",
                 },
                 org_id=organization.id,
@@ -508,6 +517,8 @@ class TestUpsertOAuthUser:
                 db_session=db_session,
                 id_token_claims={
                     "email": "alice@example.com",
+                    # email_verified=True per DL-0045.
+                    "email_verified": True,
                     # No 'name'
                 },
                 org_id=organization.id,

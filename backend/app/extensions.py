@@ -395,12 +395,48 @@ def init_oauth_clients(app: Flask, oauth_client: OAuth) -> None:
         )
         return
 
+    # ``client_kwargs`` is forwarded to Authlib's underlying OAuth2
+    # client (and the ``OAuth2Session`` it composes). Each key carries
+    # a distinct security/resilience invariant per AAP Section 0.4.5
+    # and Section 0.7.4:
+    #
+    # * ``scope`` -- OpenID Connect minimal scope set required for
+    #   email-based user upsert (``openid`` enables OIDC, ``email``
+    #   surfaces the verified email claim, ``profile`` surfaces the
+    #   ``name`` claim used for ``User.display_name``).
+    # * ``code_challenge_method`` -- enables PKCE per RFC 7636 with
+    #   the SHA-256 challenge method (``S256``). Authlib's
+    #   ``OAuth2Session`` checks this attribute when building the
+    #   authorization URL: when ``code_challenge_method == "S256"``
+    #   it auto-generates a per-flow ``code_verifier``, computes
+    #   ``code_challenge = base64url(SHA256(code_verifier))``, and
+    #   includes ``code_challenge`` and ``code_challenge_method`` in
+    #   the redirect URL. The verifier is persisted in the framework
+    #   session and replayed at the token-exchange step. Without
+    #   this key Authlib silently SKIPS PKCE -- a stolen
+    #   authorization code could be exchanged for tokens by an
+    #   attacker who never possessed the verifier. AAP Section 0.4.5
+    #   mandates PKCE for the Google OAuth flow.
+    # * ``default_timeout`` -- caps every HTTP request the OAuth2
+    #   session issues to Google (token exchange, JWKS fetch via
+    #   discovery, and the OIDC discovery document itself) at 10
+    #   seconds. Without an explicit timeout the underlying
+    #   ``requests.Session`` would block indefinitely on a slow
+    #   provider, causing the Gunicorn worker to retire only when
+    #   its own ``--timeout 30`` fires (taking the worker out of
+    #   rotation for one full request). 10 s is comfortably above
+    #   Google's typical sub-second response while preventing
+    #   pathological hangs.
     oauth_client.register(
         name="google",
         client_id=client_id,
         client_secret=client_secret,
         server_metadata_url=("https://accounts.google.com/.well-known/openid-configuration"),
-        client_kwargs={"scope": "openid email profile"},
+        client_kwargs={
+            "scope": "openid email profile",
+            "code_challenge_method": "S256",
+            "default_timeout": 10,
+        },
     )
 
 

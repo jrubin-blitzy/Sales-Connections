@@ -773,22 +773,31 @@ class TestUpsertOAuthUser:
 
     @pytest.mark.integration
     def test_email_not_verified_raises_auth_error(self, app, db_session, organization):
-        """Google's ``email_verified`` claim validation is upstream of
-        ``upsert_oauth_user``.
+        """Google's ``email_verified`` claim is enforced at the SERVICE
+        boundary; calling ``upsert_oauth_user`` with
+        ``email_verified=False`` (or absent) raises ``ValueError``.
 
-        Per AAP Section 0.7.4 (Security Invariants), the API handler
-        MUST validate ``email_verified=True`` BEFORE calling
-        ``upsert_oauth_user``; the service function trusts the
-        caller and does NOT re-validate the claim. This test attempts
-        to patch a private inner validator if one exists (to support
-        evolution of the implementation); when no such validator
-        exists, the test documents the trust boundary by exercising
-        the upstream-validation contract.
+        Per DL-0045 (defense-in-depth response to QA Checkpoint 8
+        Issue #2), the service function rejects any ID token claims
+        dict whose ``email_verified`` claim is not exactly ``True``
+        (or the JSON-decoded string ``"true"``). The API handler in
+        :func:`app.api.auth.google_callback` catches ``ValueError``
+        from ``upsert_oauth_user`` and surfaces it as HTTP 401 via
+        the established ``AuthError`` conversion, so the externally
+        visible behaviour remains a generic 401 per AAP Section
+        0.7.4 anti-enumeration. The test validates the rejection at
+        the service layer directly. We accept ``ValueError``,
+        ``AuthError``, or ``AuthenticationError`` because the
+        service has historically used ``ValueError`` for malformed
+        claims and the API handler converts them; this test focuses
+        on "the unverified email is REJECTED somewhere at or below
+        the service layer" rather than on the specific exception
+        type.
         """
         # First, attempt to patch a private inner validator if one
         # exists. If it does not, ``patcher.start()`` raises
-        # ``AttributeError`` and we fall through to the
-        # trust-boundary documentation path. The patcher is started
+        # ``AttributeError`` and we fall through to the direct
+        # service-layer rejection path. The patcher is started
         # manually (rather than as a ``with`` context) so the
         # ``side_effect`` assignment can happen between starting the
         # patch and the ``pytest.raises`` block - PT012 forbids
@@ -798,13 +807,13 @@ class TestUpsertOAuthUser:
             mock_validate = patcher.start()
         except (AttributeError, ImportError):
             # No inner validator exposed by the service module - the
-            # validation lives in the API handler. Document the trust
-            # boundary below.
+            # validation now lives directly inside ``upsert_oauth_user``
+            # per DL-0045. Exercise that path below.
             pass
         else:
             try:
                 mock_validate.side_effect = AuthError("Google ID token email not verified")
-                with app.app_context(), pytest.raises((AuthError, AuthenticationError)):
+                with app.app_context(), pytest.raises((AuthError, AuthenticationError, ValueError)):
                     upsert_oauth_user(
                         db_session=db_session,
                         id_token_claims={
@@ -821,42 +830,35 @@ class TestUpsertOAuthUser:
             finally:
                 patcher.stop()
 
-        # Trust-boundary documentation path: with no service-layer
-        # ``email_verified`` enforcement, calling upsert with
-        # ``email_verified=False`` claims is the caller's
-        # responsibility to reject upstream. The service function
-        # still creates a user from the claims dict; the security
-        # control sits in the API handler. Per AAP Section 0.7.4,
-        # the test confirms the boundary by attempting the call and
-        # accepting either an AuthError raise (if the implementation
-        # later adds the check) OR a successful upsert (current
-        # implementation, validated upstream).
-        with app.app_context():
-            try:
-                with db_session.begin():
-                    user = upsert_oauth_user(
-                        db_session=db_session,
-                        id_token_claims={
-                            "iss": "https://accounts.google.com",
-                            "sub": "google-user-unverified",
-                            "email": "unverified@example.com",
-                            "email_verified": False,
-                            "name": "Unverified",
-                            "aud": "test-google-client-id",
-                        },
-                        org_id=organization.id,
-                    )
-            except (AuthError, AuthenticationError):
-                # Future-proof: if the implementation adds
-                # service-layer enforcement, the AuthError raise is
-                # still acceptable behavior.
-                return
-            else:
-                # Current implementation: the service trusts the
-                # caller and creates the user. Verify the documented
-                # contract holds.
-                assert user is not None
-                assert user.email == "unverified@example.com"
+        # Service-layer enforcement path (current implementation per
+        # DL-0045): ``upsert_oauth_user`` raises ``ValueError`` when
+        # ``email_verified`` is not exactly ``True`` (or ``"true"``).
+        # The API handler converts the ``ValueError`` to ``AuthError``
+        # (HTTP 401) per the established pattern in
+        # ``app.api.auth.google_callback``. The test accepts
+        # ``ValueError``, ``AuthError``, or ``AuthenticationError`` to
+        # remain robust against future refactors that may switch to a
+        # domain-specific exception type.
+        with (
+            app.app_context(),
+            pytest.raises(
+                (AuthError, AuthenticationError, ValueError),
+                match=r"email_verified|verified|unauthor",
+            ),
+            db_session.begin(),
+        ):
+            upsert_oauth_user(
+                db_session=db_session,
+                id_token_claims={
+                    "iss": "https://accounts.google.com",
+                    "sub": "google-user-unverified",
+                    "email": "unverified@example.com",
+                    "email_verified": False,
+                    "name": "Unverified",
+                    "aud": "test-google-client-id",
+                },
+                org_id=organization.id,
+            )
 
     @pytest.mark.integration
     def test_invalid_signature_raises_auth_error(self, app, db_session, organization):

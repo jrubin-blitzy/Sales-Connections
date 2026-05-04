@@ -1220,6 +1220,110 @@ class TestGoogleOAuthCallback:
                 f"OAuth callback failure must not create User rows; new ids: {new_ids!r}"
             )
 
+    def test_oauth_callback_email_verified_false_with_email_present_returns_401(
+        self,
+        client: Any,
+        db_session: Any,
+    ) -> None:
+        """``email_verified=False`` rejects the OAuth login even when
+        the email claim is present.
+
+        Per DL-0045 (defense-in-depth response to QA Checkpoint 8
+        Issue #2), the service function ``upsert_oauth_user`` rejects
+        any ID token whose ``email_verified`` claim is not exactly
+        ``True``. The API handler converts the resulting ``ValueError``
+        to ``AuthError`` (HTTP 401) per the established pattern. This
+        test exercises the FULL claim payload (email present,
+        email_verified explicitly False) to distinguish the
+        email-verified rejection from the missing-email rejection
+        covered by the test above. No user row is created in either
+        path.
+        """
+        before_count = db_session.execute(select(User)).scalars().all()
+        before_user_ids = {u.id for u in before_count}
+
+        with patch("app.api.auth.oauth") as mock_oauth:
+            # email IS present but email_verified is explicitly False.
+            mock_oauth.google.authorize_access_token.return_value = {
+                "userinfo": {
+                    "email": "unverified-claims@gmail.com",
+                    "email_verified": False,
+                    "name": "Unverified Claims User",
+                    "sub": "google-oid-unverified-claims",
+                }
+            }
+            response = client.get(
+                "/auth/google/callback?state=valid&code=unverified-claims-code",
+                follow_redirects=False,
+            )
+
+        # The handler converts the service's ``ValueError`` to 401
+        # per the established pattern; 403 is also accepted for
+        # forward-compatibility with a stricter implementation.
+        assert response.status_code in (401, 403), (
+            f"OAuth callback with email_verified=False must return 401 or 403; "
+            f"got {response.status_code}: {response.get_data(as_text=True)}"
+        )
+
+        # No new user created.
+        with db.session() as fresh_session:
+            after_users = fresh_session.execute(select(User)).scalars().all()
+            after_ids = {u.id for u in after_users}
+            new_ids = after_ids - before_user_ids
+            assert not new_ids, (
+                f"OAuth callback rejection on email_verified=False must not "
+                f"create User rows; new ids: {new_ids!r}"
+            )
+
+    def test_oauth_callback_email_verified_missing_returns_401(
+        self,
+        client: Any,
+        db_session: Any,
+    ) -> None:
+        """``email_verified`` claim absent from the ID token rejects
+        the OAuth login (treated as unverified per DL-0045).
+
+        OpenID Connect Core 1.0 Section 5.1 specifies
+        ``email_verified`` as an OPTIONAL claim. When Google omits the
+        claim entirely, the service treats this as "not verified"
+        because the absence of an explicit ``True`` cannot be
+        distinguished from a forged claims dict where the attacker
+        deliberately omitted the key. AAP Section 0.7.4 mandates this
+        anti-forgery posture.
+        """
+        before_count = db_session.execute(select(User)).scalars().all()
+        before_user_ids = {u.id for u in before_count}
+
+        with patch("app.api.auth.oauth") as mock_oauth:
+            # email IS present; email_verified is OMITTED.
+            mock_oauth.google.authorize_access_token.return_value = {
+                "userinfo": {
+                    "email": "no-verified-claim@gmail.com",
+                    # email_verified deliberately omitted.
+                    "name": "No Verified Claim User",
+                    "sub": "google-oid-no-verified-claim",
+                }
+            }
+            response = client.get(
+                "/auth/google/callback?state=valid&code=no-verified-claim-code",
+                follow_redirects=False,
+            )
+
+        assert response.status_code in (401, 403), (
+            f"OAuth callback with absent email_verified claim must return 401 or 403; "
+            f"got {response.status_code}: {response.get_data(as_text=True)}"
+        )
+
+        # No new user created.
+        with db.session() as fresh_session:
+            after_users = fresh_session.execute(select(User)).scalars().all()
+            after_ids = {u.id for u in after_users}
+            new_ids = after_ids - before_user_ids
+            assert not new_ids, (
+                f"OAuth callback rejection on absent email_verified claim must "
+                f"not create User rows; new ids: {new_ids!r}"
+            )
+
     def test_oauth_callback_invalid_state_returns_400_or_401(
         self,
         client: Any,

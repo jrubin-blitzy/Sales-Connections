@@ -1071,9 +1071,11 @@ def upsert_oauth_user(
 
     Raises:
         ValueError: When the ID token claims are missing the required
-            ``email`` field. This indicates either a malformed Google
-            response or a programmer error in the calling code; the
-            handler should surface this as a 401.
+            ``email`` field, OR when the ``email_verified`` claim is
+            false/absent. Both indicate either a malformed Google
+            response, a programmer error in the calling code, or an
+            unverified email that must NOT be admitted to the
+            application; the handler should surface this as a 401.
     """
     # Required claim: email. Without an email we cannot identify the
     # user uniquely within the organization and cannot satisfy the
@@ -1081,6 +1083,39 @@ def upsert_oauth_user(
     email = id_token_claims.get("email")
     if not email or not isinstance(email, str):
         raise ValueError("Google ID token claims missing required 'email' field.")
+
+    # Required claim: email_verified. Per the OpenID Connect 1.0 Core
+    # specification (Section 5.1), Google sets this boolean claim to
+    # ``true`` when it has independently verified that the user
+    # controls the email address. Defense-in-depth per AAP
+    # Section 0.7.4 (Security Invariants): even though Google rarely
+    # returns ``email_verified=false`` for first-party Google
+    # accounts, an attacker who registers a Google Workspace tenant
+    # with an unverified domain alias COULD obtain an ID token whose
+    # ``email`` claim points at a victim's address. Rejecting these
+    # tokens at the service boundary closes that vector regardless of
+    # whether the API handler also performs the check, satisfying the
+    # multi-layer-defense pattern documented in DL-0045. We accept
+    # both Python booleans and the JSON-decoded string form
+    # ``"true"``/``"false"`` because Authlib's claim deserialization
+    # does not normalize boolean strings universally.
+    email_verified_claim = id_token_claims.get("email_verified")
+    if email_verified_claim is True or (
+        isinstance(email_verified_claim, str) and email_verified_claim.strip().lower() == "true"
+    ):
+        # Verified - proceed with upsert.
+        pass
+    else:
+        _logger.warning(
+            "oauth_user_email_not_verified",
+            email=email,
+            email_verified=email_verified_claim,
+            org_id=str(org_id) if org_id is not None else None,
+        )
+        raise ValueError(
+            "Google ID token claims have email_verified=false; "
+            "refusing OAuth login for unverified email address."
+        )
 
     # Optional claim: name. Falls back to the local-part of the email
     # when absent so the display column is never NULL.
