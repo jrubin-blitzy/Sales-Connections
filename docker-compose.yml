@@ -117,10 +117,44 @@ services:
       # manual testing without saturating a developer laptop.
       WEB_CONCURRENCY: "2"
 
-      # ---- Database (service-name DNS, NOT localhost) ----
+      # ---- Database connections (service-name DNS, NOT localhost) ----
       # The host "postgres" resolves via the user-defined bridge network.
-      # Production overrides this with the RDS endpoint from Terraform.
-      DATABASE_URL: postgresql+psycopg://sales_connections:sales_connections_dev@postgres:5432/sales_connections
+      # Production overrides these with the RDS endpoint from Terraform.
+      #
+      # CRITICAL (per AAP Section 0.7.4 / 0.4.6 -- "Audit table writes
+      # restricted to backend service identity at the database privilege
+      # layer. The application role can INSERT only; UPDATE and DELETE
+      # are revoked"):
+      #
+      #   * DATABASE_URL points to ``sales_connections_app`` -- the
+      #     RESTRICTED role provisioned by migration
+      #     ``0002_token_version_and_app_role``. This role has
+      #     ``GRANT SELECT, INSERT`` on ``audit_events`` and explicit
+      #     ``REVOKE UPDATE, DELETE`` per migration 0001 PHASE D
+      #     (re-applied in 0002 PHASE 3). Using this role at runtime
+      #     means the database layer is the LAST LINE OF DEFENSE for
+      #     the append-only audit invariant: even if application code
+      #     erroneously attempts to UPDATE or DELETE an audit row,
+      #     PostgreSQL refuses with "permission denied for table
+      #     audit_events". This closes the QA Checkpoint 4 finding
+      #     "Issue 10: Application connects to PostgreSQL as superuser,
+      #     bypassing audit immutability".
+      #
+      #   * MIGRATIONS_DATABASE_URL points to the schema OWNER role
+      #     ``sales_connections`` so Alembic has full DDL/DML
+      #     privileges (CREATE TABLE, CREATE INDEX, GRANT/REVOKE, and
+      #     CREATE ROLE for the app-role provisioning in migration
+      #     0002). The migration env (backend/migrations/env.py)
+      #     prefers MIGRATIONS_DATABASE_URL over DATABASE_URL when
+      #     both are set, so the same container can run migrations
+      #     (elevated) and serve requests (restricted).
+      #
+      # The dev-only password for the app role is hardcoded in
+      # migration 0002 PHASE 2 ("APP_DB_PASSWORD" default value
+      # ``sales_connections_app_dev``). Production sets these from
+      # AWS Secrets Manager via the ECS task role (AAP 0.4.6).
+      DATABASE_URL: postgresql+psycopg://sales_connections_app:sales_connections_app_dev@postgres:5432/sales_connections
+      MIGRATIONS_DATABASE_URL: postgresql+psycopg://sales_connections:sales_connections_dev@postgres:5432/sales_connections
 
       # ---- First-run migrations ----
       # The backend Dockerfile's CMD inspects RUN_MIGRATIONS and either runs
@@ -128,6 +162,10 @@ services:
       # docker compose up brings the schema to head once and then exits;
       # subsequent runs of the same container exec gunicorn normally. See
       # AAP 0.5.2 backend Dockerfile spec.
+      #
+      # Migrations use MIGRATIONS_DATABASE_URL (above) which has the
+      # elevated privileges needed to CREATE the ``sales_connections_app``
+      # role on first run. Subsequent runs are idempotent.
       RUN_MIGRATIONS: "true"
 
       # ---- JWT signing (F-012) ----

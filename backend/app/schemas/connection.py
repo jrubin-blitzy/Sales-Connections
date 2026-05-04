@@ -405,8 +405,22 @@ class ConnectionRead(BaseModel):
       - ``GET /api/connections/:id`` (detail)
       - ``PATCH /api/connections/:id`` (after edit)
       - ``PATCH /api/connections/:id/status`` (after status change)
-      - ``DELETE /api/connections/:id`` (after soft delete;
-        ``deleted_at`` populated)
+      - ``DELETE /api/connections/:id`` (after soft delete)
+
+    The ``deleted_at`` column on ``records`` is intentionally NOT
+    surfaced in this outbound schema (per QA Issue 8). It is a server-
+    internal soft-delete marker; default-scoped reads inject
+    ``WHERE deleted_at IS NULL`` so a non-admin caller would see only
+    ``null`` values anyway, and exposing the field could mislead
+    integrators into believing it is part of the public contract. The
+    soft-delete admin moderation view in :mod:`app.api.admin` uses a
+    separate response shape (``ConnectionAdminRead``) which retains
+    ``deleted_at`` because admins legitimately need to distinguish
+    active from soft-deleted rows. The audit-trail snapshots produced
+    by :func:`app.services.connections._record_to_audit_payload`
+    continue to capture ``deleted_at`` because the audit invariant
+    requires the full pre/post state of the row, NOT the public API
+    contract.
 
     Field provenance:
         id                         Server-generated UUID v4.
@@ -437,10 +451,6 @@ class ConnectionRead(BaseModel):
                                    Empty list when no tags applied.
                                    Eager-loaded via SQLAlchemy
                                    ``selectinload`` to avoid N+1.
-        deleted_at                 NULL for active records; populated
-                                   ISO-8601 UTC timestamp for soft-
-                                   deleted records (admin moderation
-                                   view only).
         created_at, updated_at     Server timestamps; surfaced for the
                                    SPA's "last edited" hint.
     """
@@ -463,6 +473,47 @@ class ConnectionRead(BaseModel):
     tags: list[TagRead] = Field(default_factory=list)
     created_at: AwareDatetime
     updated_at: AwareDatetime
+    # NOTE: ``deleted_at`` intentionally NOT exposed (QA Issue 8).
+    # Use ``ConnectionAdminRead`` for the admin moderation surface
+    # which legitimately needs the soft-delete timestamp.
+
+
+# ---------------------------------------------------------------------------
+# Outbound: ConnectionAdminRead (admin moderation only)
+# ---------------------------------------------------------------------------
+
+
+class ConnectionAdminRead(ConnectionRead):
+    """Outbound shape for admin moderation views.
+
+    Extends :class:`ConnectionRead` with the server-internal
+    ``deleted_at`` soft-delete timestamp. Returned ONLY by the
+    admin moderation endpoints
+    (:func:`app.api.admin.list_records` and friends) where the
+    operator legitimately needs to distinguish active rows from
+    soft-deleted ones.
+
+    Per QA Issue 8 the standard :class:`ConnectionRead` shape
+    (used by ``GET /api/connections``, ``GET /api/connections/:id``,
+    etc.) intentionally omits ``deleted_at`` because non-admin
+    callers always receive ``null`` for the field (default queries
+    inject ``WHERE deleted_at IS NULL``) and exposing the field
+    confused integrators about whether it was a public-contract
+    field. The admin surface gets its own schema so the
+    information-disclosure boundary is explicit and reviewable.
+
+    Field provenance:
+        deleted_at  NULL for active records; populated ISO-8601
+                    UTC timestamp for soft-deleted records. Set
+                    by :func:`app.services.connections.soft_delete_record`
+                    and never mutated thereafter (a hard delete
+                    removes the row entirely; a re-create writes
+                    a NEW row with a fresh ``id``).
+        (all other fields inherited from :class:`ConnectionRead`)
+    """
+
+    model_config = _OUTBOUND_CONFIG
+
     deleted_at: AwareDatetime | None = None
 
 
@@ -501,6 +552,35 @@ class PaginatedConnections(BaseModel):
     model_config = _OUTBOUND_CONFIG
 
     items: list[ConnectionRead] = Field(default_factory=list)
+    total: Annotated[int, Field(ge=0)]
+    limit: Annotated[int, Field(ge=1, le=_MAX_PAGE_SIZE)]
+    offset: Annotated[int, Field(ge=0)]
+
+
+# ---------------------------------------------------------------------------
+# Outbound: PaginatedAdminConnections (admin moderation list)
+# ---------------------------------------------------------------------------
+
+
+class PaginatedAdminConnections(BaseModel):
+    """Pagination envelope for ``GET /api/admin/records`` (F-014).
+
+    Identical shape to :class:`PaginatedConnections` except that
+    ``items`` is a list of :class:`ConnectionAdminRead` (which extends
+    :class:`ConnectionRead` with the server-internal ``deleted_at``
+    soft-delete timestamp). The admin moderation surface needs
+    ``deleted_at`` so operators can distinguish active rows from
+    soft-deleted rows in the same listing; non-admin endpoints use
+    :class:`PaginatedConnections` and never expose ``deleted_at``
+    (per QA Issue 8).
+
+    Bounds are identical to :class:`PaginatedConnections`; see that
+    class for documentation.
+    """
+
+    model_config = _OUTBOUND_CONFIG
+
+    items: list[ConnectionAdminRead] = Field(default_factory=list)
     total: Annotated[int, Field(ge=0)]
     limit: Annotated[int, Field(ge=1, le=_MAX_PAGE_SIZE)]
     offset: Annotated[int, Field(ge=0)]

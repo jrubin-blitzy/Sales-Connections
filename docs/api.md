@@ -307,7 +307,7 @@ Field notes:
 - `submission_date` — optional; defaulted server-side to the current UTC date if absent.
 - Forbidden fields: any payload containing `owner_user_id`, `owner_display_name`, `org_id`, `id`, `outreach_status`, `created_at`, or `deleted_at` is rejected with HTTP 422 `validation_error`. The owner is always derived from the session.
 
-Success response — HTTP 201, pydantic class `ConnectionRead`:
+Success response — HTTP 201, pydantic class `ConnectionRead`. Per QA Issue 8 the response intentionally does NOT include the server-internal `deleted_at` field (the admin moderation surface uses `ConnectionAdminRead` instead, which retains it):
 
 ```json
 {
@@ -323,14 +323,21 @@ Success response — HTTP 201, pydantic class `ConnectionRead`:
   "outreach_status": "Not Started",
   "owner_user_id": "11111111-2222-3333-4444-555555555555",
   "owner_display_name": "Pat User",
-  "org_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-  "tag_ids": [
-    "11111111-1111-1111-1111-111111111111",
-    "22222222-2222-2222-2222-222222222222"
+  "tags": [
+    {
+      "id": "11111111-1111-1111-1111-111111111111",
+      "name": "Logistics",
+      "created_at": "2026-04-01T12:00:00Z"
+    },
+    {
+      "id": "22222222-2222-2222-2222-222222222222",
+      "name": "Series B",
+      "created_at": "2026-04-01T12:00:00Z"
+    }
   ],
-  "submission_date": "2026-04-23",
+  "submission_date": "2026-04-23T18:00:00Z",
   "created_at": "2026-04-23T18:00:00Z",
-  "deleted_at": null
+  "updated_at": "2026-04-23T18:00:00Z"
 }
 ```
 
@@ -355,17 +362,20 @@ Query parameters:
 | Parameter | Type | Notes |
 |-----------|------|-------|
 | `company` | string | Substring match (case-insensitive) on `company` |
-| `involvement` | enum | One of `Warm Intro`, `Soft Reference`, `Target Only` |
-| `owner_user_id` | UUID | Restrict to records owned by a specific user |
+| `full_name_search` | string | Substring match (case-insensitive) on `full_name` |
+| `involvement` | enum (repeatable / comma-separated) | Any-of filter; values: `Warm Intro`, `Soft Reference`, `Target Only` |
+| `outreach_status` | enum (repeatable / comma-separated) | Any-of filter; values: `Not Started`, `In Progress`, `Contacted`, `Closed` |
+| `owner_user_ids` | UUID (repeatable / comma-separated) | Any-of filter on `Record.owner_user_id`. Per QA Issue 6 the singular alias `owner_user_id` is also accepted; both forms are concatenated and deduplicated. |
+| `tag_ids` | UUID (repeatable / comma-separated) | Records that include any of the specified tags ("contains-any-of" semantics). The singular alias `tag_id` is also accepted. |
 | `submission_date_from` | date (ISO 8601) | Inclusive lower bound on `submission_date` |
 | `submission_date_to` | date (ISO 8601) | Inclusive upper bound on `submission_date` |
-| `outreach_status` | enum | One of `Not Started`, `In Progress`, `Contacted`, `Closed` |
-| `tag_ids` | UUID (repeatable) | Records that include any of the specified tags ("contains-any-of" semantics) |
-| `sort` | string | One of `submission_date`, `full_name`, `company`, `owner_display_name`, `outreach_status`; prefix with `-` for descending. Default: `-submission_date` |
-| `cursor` | string | Opaque pagination cursor; absent on first page |
-| `limit` | integer | Page size; default 50, maximum 200 |
+| `sort` | string | One of `submission_date`, `full_name`, `company`, `owner_display_name`, `outreach_status`. Default: `submission_date` |
+| `sort_dir` | string | `asc` or `desc`. Default: `desc` |
+| `limit` | integer | Page size; default 25, maximum 200 (silently clamped) |
+| `offset` | integer | Page offset; default 0 |
+| `include_deleted` | boolean | Admin-only opt-in to include soft-deleted records (default `false`; non-Admin callers are silently capped at `false`) |
 
-Success response — HTTP 200:
+Success response — HTTP 200, pydantic class `PaginatedConnections` carrying a list of `ConnectionRead`:
 
 ```json
 {
@@ -383,19 +393,25 @@ Success response — HTTP 200:
       "outreach_status": "Not Started",
       "owner_user_id": "11111111-2222-3333-4444-555555555555",
       "owner_display_name": "Pat User",
-      "org_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-      "tag_ids": [
-        "11111111-1111-1111-1111-111111111111"
+      "tags": [
+        {
+          "id": "11111111-1111-1111-1111-111111111111",
+          "name": "Logistics",
+          "created_at": "2026-04-01T12:00:00Z"
+        }
       ],
-      "submission_date": "2026-04-23",
+      "submission_date": "2026-04-23T18:00:00Z",
       "created_at": "2026-04-23T18:00:00Z",
-      "deleted_at": null
+      "updated_at": "2026-04-23T18:00:00Z"
     }
   ],
-  "next_cursor": "eyJsYXN0X2lkIjoiMzMzMyJ9",
-  "total": 1247
+  "total": 1247,
+  "limit": 25,
+  "offset": 0
 }
 ```
+
+Per QA Issue 8 the public `ConnectionRead` shape does NOT expose the server-internal `deleted_at` soft-delete timestamp; the admin moderation surface (`GET /api/admin/records`) uses `ConnectionAdminRead` which extends `ConnectionRead` with `deleted_at`.
 
 Errors:
 
@@ -613,12 +629,15 @@ Query parameters:
 |-----------|------|-------|
 | `linkedin_url` | string | Raw URL; the server normalizes before lookup |
 
-Success response — HTTP 200:
+Success response — HTTP 200, pydantic class `ConnectionDuplicateCheckResponse` (per QA Issue 7, the field names in the response are `duplicate_found` (not `duplicate`/`is_duplicate`) and `normalized_linkedin_url` (not `normalized_url`); the SPA's `frontend/src/api/connections.ts` consumes these names verbatim):
 
 ```json
 {
-  "duplicate": true,
-  "existing_record_id": "33333333-3333-3333-3333-333333333333"
+  "duplicate_found": true,
+  "existing_record_id": "33333333-3333-3333-3333-333333333333",
+  "existing_owner_display_name": "Jane Doe",
+  "existing_submission_date": "2026-04-02T17:14:00Z",
+  "normalized_linkedin_url": "linkedin.com/in/jordanexample"
 }
 ```
 
@@ -626,10 +645,23 @@ When no duplicate exists:
 
 ```json
 {
-  "duplicate": false,
-  "existing_record_id": null
+  "duplicate_found": false,
+  "existing_record_id": null,
+  "existing_owner_display_name": null,
+  "existing_submission_date": null,
+  "normalized_linkedin_url": "linkedin.com/in/jordanexample"
 }
 ```
+
+Field notes:
+
+- `duplicate_found` — boolean indicating whether a non-soft-deleted record with the same normalized URL exists in the caller's organization.
+- `existing_record_id` — UUID of the duplicate; `null` when no duplicate.
+- `existing_owner_display_name` — denormalized owner of the duplicate (`null` when no duplicate); used by the SPA to render "This contact was already submitted by Jane Doe on ..." warning.
+- `existing_submission_date` — ISO-8601 UTC timestamp of the duplicate's submission (`null` when no duplicate).
+- `normalized_linkedin_url` — the canonical normalized form of the input URL (always populated, even when no duplicate exists) so the SPA can display the canonical URL back to the user.
+
+Self-exclusion: pass `?exclude_record_id=<uuid>` to exclude a specific record from the lookup (used during the edit flow so a record is not flagged as a duplicate of itself).
 
 Errors:
 
@@ -670,13 +702,21 @@ Field notes:
 - All four fields are required.
 - The frontend may sanitize `relationship_context` for UX, but the server `backend/app/utils/sanitization.py` is the authoritative sanitizer: it strips control characters and applies length caps before templating into the prompt.
 
-Success response — HTTP 200, pydantic class `NoteGenerationResponse`:
+Success response — HTTP 200, pydantic class `NoteGenerationResponse` (per QA Issue 5, the response field name is `ai_notes` — NOT `notes` as some draft spec text implied. The SPA's `frontend/src/api/notes.ts` consumes the `ai_notes` name verbatim and embeds it directly in the `POST /api/connections` request body):
 
 ```json
 {
-  "ai_notes": "Reach out warmly given your shared alma mater. Acknowledge his progression to VP of Ops at a Series B logistics startup; offer perspective on operational scaling, hiring discipline, or carrier network design depending on his current focus. Keep the first message short and offer to host a 20-minute exchange."
+  "ai_notes": "Reach out warmly given your shared alma mater. Acknowledge his progression to VP of Ops at a Series B logistics startup; offer perspective on operational scaling, hiring discipline, or carrier network design depending on his current focus. Keep the first message short and offer to host a 20-minute exchange.",
+  "model": "claude-sonnet-4-5",
+  "generated_at": "2026-04-02T17:14:00Z"
 }
 ```
+
+Response field notes:
+
+- `ai_notes` — server-side-sanitized, max 8000 characters; ready to be embedded verbatim into the `POST /api/connections` request body.
+- `model` — informational only (e.g., `"claude-sonnet-4-5"`); the SPA does NOT branch logic on this value but the field is surfaced so audit / observability dashboards can correlate AI behaviour with model versions.
+- `generated_at` — ISO-8601 UTC timestamp of when the AI response was received; informational.
 
 Errors:
 

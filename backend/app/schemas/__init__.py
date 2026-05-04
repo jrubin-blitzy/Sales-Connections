@@ -50,12 +50,14 @@ from app.schemas.auth import (
     SessionRead,
 )
 from app.schemas.connection import (
+    ConnectionAdminRead,
     ConnectionCreate,
     ConnectionDuplicateCheckResponse,
     ConnectionHistoryEntry,
     ConnectionRead,
     ConnectionStatusUpdate,
     ConnectionUpdate,
+    PaginatedAdminConnections,
     PaginatedConnections,
     TagCreate,
     TagRead,
@@ -67,6 +69,7 @@ from app.schemas.note_generation import (
 
 __all__ = [
     "AnalyticsResponse",
+    "ConnectionAdminRead",
     "ConnectionCreate",
     "ConnectionDuplicateCheckResponse",
     "ConnectionHistoryEntry",
@@ -80,6 +83,7 @@ __all__ = [
     "NoteGenerationRequest",
     "NoteGenerationResponse",
     "OAuthCallbackQuery",
+    "PaginatedAdminConnections",
     "PaginatedConnections",
     "SessionRead",
     "TagCreate",

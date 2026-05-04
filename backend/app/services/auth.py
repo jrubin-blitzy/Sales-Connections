@@ -153,6 +153,7 @@ The middleware-driven verification path::
 
 from __future__ import annotations
 
+import contextlib
 from datetime import UTC, datetime, timedelta
 
 # Standard library imports.
@@ -402,6 +403,7 @@ __all__ = [
     "mint_session_jwt",
     "record_login_audit",
     "record_logout_audit",
+    "revoke_session_and_audit",
     "upsert_oauth_user",
     "verify_password",
     "verify_session_jwt",
@@ -570,7 +572,12 @@ def verify_password(plain: str, password_hash: str | None) -> bool:
     database does not crash the login path.
 
     Per AAP Section 0.7.4, the constant-time guarantee is essential to
-    avoid CWE-208 timing side-channels.
+    avoid CWE-208 timing side-channels. The function MUST take roughly
+    the same wall-clock time regardless of whether ``password_hash``
+    is a real hash, ``None`` (OAuth-only user), or whether the input
+    matches: an adversary who can distinguish "exists but OAuth-only"
+    from "exists with password" via timing analysis can enumerate
+    OAuth-only accounts at scale.
 
     Args:
         plain: The plaintext password to verify.
@@ -591,11 +598,30 @@ def verify_password(plain: str, password_hash: str | None) -> bool:
 
     # OAuth-only users have ``password_hash=None``. They cannot
     # authenticate via the password flow; the API handler MUST route
-    # them through the OAuth callback. Returning False here makes the
-    # caller surface a generic 401 just like a wrong-password case
-    # does, avoiding the "this email exists but is OAuth-only"
-    # enumeration vector.
+    # them through the OAuth callback. The QA Checkpoint 4 finding
+    # "Issue 3 (MAJOR): Timing-based enumeration of OAuth-only
+    # accounts" found that an early-return ``return False`` here took
+    # ~9 ms while a real bcrypt verify took ~270 ms, allowing the
+    # attacker to distinguish "OAuth-only user" from "user with
+    # password" via response-time analysis at ~27x faster (CWE-208
+    # timing side-channel).
+    #
+    # The fix runs a constant-time dummy bcrypt check at the same
+    # cost factor used for real password verification BEFORE
+    # returning False. This adds ~250-350 ms (cost-12 in production,
+    # cost-4 in test config) to the OAuth-only path, matching the
+    # wall-clock duration of the real-password path so an external
+    # observer cannot tell the cases apart.
     if password_hash is None:
+        cost = _resolve_bcrypt_cost()
+        # ``contextlib.suppress`` is used (rather than try/except/pass)
+        # to satisfy ruff SIM105 while preserving the defensive
+        # semantics: the dummy hash is a known-good value generated
+        # at startup so the suppressed branch is unreachable under
+        # normal operation; we suppress narrowly so an unforeseen
+        # bcrypt-library defect cannot crash the login path.
+        with contextlib.suppress(ValueError, TypeError):  # pragma: no cover - defensive
+            bcrypt.checkpw(plain.encode("utf-8"), _get_dummy_bcrypt_hash(cost))
         return False
 
     # ``bcrypt.checkpw`` accepts both str and bytes for plaintext;
@@ -1459,6 +1485,126 @@ def record_logout_audit(
             "result": "success",
         },
     )
+
+
+def revoke_session_and_audit(
+    *,
+    user_id: UUID,
+    org_id: UUID,
+    db_session: DBSession,
+) -> int:
+    """Atomically rotate ``users.token_version`` and emit a logout audit event.
+
+    Implements the F-012 logout state-change per AAP Section 0.7.4
+    Security Invariants ("Tokens rotated on logout. Logout invalidates
+    the cookie and (for the email/password flow) advances the per-user
+    signing-key version.") AND per AAP Section 0.7.1 invariant 6
+    ("Atomic state-change + audit pair. Every state change persists
+    itself and emits its audit event inside a single transaction;
+    failure of either rolls back both.").
+
+    Two SQL effects, executed inside the caller's transaction, in this
+    order:
+
+    1. ``UPDATE users SET token_version = token_version + 1
+       WHERE id = :user_id`` -- the increment is performed via SQL
+       expression (``User.token_version + 1``) rather than a Python-side
+       read-modify-write so concurrent logouts on the same user (rare
+       but possible if the SPA opens multiple tabs and logs out from
+       each) compose monotonically without lost updates.
+    2. ``INSERT INTO audit_events (...) VALUES (event_type=
+       'authentication', actor_user_id=:user_id, after_payload=
+       {"action":"logout"})`` -- the F-013 audit row.
+
+    The function deliberately accepts ``user_id`` and ``org_id`` as
+    plain UUID arguments (not an :class:`AuthSession` instance) so the
+    logout HTTP handler can call this WITHOUT going through the auth
+    middleware. ``/auth/logout`` is in the public-paths allowlist so
+    a stale cookie can still complete a clean logout; the handler
+    therefore must verify the JWT itself and pass the resolved
+    identity to this function.
+
+    The ``after_payload`` includes ``"action": "logout"`` (matching
+    the QA report's expected shape) and ``"result": "success"`` so
+    SIEM consumers can align logout events with the symmetric login
+    payloads emitted by :func:`record_login_audit`.
+
+    Args:
+        user_id: The authenticated principal whose session is being
+            terminated. MUST refer to an existing row in ``users``.
+        org_id: The organization scope of the principal. Recorded in
+            the audit payload for tenant-aware SIEM filtering.
+        db_session: The caller's open SQLAlchemy session with an
+            active transaction. The transaction lifecycle is owned by
+            the caller; this function never opens or commits a
+            transaction.
+
+    Returns:
+        The number of ``users`` rows updated -- typically 1 when the
+        user exists, or 0 when the JWT references a hard-deleted user.
+        The caller should treat 0 as a no-op (the cookie is still
+        cleared client-side; the audit event still emits with the
+        provided ``user_id`` for forensic correlation).
+
+    Raises:
+        AuditEmissionError: When called outside an active transaction.
+            Mapped to HTTP 500 by the registered Flask error handler.
+        Exception: Any DB-level error from the UPDATE or audit INSERT
+            is re-raised after the structured log so the parent
+            transaction rolls back atomically.
+    """
+    # Step 1 - increment the user's token_version via a SQL expression
+    # so the read-modify-write is atomic at the database level. We
+    # deliberately use ``User.token_version + 1`` (a SQL expression)
+    # rather than ``user.token_version + 1`` (a Python value) so two
+    # concurrent logouts compose monotonically: each statement
+    # increments the column by one regardless of the value at
+    # statement-start, and the database serializes the writes via
+    # row-level locking. The WHERE clause is the primary key so the
+    # UPDATE is single-row even when audit_events on the user grow
+    # large.
+    from sqlalchemy import update  # noqa: PLC0415  (lazy import keeps test isolation cheap)
+
+    update_result = db_session.execute(
+        update(User)
+        .where(User.id == user_id)
+        .values(token_version=User.token_version + 1)
+    )
+    rows_updated = int(update_result.rowcount or 0)
+
+    # Step 2 - emit the F-013 audit event in the SAME transaction so
+    # both effects commit or roll back together. Per AAP Section 0.7.1
+    # invariant 6, atomicity of state-change-plus-audit is enforced at
+    # the transaction layer (PostgreSQL MVCC) rather than at the
+    # application layer.
+    #
+    # The ``after_payload.action == "logout"`` matches the QA report's
+    # expected shape and lets SIEM consumers distinguish logout events
+    # from login events by payload content rather than by event_type
+    # (which is uniformly ``authentication`` for the F-012 flow).
+    emit_audit_event(
+        db_session=db_session,
+        event_type=AuditEventType.AUTHENTICATION,
+        actor_user_id=user_id,
+        target_record_id=None,
+        before_payload=None,
+        after_payload={
+            "user_id": str(user_id),
+            "org_id": str(org_id),
+            "method": "logout",
+            "action": "logout",
+            "result": "success",
+        },
+    )
+
+    _logger.info(
+        "session_revoked",
+        user_id=str(user_id),
+        org_id=str(org_id),
+        rows_updated=rows_updated,
+    )
+
+    return rows_updated
 
 
 def _resolve_default_org_id() -> UUID:

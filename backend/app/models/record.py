@@ -419,21 +419,40 @@ class Record(Base):
     # ``audit_events`` exposes the F-013 / F-011 edit-history feed
     # for this record. The reciprocal ``AuditEvent.target_record`` is
     # declared on the AuditEvent model with
-    # ``back_populates="audit_events"``. CRITICAL: NO cascade is
-    # configured here. Audit events MUST persist even if the record
-    # is hard-deleted (admin-only). The database-level
-    # ``ondelete="RESTRICT"`` on the FK from ``audit_events`` to
-    # ``records`` physically prevents a hard-delete from succeeding
-    # while audit rows still reference the record; the admin
-    # hard-delete flow is responsible for archiving or null-ifying
-    # ``audit_events.target_record_id`` first if required. The
-    # string-based ``primaryjoin`` and ``foreign_keys`` are required
-    # to break the circular import cycle between this module and
-    # ``app.models.audit_event``.
+    # ``back_populates="audit_events"``.
+    #
+    # CRITICAL (per AAP Section 0.7.1 invariant 5 -- "Append-only
+    # audit table. No code path issues UPDATE or DELETE against
+    # audit_events. Database-level grants enforce this in production"):
+    #
+    #   1. NO cascade is configured. Audit events MUST persist even
+    #      if the record is hard-deleted (admin-only).
+    #   2. ``passive_deletes=True`` is REQUIRED so SQLAlchemy does NOT
+    #      auto-issue ``UPDATE audit_events SET target_record_id = NULL``
+    #      when ``db_session.delete(record)`` is called. Without this
+    #      flag, SQLAlchemy's default "nullify" behavior on a
+    #      one-to-many relationship would emit an ORM-driven UPDATE on
+    #      ``audit_events`` BEFORE the parent DELETE -- silently
+    #      mutating audit rows from application code, which violates
+    #      the append-only invariant. With ``passive_deletes=True``
+    #      SQLAlchemy delegates dependent-row handling entirely to the
+    #      database-level FK constraint (``ondelete="RESTRICT"`` on
+    #      ``audit_events.target_record_id``). When audit history
+    #      exists for a record, RESTRICT fires and PostgreSQL raises
+    #      an IntegrityError; the admin service catches that and
+    #      surfaces a clean 409 Conflict to the caller. Hard delete
+    #      thus succeeds only for records with NO audit history --
+    #      a rare condition in practice (every API-created record has
+    #      at least a CREATE audit), so admins are pushed toward
+    #      soft-delete which preserves audit history.
+    #   3. The string-based ``primaryjoin`` and ``foreign_keys`` are
+    #      required to break the circular import cycle between this
+    #      module and ``app.models.audit_event``.
     audit_events: Mapped[list[AuditEvent]] = relationship(
         back_populates="target_record",
         primaryjoin="Record.id == AuditEvent.target_record_id",
         foreign_keys="AuditEvent.target_record_id",
+        passive_deletes=True,
     )
 
     def __repr__(self) -> str:

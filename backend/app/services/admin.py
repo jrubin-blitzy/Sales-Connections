@@ -104,17 +104,6 @@ from typing import TYPE_CHECKING, Any
 #   annotations.
 from sqlalchemy import Date, and_, asc, cast, desc, func, select
 
-# Third-party runtime imports.
-#
-# ``structlog.get_logger(__name__)`` produces a JSON-emitting bound
-# logger. The ``merge_contextvars`` processor configured in
-# :mod:`app.observability.logging` automatically surfaces the
-# request-scoped ``correlation_id``, ``user_id``, and ``org_id``
-# bound by the correlation/auth middleware so log lines emitted
-# here are automatically correlated by request without per-call
-# bookkeeping.
-import structlog
-
 # First-party imports - absolute paths only per the project's
 # ``flake8-tidy-imports`` configuration (relative imports are banned
 # under AAP Section 0.3.7).
@@ -154,6 +143,19 @@ import structlog
 # state-changes invoke it inside the parent transaction so the
 # state change and the audit row commit (or roll back) atomically
 # per invariant 6.
+from sqlalchemy.exc import IntegrityError
+
+# Third-party runtime imports.
+#
+# ``structlog.get_logger(__name__)`` produces a JSON-emitting bound
+# logger. The ``merge_contextvars`` processor configured in
+# :mod:`app.observability.logging` automatically surfaces the
+# request-scoped ``correlation_id``, ``user_id``, and ``org_id``
+# bound by the correlation/auth middleware so log lines emitted
+# here are automatically correlated by request without per-call
+# bookkeeping.
+import structlog
+
 from app.extensions import db
 from app.middleware.error_handlers import (
     ConflictError,
@@ -272,6 +274,7 @@ _MAX_USER_LIST_LIMIT: int = 500
 # :func:`list_org_users`).
 
 __all__ = [
+    "HardDeleteAuditHistoryError",
     "LastAdminError",
     "SelfDemotionError",
     "compute_analytics",
@@ -316,6 +319,53 @@ class LastAdminError(ConflictError):
         """Return the canonical 'last admin' error message."""
         return (
             "Cannot demote the last Admin in the organization. Promote another user to Admin first."
+        )
+
+
+class HardDeleteAuditHistoryError(ConflictError):
+    """Raised when hard delete is blocked by existing audit history.
+
+    Per AAP Section 0.7.1 invariant 5 ("Append-only audit table.
+    No code path issues UPDATE or DELETE against audit_events.
+    Database-level grants enforce this in production"), a record
+    that has any associated audit_events rows CANNOT be hard-deleted
+    because doing so would either:
+
+    1. Require the application role to issue an UPDATE on
+       ``audit_events.target_record_id`` (forbidden by the
+       application-role privileges installed by migration 0001), OR
+    2. Require the database engine to issue an FK CASCADE/SET NULL
+       action on ``audit_events`` (also functionally an UPDATE,
+       which the AAP forbids).
+
+    Instead, the hard-delete path is BLOCKED at the database layer
+    via the ``ondelete="RESTRICT"`` foreign-key constraint on
+    ``audit_events.target_record_id``. SQLAlchemy is told not to
+    auto-nullify those rows (``passive_deletes=True`` on
+    ``Record.audit_events``), so the DB-level RESTRICT is the sole
+    arbiter. PostgreSQL raises an :class:`IntegrityError` with the
+    constraint name ``fk_audit_events_target_record_id_records``
+    when this happens; :func:`hard_delete_record` catches that and
+    re-raises this exception subclass for a clean 409 surface.
+
+    Operational guidance: admins should use SOFT delete (which sets
+    ``deleted_at`` without deleting the row) instead of HARD delete
+    when audit history exists. Soft delete preserves both the record
+    and its audit history. HARD delete remains supported only for
+    records with no audit history (a rare edge case in production
+    since every API-created record has at least a CREATE audit).
+
+    Mapped to HTTP 409 with the stable error code ``"conflict"``.
+    """
+
+    @property
+    def default_message(self) -> str:
+        """Return the canonical 'hard-delete blocked by audit' message."""
+        return (
+            "Cannot hard-delete a record with audit history; the audit "
+            "trail must remain immutable per AAP Section 0.7.1. Use soft "
+            "delete instead, which preserves both the record and its "
+            "audit history."
         )
 
 
@@ -903,8 +953,45 @@ def hard_delete_record(
     # deletion on ``record_tags`` happens at the database layer via
     # the FK ``ondelete=CASCADE``; we do not need to delete tag links
     # explicitly.
+    #
+    # Per AAP Section 0.7.1 invariant 5 ("Append-only audit table"),
+    # SQLAlchemy is configured with ``passive_deletes=True`` on the
+    # ``Record.audit_events`` relationship so it does NOT auto-nullify
+    # the FK on dependent ``audit_events`` rows. The DB-level
+    # ``ondelete="RESTRICT"`` constraint on
+    # ``audit_events.target_record_id`` is the sole arbiter:
+    # PostgreSQL raises an :class:`IntegrityError` when audit history
+    # references the record being deleted. We catch that here and
+    # surface :class:`HardDeleteAuditHistoryError` (HTTP 409) so the
+    # admin gets a clear actionable error instead of a generic 500.
     db_session.delete(record)
-    db_session.flush()
+    try:
+        db_session.flush()
+    except IntegrityError as exc:
+        # Identify the FK constraint by name. The constraint name is
+        # set by migration 0001 to
+        # ``fk_audit_events_target_record_id_records``; matching by
+        # substring is robust to PostgreSQL's verbose error formatting
+        # which may include schema/table prefixes around the name.
+        # Note: the audit row INSERTed above this DELETE will roll
+        # back atomically with this exception per the caller's
+        # ``with session.begin():`` block, so the F-013 invariant
+        # ("audit emit and state change commit or roll back together")
+        # holds without any extra cleanup here.
+        constraint_name = "fk_audit_events_target_record_id_records"
+        if constraint_name in str(exc.orig):
+            logger.info(
+                "hard_delete_record_blocked_by_audit_history",
+                org_id=str(org_id),
+                record_id=str(record_id),
+                actor_user_id=str(actor_user_id),
+                constraint=constraint_name,
+            )
+            raise HardDeleteAuditHistoryError() from exc
+        # Some other integrity violation; re-raise so the global
+        # error handler surfaces a generic 500 (this would indicate
+        # a server-side schema issue worth investigating).
+        raise
 
     logger.info(
         "hard_delete_record_applied",

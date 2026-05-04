@@ -181,9 +181,14 @@ from app.models.enums import InvolvementType, OutreachStatus, UserRole
 # * :class:`AnalyticsResponse` is the response shape for
 #   ``GET /api/admin/analytics`` (three panels: top contributors,
 #   leads by status, weekly activity sparkline).
-# * :class:`PaginatedConnections` is the pagination envelope for
-#   ``GET /api/admin/records`` -- mirrors the public-feed shape so
-#   the frontend can reuse the same row-rendering component.
+# * :class:`PaginatedAdminConnections` is the pagination envelope for
+#   ``GET /api/admin/records`` -- mirrors the public-feed shape but
+#   embeds :class:`ConnectionAdminRead` (which exposes the server-
+#   internal ``deleted_at`` soft-delete timestamp) so admins can
+#   distinguish active rows from soft-deleted rows in the same
+#   listing. Per QA Issue 8, ``deleted_at`` is intentionally absent
+#   from the public :class:`ConnectionRead` / :class:`PaginatedConnections`
+#   shapes.
 # * :class:`UserRead` is the outbound user shape (id, email,
 #   display_name, role, created_at). ``password_hash`` and ``org_id``
 #   are intentionally NOT exposed by the schema; even an Admin caller
@@ -191,16 +196,16 @@ from app.models.enums import InvolvementType, OutreachStatus, UserRole
 # * :class:`UserRoleUpdate` is the inbound payload for
 #   ``PATCH /api/admin/users/:id``. ``extra='forbid'`` rejects any
 #   field other than ``role``.
-# * :class:`ConnectionRead` is the outbound shape for a single
-#   record; used by the moderation list to serialize each row before
-#   wrapping in the :class:`PaginatedConnections` envelope.
+# * :class:`ConnectionAdminRead` is the outbound shape for a single
+#   record on the admin moderation surface; extends
+#   :class:`ConnectionRead` with ``deleted_at``.
 # * :class:`TagRead` is the embedded tag shape on
-#   :class:`ConnectionRead`; used by the moderation list serializer
-#   so pydantic's ``from_attributes=True`` mode resolves
+#   :class:`ConnectionAdminRead`; used by the moderation list
+#   serializer so pydantic's ``from_attributes=True`` mode resolves
 #   ``record.record_tags[].tag`` cleanly.
 from app.schemas import (
-    ConnectionRead,
-    PaginatedConnections,
+    ConnectionAdminRead,
+    PaginatedAdminConnections,
     TagRead,
     UserRead,
     UserRoleUpdate,
@@ -716,24 +721,33 @@ def _parse_json_body(schema_cls: type[Any]) -> Any:
 
 
 def _record_to_read_dict(record: Any) -> dict[str, Any]:
-    """Serialize a :class:`Record` ORM instance to a ConnectionRead dict.
+    """Serialize a :class:`Record` ORM instance to a ConnectionAdminRead dict.
 
     Used by the moderation list handler to convert each row into a
     JSON-serializable dict before wrapping in
-    :class:`PaginatedConnections`. The handler does NOT import the
-    SQLAlchemy ``Record`` model directly (per AAP Section 0.7.7
+    :class:`PaginatedAdminConnections`. The handler does NOT import
+    the SQLAlchemy ``Record`` model directly (per AAP Section 0.7.7
     "No direct DB or model access") so the parameter is annotated
     ``Any``; the docstring documents the expected shape.
+
+    The admin moderation surface uses :class:`ConnectionAdminRead`
+    (which extends :class:`ConnectionRead` with ``deleted_at``) per
+    QA Issue 8: ``deleted_at`` is intentionally excluded from the
+    public :class:`ConnectionRead` shape because non-admin callers
+    always see ``null`` (default queries inject
+    ``WHERE deleted_at IS NULL``); admin moderation legitimately
+    needs the timestamp to distinguish active rows from soft-
+    deleted rows in the same listing.
 
     The ``tags`` list is materialised explicitly because the ORM
     exposes the tag-association relationship as ``record.record_tags``
     (a list of :class:`RecordTag` rows each carrying ``.tag``) while
-    :class:`ConnectionRead` declares ``tags: list[TagRead]``. Pydantic's
-    ``from_attributes=True`` mode would not auto-coerce that nesting,
-    so we extract the inner ``tag`` objects here. The eager-loading
-    is performed by the service-layer query (``selectinload`` on
-    ``record_tags`` and the cascading ``tag``); this helper does NOT
-    trigger N+1 queries.
+    :class:`ConnectionAdminRead` declares ``tags: list[TagRead]``.
+    Pydantic's ``from_attributes=True`` mode would not auto-coerce
+    that nesting, so we extract the inner ``tag`` objects here. The
+    eager-loading is performed by the service-layer query
+    (``selectinload`` on ``record_tags`` and the cascading ``tag``);
+    this helper does NOT trigger N+1 queries.
 
     Args:
         record: A persisted ``Record`` ORM instance with
@@ -741,16 +755,16 @@ def _record_to_read_dict(record: Any) -> dict[str, Any]:
 
     Returns:
         JSON-serialisable dict matching the
-        :class:`ConnectionRead` shape, ready for ``jsonify``.
+        :class:`ConnectionAdminRead` shape, ready for ``jsonify``.
     """
     tag_objects: list[Any] = [rt.tag for rt in record.record_tags]
-    # Validate tags via TagRead first so the ConnectionRead validation
-    # below sees already-validated nested values; this also catches
-    # any drift in the ORM ``Tag`` shape early. ``model_validate``
-    # uses ``from_attributes=True`` to read the ORM attributes
-    # directly.
+    # Validate tags via TagRead first so the ConnectionAdminRead
+    # validation below sees already-validated nested values; this
+    # also catches any drift in the ORM ``Tag`` shape early.
+    # ``model_validate`` uses ``from_attributes=True`` to read the
+    # ORM attributes directly.
     tags_payload = [TagRead.model_validate(t).model_dump(mode="json") for t in tag_objects]
-    return ConnectionRead.model_validate(
+    return ConnectionAdminRead.model_validate(
         {
             "id": record.id,
             "full_name": record.full_name,
@@ -937,6 +951,9 @@ def list_admin_records() -> tuple[Response, int]:
                               accepted.
             include_deleted   Default true (admin-default). Pass
                               false to exclude soft-deleted records.
+                              Accepted alias: ``show_deleted``
+                              (per QA Issue 11). If both are
+                              supplied, ``include_deleted`` wins.
         Sort:
             sort      One of submission_date / full_name / company /
                       owner_display_name / outreach_status. Default
@@ -1006,11 +1023,31 @@ def list_admin_records() -> tuple[Response, int]:
     # Layer 6: "record moderation including the soft-deleted view".
     # Admins explicitly pass ``include_deleted=false`` to filter out
     # soft-deleted records from the moderation tab.
-    include_deleted = _parse_bool(
-        args.get("include_deleted"),
-        default=True,
-        field="include_deleted",
-    )
+    #
+    # Per QA Issue 11: accept the alias ``show_deleted`` so both
+    # documented names produce the same filter behavior. The
+    # canonical name is ``include_deleted``; ``show_deleted`` is
+    # retained as a backward-compatible alias. If both are
+    # supplied, ``include_deleted`` wins (it is the canonical
+    # name); operators are encouraged to migrate to the canonical
+    # name in any external tooling. Unrecognized values surface a
+    # 422 via ``_parse_bool``.
+    raw_include = args.get("include_deleted")
+    raw_show = args.get("show_deleted")
+    if raw_include is not None:
+        include_deleted = _parse_bool(
+            raw_include,
+            default=True,
+            field="include_deleted",
+        )
+    elif raw_show is not None:
+        include_deleted = _parse_bool(
+            raw_show,
+            default=True,
+            field="show_deleted",
+        )
+    else:
+        include_deleted = True
 
     filters = ConnectionFilters(
         company=company,
@@ -1090,7 +1127,7 @@ def list_admin_records() -> tuple[Response, int]:
     )
 
     items = [_record_to_read_dict(record) for record in rows]
-    response_payload = PaginatedConnections.model_validate(
+    response_payload = PaginatedAdminConnections.model_validate(
         {
             "items": items,
             "total": total,

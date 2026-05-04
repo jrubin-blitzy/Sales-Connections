@@ -622,6 +622,15 @@ def _record_to_read_dict(record: Any) -> dict[str, Any]:
         :class:`app.schemas.connection.ConnectionRead` shape, ready
         for ``jsonify``.
     """
+    # NOTE: ``record.deleted_at`` is intentionally NOT supplied here.
+    # Per QA Issue 8 the public :class:`ConnectionRead` shape does
+    # not expose the soft-delete timestamp; non-admin callers always
+    # see ``WHERE deleted_at IS NULL`` results, and admin moderation
+    # consumes :class:`ConnectionAdminRead` via
+    # ``GET /api/admin/records``. The Pydantic schema would silently
+    # drop the key with the default ``extra='ignore'`` config, but
+    # omitting it from the input dict makes the intent explicit and
+    # avoids a subtle reader-trap.
     return ConnectionRead.model_validate(
         {
             "id": record.id,
@@ -640,7 +649,6 @@ def _record_to_read_dict(record: Any) -> dict[str, Any]:
             "tags": [rt.tag for rt in record.record_tags],
             "created_at": record.created_at,
             "updated_at": record.updated_at,
-            "deleted_at": record.deleted_at,
         }
     ).model_dump(mode="json")
 
@@ -774,12 +782,27 @@ def _parse_enum_args(
     return tuple(coerced)
 
 
-def _parse_uuid_args(name: str) -> tuple[Any, ...]:
+def _parse_uuid_args(name: str, *aliases: str) -> tuple[Any, ...]:
     """Parse a multi-valued UUID query-string parameter into a tuple.
 
     Used by the F-004 feed handler to parse ``?owner_user_ids=...``
     and ``?tag_ids=...``. Supports both comma-separated single-key
     form and repeated-key form, mirroring :func:`_parse_enum_args`.
+
+    Per QA Issue 6 the function accepts optional aliases so the
+    canonical plural names (``owner_user_ids``, ``tag_ids``) can
+    coexist with the singular forms (``owner_user_id``, ``tag_id``)
+    that some SPA tooling and external integrations emit. All
+    matching keys are concatenated; the aggregate of values is
+    deduplicated by virtue of UUID equality at the ORM filter
+    layer.
+
+    Args:
+        name: The canonical parameter name (e.g.,
+            ``"owner_user_ids"``).
+        *aliases: Zero or more legacy / alternate parameter names
+            (e.g., ``"owner_user_id"``) whose values are appended
+            after the canonical values.
 
     Returns:
         Tuple of :class:`uuid.UUID` instances.
@@ -789,6 +812,8 @@ def _parse_uuid_args(name: str) -> tuple[Any, ...]:
             be parsed as a UUID.
     """
     raw_values = request.args.getlist(name)
+    for alias in aliases:
+        raw_values = raw_values + request.args.getlist(alias)
     if not raw_values:
         return ()
     flat: list[str] = []
@@ -921,8 +946,13 @@ def _build_filters_from_query(actor_role: Any) -> ConnectionFilters:
 
     involvement = _parse_enum_args("involvement", InvolvementType)
     outreach_status = _parse_enum_args("outreach_status", OutreachStatus)
-    owner_user_ids = _parse_uuid_args("owner_user_ids")
-    tag_ids = _parse_uuid_args("tag_ids")
+    # Per QA Issue 6: accept singular ``owner_user_id`` as an alias
+    # for the canonical plural ``owner_user_ids`` so external SPA
+    # tooling that emits the singular form (matching the older
+    # spec text) is not silently ignored. Same convenience for
+    # ``tag_id`` -> ``tag_ids``.
+    owner_user_ids = _parse_uuid_args("owner_user_ids", "owner_user_id")
+    tag_ids = _parse_uuid_args("tag_ids", "tag_id")
     submission_date_from = _parse_date_arg("submission_date_from")
     submission_date_to = _parse_date_arg("submission_date_to")
 

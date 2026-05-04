@@ -105,6 +105,7 @@ from app.config import (
 from app.extensions import db, init_oauth_clients, oauth
 from app.middleware.auth import register_auth_middleware
 from app.middleware.correlation import register_correlation_middleware
+from app.middleware.cors import register_cors_middleware
 from app.middleware.error_handlers import register_error_handlers
 from app.middleware.rbac import register_rbac_error_handlers
 from app.observability.logging import configure_structlog
@@ -315,10 +316,17 @@ def create_app(config_object: str | type[BaseConfig] | None = None) -> Flask:
     # Order is significant per AAP Section 0.5.2 Layer 0:
     #   1. correlation -- generate / extract X-Correlation-Id and
     #      bind on contextvars BEFORE any other middleware logs.
-    #   2. auth -- decode the session JWT, verify token_version, and
+    #   2. cors -- short-circuit CORS preflight (OPTIONS) requests
+    #      with 204 + Access-Control-Allow-* headers BEFORE the auth
+    #      middleware runs. CORS preflight requests never carry the
+    #      session cookie so they would otherwise be rejected with
+    #      401 by the auth middleware (QA Issue 12). Also attaches
+    #      Access-Control-Allow-Origin / -Credentials to non-preflight
+    #      responses for allowlisted origins.
+    #   3. auth -- decode the session JWT, verify token_version, and
     #      populate ``g.session``. Public paths (``/healthz``,
     #      ``/readyz``, ``/metrics``, ``/auth/*``) are skipped.
-    #   3. rbac_error_handlers -- special-case for ForbiddenError so
+    #   4. rbac_error_handlers -- special-case for ForbiddenError so
     #      RBAC denials carry the structured ``required_roles`` /
     #      ``actual_role`` log context. Registered BEFORE
     #      ``register_error_handlers`` so that the comprehensive
@@ -329,13 +337,14 @@ def create_app(config_object: str | type[BaseConfig] | None = None) -> Flask:
     #      identical regardless of order, but matching the AAP-
     #      mandated sequence is important for documentation and
     #      future contributors).
-    #   4. error_handlers -- convert raised AppError subclasses,
+    #   5. error_handlers -- convert raised AppError subclasses,
     #      pydantic ``ValidationError``, werkzeug ``HTTPException``,
     #      and any unhandled ``Exception`` into the canonical JSON
     #      envelope. Registered LAST in the middleware sequence so
     #      it sees exceptions raised by every upstream middleware
-    #      (correlation, auth, rbac) and by every handler.
+    #      (correlation, cors, auth, rbac) and by every handler.
     register_correlation_middleware(flask_app)
+    register_cors_middleware(flask_app)
     register_auth_middleware(flask_app)
     register_rbac_error_handlers(flask_app)
     register_error_handlers(flask_app)

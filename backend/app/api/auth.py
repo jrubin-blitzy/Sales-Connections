@@ -80,6 +80,7 @@ from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from flask import (
     Blueprint,
@@ -95,7 +96,11 @@ from pydantic import ValidationError
 from sqlalchemy import select
 
 from app.extensions import db, oauth
-from app.middleware.error_handlers import AuthError, ValidationFailedError
+from app.middleware.error_handlers import (
+    AuthError,
+    ServiceUnavailableError,
+    ValidationFailedError,
+)
 from app.models import User
 from app.schemas import (
     LoginRequest,
@@ -104,11 +109,13 @@ from app.schemas import (
     UserRead,
 )
 from app.services.auth import (
+    AuthenticationError,
     authenticate_email_password,
     mint_session_jwt,
     record_login_audit,
-    record_logout_audit,
+    revoke_session_and_audit,
     upsert_oauth_user,
+    verify_session_jwt,
 )
 
 if TYPE_CHECKING:
@@ -382,25 +389,46 @@ def login() -> tuple[Response, int]:
 
 @auth_bp.route("/logout", methods=["POST"])
 def logout() -> tuple[Response, int]:
-    """Logout the current session.
+    """Logout the current session and rotate the JWT signing version.
+
+    Per AAP Section 0.7.4 (Security Invariants):
+
+        "Tokens rotated on logout. Logout invalidates the cookie and
+        (for the email/password flow) advances the per-user
+        signing-key version."
+
+    Per AAP Section 0.7.1 invariant 6:
+
+        "Atomic state-change + audit pair. Every state change persists
+        itself and emits its audit event inside a single transaction;
+        failure of either rolls back both."
 
     Behavior:
 
-    * Clears the session cookie by setting an empty value with
-      ``max_age=0``. Browsers delete the cookie immediately.
-    * Emits a F-013 ``authentication`` audit event when ``g.session``
-      is populated (so we can correlate the logout with the prior
-      login).
-    * Always returns 200, regardless of whether a session was
-      present. This is intentional: a stale-token logout (the browser
-      sent an expired or invalid cookie) should still succeed because
-      the goal is to clear state from the client.
-
-    The endpoint may or may not see ``g.session`` populated depending
-    on whether :mod:`app.middleware.auth` treats ``/auth/logout`` as a
-    public path (skip auth) or a protected path (require auth). Both
-    flows are supported here via the ``getattr(g, "session", None)``
-    guard.
+    * Manually parses the session JWT from the cookie (the auth
+      middleware treats ``/auth/logout`` as a public path so a stale
+      cookie can still complete a clean logout; consequently
+      ``g.session`` is NOT populated for this endpoint, and we must
+      verify the token here).
+    * When the JWT verifies cleanly:
+        - Increments ``users.token_version`` via SQL expression so
+          every previously-minted JWT for this user is invalidated
+          (the auth middleware's ``_verify_token_version`` rejects
+          any JWT whose ``tv`` claim does not match the live value).
+        - Emits a F-013 ``authentication`` audit event with
+          ``after_payload.action == "logout"`` in the SAME transaction
+          (atomic per AAP Section 0.7.1).
+    * When the JWT fails to verify (expired, malformed, missing,
+      tampered):
+        - Skips the token_version increment and audit emission. There
+          is no authenticated actor to attribute the audit event to,
+          and rotation has nothing to rotate against.
+    * In ALL cases:
+        - Clears the session cookie by setting an empty value with
+          ``max_age=0``. Browsers delete the cookie immediately.
+        - Returns HTTP 200 with an empty body. The operation is
+          idempotent: a stale-cookie logout still succeeds because
+          the user-visible goal (clear client-side state) is met.
 
     Success response (HTTP 200)::
 
@@ -410,36 +438,90 @@ def logout() -> tuple[Response, int]:
     Returns:
         ``(response, 200)`` -- always 200; the operation is idempotent.
     """
-    # The auth middleware populates ``g.session`` for protected paths
-    # and skips public ones. We tolerate either configuration: if
-    # ``g.session`` is present, we have an authenticated actor and
-    # can emit the audit event; otherwise the logout is a best-effort
-    # cookie-clearing operation.
-    session_obj = getattr(g, "session", None)
+    # Step 1 - manually extract and verify the JWT from the cookie.
+    # ``/auth/logout`` is in the auth-middleware public-paths
+    # allowlist (so stale-cookie logouts succeed); consequently
+    # ``g.session`` is NOT populated and we cannot rely on the
+    # middleware to identify the actor. We must verify the token
+    # locally to discover the actor identity that authorized the
+    # logout.
+    cookie_name = current_app.config.get("SESSION_COOKIE_NAME", "session")
+    raw_token = request.cookies.get(cookie_name)
 
-    if session_obj is not None:
+    actor_user_id: str | None = None
+    actor_org_id: str | None = None
+
+    if raw_token:
+        try:
+            claims = verify_session_jwt(raw_token)
+            actor_user_id = str(claims.get("user_id", "")) or None
+            actor_org_id = str(claims.get("org_id", "")) or None
+        except AuthenticationError:
+            # The token is invalid (expired, signature mismatch,
+            # malformed). We cannot identify the actor, so we skip
+            # the token_version rotation and the audit emission.
+            # The cookie is still cleared and the response is still
+            # 200 because the user-visible logout goal (clear
+            # client-side state) remains satisfied. This branch is
+            # the QA-described "stale token" path.
+            _logger.info("auth_logout_invalid_token")
+
+    # Step 2 - rotate the token version AND emit the F-013 audit
+    # event ATOMICALLY inside a single transaction. The
+    # ``revoke_session_and_audit`` service function performs the
+    # SQL UPDATE on ``users.token_version`` and the audit INSERT
+    # together; if either fails the parent transaction rolls back,
+    # preserving the AAP Section 0.7.1 invariant 6 atomicity
+    # contract.
+    if actor_user_id and actor_org_id:
         try:
             with db.session() as db_session, db_session.begin():
-                record_logout_audit(session_obj, db_session=db_session)
+                rows_updated = revoke_session_and_audit(
+                    user_id=UUID(actor_user_id),
+                    org_id=UUID(actor_org_id),
+                    db_session=db_session,
+                )
             _logger.info(
                 "auth_logout_success",
                 extra={
-                    "user_id": str(session_obj.user_id),
-                    "org_id": str(session_obj.org_id),
+                    "user_id": actor_user_id,
+                    "org_id": actor_org_id,
+                    "rows_updated": rows_updated,
                 },
             )
         except Exception as exc:  # pragma: no cover - defensive
-            # Never fail logout because of a DB problem -- the
-            # browser-side cookie clear must always succeed. Log the
-            # failure for forensic follow-up so operators can
-            # reconcile the audit trail.
+            # Per the QA-described "logout idempotent" requirement,
+            # logout MUST NOT fail because of a DB problem. The
+            # client-side cookie clear must always succeed because
+            # otherwise the user is stuck in a half-logged-in state
+            # they cannot escape from the SPA. We log the failure
+            # for forensic follow-up so operators can detect (and
+            # remediate) audit-trail gaps; the request still returns
+            # 200.
+            #
+            # Note: the parent transaction is rolled back by the
+            # context-manager exit, so a partial state (token_version
+            # incremented but audit missing, or audit emitted but
+            # token_version unchanged) is impossible by construction.
             _logger.error(
                 "auth_logout_audit_failed",
-                extra={"error_class": type(exc).__name__},
+                extra={
+                    "error_class": type(exc).__name__,
+                    "user_id": actor_user_id,
+                    "org_id": actor_org_id,
+                },
             )
     else:
+        # No valid token in the cookie - nothing to rotate, nothing
+        # to audit. Log the "no session" outcome so log analysis can
+        # distinguish a stale-cookie logout from a healthy one.
         _logger.info("auth_logout_no_session")
 
+    # Step 3 - clear the cookie and return 200. The cookie clear is
+    # performed regardless of whether the token rotation succeeded
+    # so the user-visible logout (the SPA receives "200 + clear-cookie"
+    # and transitions to the logged-out UI) is the same in every
+    # branch above.
     response: Response = make_response(jsonify({}), 200)
     _clear_session_cookie(response)
     return response, 200
@@ -467,17 +549,49 @@ def google_start() -> Response:
     :data:`app.middleware.auth._PUBLIC_PATHS` so the auth middleware
     does not intercept the request.
 
-    If Google OAuth is not configured (``GOOGLE_OAUTH_CLIENT_ID`` and
+    If Google OAuth is not configured (``GOOGLE_OAUTH_CLIENT_ID`` and/or
     ``GOOGLE_OAUTH_CLIENT_SECRET`` empty), the Authlib registry has no
-    ``google`` client and the attribute access raises ``AttributeError``
-    which the global error handler converts to HTTP 500. Production
-    deployments configure both credentials so this path is unreachable
-    outside of test environments.
+    ``google`` client. Per AAP Section 0.4.3 (operability) and QA Issue 4
+    we surface this as HTTP 503 with ``error.code = "oauth_unconfigured"``
+    so operators can distinguish a known environmental misconfiguration
+    from a server-side defect (which would surface as 500). The SPA
+    falls back to the email/password login form when it receives this
+    response.
 
     Returns:
         A Flask Response (HTTP 302 redirect) pointing at Google's
-        authorization URL.
+        authorization URL when Google OAuth is configured.
+
+    Raises:
+        ServiceUnavailableError: When ``GOOGLE_OAUTH_CLIENT_ID`` or
+            ``GOOGLE_OAUTH_CLIENT_SECRET`` is not set; mapped by the
+            global error handler to HTTP 503 with
+            ``error.code = "oauth_unconfigured"``.
     """
+    # Detect missing Google OAuth configuration BEFORE accessing
+    # ``oauth.google`` to avoid the AttributeError-to-500 path that
+    # QA Issue 4 observed. Authlib's ``create_client`` returns ``None``
+    # when no provider is registered with the supplied name; we
+    # short-circuit with a typed 503 ServiceUnavailableError so the
+    # canonical error envelope carries ``error.code =
+    # "oauth_unconfigured"``.
+    if oauth.create_client("google") is None:
+        _logger.info(
+            "auth_google_start_unconfigured",
+            extra={"reason": "GOOGLE_OAUTH_CLIENT_ID or _SECRET not configured"},
+        )
+        # The base ``ServiceUnavailableError`` defaults to
+        # ``error_code = "service_unavailable"``. We override the
+        # instance attribute (mirroring the established pattern used
+        # in ``app.api.admin`` for ``confirmation_required``) so the
+        # SPA can dispatch on the more specific code. The class
+        # ``status_code = 503`` is preserved.
+        oauth_error = ServiceUnavailableError(
+            "Google OAuth is not configured on this server."
+        )
+        oauth_error.error_code = "oauth_unconfigured"
+        raise oauth_error
+
     # ``url_for(..., _external=True)`` constructs an absolute URL
     # (scheme + host) suitable for Google's redirect_uri. Production
     # deployments override this with ``GOOGLE_OAUTH_REDIRECT_URI`` so
@@ -495,13 +609,13 @@ def google_start() -> Response:
 
     # ``oauth.google`` resolves to the Authlib client registered by
     # ``app.extensions.init_oauth_clients`` when ``GOOGLE_OAUTH_CLIENT_ID``
-    # and ``GOOGLE_OAUTH_CLIENT_SECRET`` are configured. If neither is
-    # configured the attribute access raises ``AttributeError`` which the
-    # global error handler maps to HTTP 500. ``authorize_redirect`` then
-    # returns a Flask Response with the ``Location`` header set to
-    # Google's authorization endpoint; Authlib persists the state and
-    # PKCE code_verifier in the framework's session storage so the
-    # callback handler can validate and exchange them.
+    # and ``GOOGLE_OAUTH_CLIENT_SECRET`` are configured. The unconfigured
+    # case is rejected above with a typed 503 so this access is safe.
+    # ``authorize_redirect`` returns a Flask Response with the
+    # ``Location`` header set to Google's authorization endpoint;
+    # Authlib persists the state and PKCE code_verifier in the
+    # framework's session storage so the callback handler can validate
+    # and exchange them.
     return oauth.google.authorize_redirect(redirect_uri)
 
 
@@ -562,7 +676,13 @@ def google_callback() -> Response:
     # 6749 Sec 4.1.2.1, an error response includes ``?error=<code>``;
     # we redirect the SPA to /login with a generic error indicator
     # so URL-history snooping does not leak Google's specific error
-    # code.
+    # code. This branch runs BEFORE the unconfigured-server guard
+    # (Step 2 below) so an OAuth-provider error redirect is honoured
+    # even on a server where Google OAuth client registration was
+    # never completed - the user-visible behaviour ("returned to
+    # /login with a generic error") is the same whether the
+    # provider rejected the flow or the server cannot complete the
+    # token exchange.
     oauth_error = request.args.get("error")
     if oauth_error:
         _logger.info(
@@ -572,6 +692,26 @@ def google_callback() -> Response:
         # Redirect to /login with a generic error indicator. The SPA
         # renders a "Sign-in failed" toast.
         return make_response(redirect("/login?error=oauth_failed"))
+
+    # Step 2: detect missing Google OAuth configuration BEFORE any
+    # token-exchange attempt (mirrors the guard in ``google_start``
+    # for QA Issue 4). If the callback is reached on an unconfigured
+    # server (e.g., misrouted redirect_uri or operators forgot to
+    # set ``GOOGLE_OAUTH_CLIENT_ID``), we surface 503 rather than
+    # 500 so operators see the configuration gap clearly. The
+    # ``?error=...`` redirect path above is preserved for OAuth-
+    # provider failures even on unconfigured servers (so SPAs that
+    # construct the URL manually still get a clean redirect).
+    if oauth.create_client("google") is None:
+        _logger.info(
+            "auth_google_callback_unconfigured",
+            extra={"reason": "GOOGLE_OAUTH_CLIENT_ID or _SECRET not configured"},
+        )
+        oauth_unconfigured = ServiceUnavailableError(
+            "Google OAuth is not configured on this server."
+        )
+        oauth_unconfigured.error_code = "oauth_unconfigured"
+        raise oauth_unconfigured
 
     # Step 2: exchange the authorization code for an ID token.
     # ``oauth.google.authorize_access_token`` performs state validation,

@@ -126,25 +126,53 @@ _LOG_LEVEL_MAP: dict[str, int] = {
 
 # Case-insensitive regex matching key names that must have their values
 # redacted before rendering. Patterns are designed to be used with
-# ``re.fullmatch`` (whole-string match) and are intentionally permissive
-# (false-positive redaction is far less harmful than a false-negative
-# secret leak). They cover the OWASP-recommended common naming
-# patterns: ``password``, ``authorization``, ``token``, ``*_token``
-# (e.g., ``access_token``, ``refresh_token``, ``id_token``), ``*_key``
-# (e.g., ``api_key``, ``ANTHROPIC_API_KEY``, ``signing_key``),
-# ``*_secret`` (e.g., ``client_secret``), and any name containing
-# ``api_key``, ``api-key``, or ``apikey`` (e.g., ``stripe_api_key``,
-# ``my-api-key``, ``my_apikey``).
+# ``re.fullmatch`` (whole-string match) and cover the OWASP-recommended
+# common naming patterns:
+#
+#   * ``password`` / ``passwd`` -- plain authentication credentials
+#   * ``authorization`` -- HTTP Authorization header values
+#   * ``token`` and ``*_token`` -- bearer/access/refresh/id tokens, etc.
+#   * ``*_secret`` -- ``client_secret``, ``shared_secret``, etc.
+#   * Any name containing ``api_key``/``api-key``/``apikey`` --
+#     covers ``stripe_api_key``, ``ANTHROPIC_API_KEY``,
+#     ``my-api-key``, ``my_apikey``, etc.
+#   * Specific known-sensitive ``*_key`` variants:
+#     ``signing_key``, ``secret_key``, ``private_key``,
+#     ``encryption_key``, ``master_key``, ``session_key``.
+#
+# Per QA Issue 13: the previous broad ``.*_key`` pattern matched
+# benign debug context like ``sort_key``, ``cache_key``,
+# ``partition_key``, ``cursor_key``, etc., causing operationally
+# helpful values to render as ``***REDACTED***`` and noisily
+# obscuring log analysis. The narrowed regex below preserves
+# false-positive-tolerant matching for true credential names while
+# letting application-domain ``*_key`` identifiers (sort keys,
+# cache keys, range keys) flow through to the renderer.
+#
+# False-negative risk analysis: the explicit ``*_key`` allowlist
+# below covers every ``_key`` variant the codebase or its
+# dependencies actually use. Future contributors adding a new
+# secret-bearing key MUST either choose a name covered by the
+# generic patterns (e.g., ``foo_token``, ``bar_secret``,
+# ``baz_api_key``) OR extend this regex; the structlog redaction
+# integration test exercises the canonical names so coverage gaps
+# surface in CI.
 _SECRET_KEY_PATTERN: re.Pattern[str] = re.compile(
     r"(?i)"
     r"(?:"
     r"password"
+    r"|passwd"
     r"|authorization"
     r"|token"
     r"|.*_token"
-    r"|.*_key"
     r"|.*_secret"
     r"|.*api[_-]?key.*"
+    r"|signing_key"
+    r"|secret_key"
+    r"|private_key"
+    r"|encryption_key"
+    r"|master_key"
+    r"|session_key"
     r")"
 )
 
