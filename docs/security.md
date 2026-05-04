@@ -474,14 +474,31 @@ User-supplied `relationship_context` is sanitized before templating into the Ant
 
 ## 8. Network Security
 
-Network and transport security is enforced at the AWS infrastructure layer plus a small set of HTTP headers emitted by the backend.
+Network and transport security is enforced at the AWS infrastructure layer plus a comprehensive set of HTTP response headers emitted by the backend security-headers middleware (`backend/app/middleware/security_headers.py`).
 
 ### TLS termination
 
 - All public traffic terminates at the AWS ALB with ACM-issued certificates. The certificate is provisioned via `infra/terraform/modules/alb/main.tf` and renewed automatically by ACM.
 - ALB security policy: `ELBSecurityPolicy-TLS13-1-2-2021-06` or newer. TLS 1.0 and TLS 1.1 are explicitly disabled.
 - HTTP listener on port 80 redirects to HTTPS via an ALB redirect rule (no application code involved).
-- HSTS header `Strict-Transport-Security: max-age=31536000; includeSubDomains` is emitted by the backend on every response. After the first response, conformant browsers will refuse to negotiate HTTP for the deployment domain.
+- HSTS header `Strict-Transport-Security: max-age=31536000; includeSubDomains` is emitted by the backend security-headers middleware on every response when `SESSION_COOKIE_SECURE=True` (production posture). After the first response, conformant browsers will refuse to negotiate HTTP for the deployment domain. The `preload` directive is intentionally omitted to avoid the irreversible HSTS-preload list submission. In development and testing (`SESSION_COOKIE_SECURE=False`) HSTS is suppressed so the dev server can serve plain HTTP on localhost.
+
+### HTTP response security headers
+
+Every backend response — including 2xx successes from blueprint handlers, 4xx and 5xx error envelopes from `app/middleware/error_handlers.py`, the CORS preflight 204, the auth 401 short-circuit, and the public observability endpoints (`/healthz`, `/readyz`, `/metrics`) — carries a uniform set of defensive HTTP response headers attached by `app/middleware/security_headers.py`. The middleware is registered AFTER the CORS middleware and BEFORE the auth middleware so the entire after-request chain layers correlation → CORS → security headers → handler-set values.
+
+| Header | Value | Scope | Rationale |
+|--------|-------|-------|-----------|
+| `X-Content-Type-Options` | `nosniff` | Every response | Disables browser MIME sniffing on declared `Content-Type` values. Defense-in-depth: a JSON response cannot be rendered as HTML even if a misconfigured intermediate proxy strips the `Content-Type` header. |
+| `X-Frame-Options` | `DENY` | Every response | Forbids embedding any backend response inside an iframe. Closes the clickjacking attack surface; the application has no legitimate embed use case. |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` | Every response | Sends full origin on same-origin requests; downgrades to origin-only on cross-origin navigations. Query string and path never leak to third-party origins. |
+| `Permissions-Policy` | `geolocation=(), microphone=(), camera=()` | Every response | Explicitly disables browser capabilities the application does not use. Reduces the post-XSS attack surface; modern syntax superseding the deprecated `Feature-Policy` header. |
+| `Cache-Control` | `no-store, no-cache, must-revalidate, private` | `/api/*` and `/auth/*` non-OPTIONS responses | Backend API and auth responses carry session-scoped data (user identity at `/api/me`, OAuth tokens at `/auth/google/callback`, etc.). None of these may be cached by the browser, by a CDN, or by an intermediate proxy. OPTIONS preflights are exempt so browsers can honor the CORS `Access-Control-Max-Age` directive. `/healthz`, `/readyz`, and `/metrics` are exempt because their pollers benefit from short-window caching and they carry no user data. |
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` | Every response when `SESSION_COOKIE_SECURE=True` | Forces conformant browsers to prefer HTTPS for one year. Suppressed in development and testing where the dev server runs over HTTP. |
+
+The middleware is idempotent: if a route handler explicitly sets any of these headers (for example, a future endpoint that wants `Cache-Control: public, max-age=3600` for a cacheable list), the existing value is preserved verbatim. This matches the convention of the correlation middleware. Content-Security-Policy is intentionally NOT set by the backend because the API serves only JSON; the frontend nginx is responsible for any CSP attached to the SPA shell.
+
+The deployment topology in AAP §0.4.6 routes `/api/*` and `/auth/*` directly from the AWS ALB to Flask without nginx interposition, so these headers are the sole defense layer for those paths. The frontend nginx in `frontend/nginx.conf` sets the same defensive headers on the SPA static-asset path it serves.
 
 ### Internal traffic
 

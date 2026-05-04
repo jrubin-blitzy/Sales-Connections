@@ -20,33 +20,48 @@ Per AAP Section 0.5.2 Layer 0, the canonical wiring order is::
     6.  oauth.init_app(app)            (Authlib OAuth client table)
     7.  init_oauth_clients(app, oauth) (register Google client)
     8.  register_correlation_middleware (per-request correlation ID)
-    9.  register_auth_middleware       (JWT verification +
+    9.  register_cors_middleware       (preflight short-circuit +
+                                        Access-Control-* headers)
+    10. register_security_headers_middleware
+                                       (defensive HTTP response
+                                        headers: nosniff,
+                                        X-Frame-Options, Referrer-
+                                        Policy, Permissions-Policy,
+                                        Cache-Control on /api and
+                                        /auth, HSTS in production;
+                                        registered AFTER cors so
+                                        every response -- preflight
+                                        included -- carries the
+                                        defensive headers)
+    11. register_auth_middleware       (JWT verification +
                                         token_version freshness check)
-    10. register_rbac_error_handlers   (ForbiddenError special-case;
+    12. register_rbac_error_handlers   (ForbiddenError special-case;
                                         registered before
                                         register_error_handlers per
                                         the AAP-mandated middleware
-                                        sequence correlation -> auth
-                                        -> rbac -> error_handlers)
-    11. register_error_handlers        (AppError -> JSON envelope;
+                                        sequence correlation ->
+                                        cors -> security_headers ->
+                                        auth -> rbac ->
+                                        error_handlers)
+    13. register_error_handlers        (AppError -> JSON envelope;
                                         registered LAST so it sees
                                         exceptions raised by every
                                         upstream middleware)
-    12. register_blueprints            (mount API surfaces AFTER all
+    14. register_blueprints            (mount API surfaces AFTER all
                                         middleware so handlers see
                                         populated ``g.session`` and
                                         the registered error
                                         handlers convert raised
                                         AppErrors)
-    13. init_metrics                   (Prometheus /metrics endpoint
+    15. init_metrics                   (Prometheus /metrics endpoint
                                         + per-request hooks)
-    14. init_tracing                   (OpenTelemetry tracer +
+    16. init_tracing                   (OpenTelemetry tracer +
                                         Flask/SQLAlchemy auto-
                                         instrumentation; gracefully
                                         no-ops when
                                         ``OTLP_EXPORTER_ENDPOINT``
                                         is empty)
-    15. import app.models              (side-effect import that
+    17. import app.models              (side-effect import that
                                         registers every declarative
                                         model class on
                                         ``Base.metadata`` so
@@ -108,6 +123,7 @@ from app.middleware.correlation import register_correlation_middleware
 from app.middleware.cors import register_cors_middleware
 from app.middleware.error_handlers import register_error_handlers
 from app.middleware.rbac import register_rbac_error_handlers
+from app.middleware.security_headers import register_security_headers_middleware
 from app.observability.logging import configure_structlog
 from app.observability.metrics import init_metrics
 from app.observability.tracing import init_tracing
@@ -237,14 +253,16 @@ def create_app(config_object: str | type[BaseConfig] | None = None) -> Flask:
         7.  oauth.init_app(app)
         8.  init_oauth_clients(app, oauth)
         9.  register_correlation_middleware(app)
-        10. register_auth_middleware(app)
-        11. register_rbac_error_handlers(app)
-        12. register_error_handlers(app)         -- LAST middleware
-        13. register_blueprints(app)             -- mount API surfaces
-        14. init_metrics(app)                    -- Prometheus /metrics
-        15. init_tracing(app, db.engine)         -- OpenTelemetry tracer
-        16. import app.models                    -- register on metadata
-        17. _register_shell_context(app)         -- flask shell helpers
+        10. register_cors_middleware(app)
+        11. register_security_headers_middleware(app)
+        12. register_auth_middleware(app)
+        13. register_rbac_error_handlers(app)
+        14. register_error_handlers(app)         -- LAST middleware
+        15. register_blueprints(app)             -- mount API surfaces
+        16. init_metrics(app)                    -- Prometheus /metrics
+        17. init_tracing(app, db.engine)         -- OpenTelemetry tracer
+        18. import app.models                    -- register on metadata
+        19. _register_shell_context(app)         -- flask shell helpers
 
     Per AAP Section 0.5.2 Layer 0, the middleware-then-blueprints
     order is required so that:
@@ -323,10 +341,24 @@ def create_app(config_object: str | type[BaseConfig] | None = None) -> Flask:
     #      401 by the auth middleware (QA Issue 12). Also attaches
     #      Access-Control-Allow-Origin / -Credentials to non-preflight
     #      responses for allowlisted origins.
-    #   3. auth -- decode the session JWT, verify token_version, and
+    #   3. security_headers -- attach defensive HTTP response headers
+    #      (X-Content-Type-Options nosniff, X-Frame-Options DENY,
+    #      Referrer-Policy, Permissions-Policy on every response;
+    #      Cache-Control no-store on /api/* and /auth/*; HSTS in
+    #      production). Registered AFTER cors so the after_request
+    #      chain runs correlation -> cors -> security_headers, which
+    #      means the OPTIONS preflight 204 short-circuit response and
+    #      every CORS-augmented response carries the security headers
+    #      too. Registered BEFORE auth so even auth's 401 short-
+    #      circuit response carries the defensive headers, closing the
+    #      QA Checkpoint 7 gap (Issue #1, MEDIUM) where production
+    #      /api/* responses lacked these headers because the AWS ALB
+    #      routes /api/* directly to Flask without nginx interposition
+    #      per AAP Section 0.4.6.
+    #   4. auth -- decode the session JWT, verify token_version, and
     #      populate ``g.session``. Public paths (``/healthz``,
     #      ``/readyz``, ``/metrics``, ``/auth/*``) are skipped.
-    #   4. rbac_error_handlers -- special-case for ForbiddenError so
+    #   5. rbac_error_handlers -- special-case for ForbiddenError so
     #      RBAC denials carry the structured ``required_roles`` /
     #      ``actual_role`` log context. Registered BEFORE
     #      ``register_error_handlers`` so that the comprehensive
@@ -337,14 +369,16 @@ def create_app(config_object: str | type[BaseConfig] | None = None) -> Flask:
     #      identical regardless of order, but matching the AAP-
     #      mandated sequence is important for documentation and
     #      future contributors).
-    #   5. error_handlers -- convert raised AppError subclasses,
+    #   6. error_handlers -- convert raised AppError subclasses,
     #      pydantic ``ValidationError``, werkzeug ``HTTPException``,
     #      and any unhandled ``Exception`` into the canonical JSON
     #      envelope. Registered LAST in the middleware sequence so
     #      it sees exceptions raised by every upstream middleware
-    #      (correlation, cors, auth, rbac) and by every handler.
+    #      (correlation, cors, security_headers, auth, rbac) and by
+    #      every handler.
     register_correlation_middleware(flask_app)
     register_cors_middleware(flask_app)
+    register_security_headers_middleware(flask_app)
     register_auth_middleware(flask_app)
     register_rbac_error_handlers(flask_app)
     register_error_handlers(flask_app)

@@ -155,8 +155,10 @@ The middleware stack registers in this order on every `/api/*` request:
 | Order | Middleware | Source |
 |-------|-----------|--------|
 | 1 | Correlation | `app/middleware/correlation.py` |
-| 2 | Auth (JWT validation) | `app/middleware/auth.py` |
-| 3 | RBAC decorator (per-handler) | `app/middleware/rbac.py` |
+| 2 | CORS (preflight short-circuit + allowlist) | `app/middleware/cors.py` |
+| 3 | Security headers (defensive HTTP response headers) | `app/middleware/security_headers.py` |
+| 4 | Auth (JWT validation) | `app/middleware/auth.py` |
+| 5 | RBAC decorator (per-handler) | `app/middleware/rbac.py` |
 | Last | Error handlers | `app/middleware/error_handlers.py` |
 
 ### Database tier
@@ -239,7 +241,7 @@ erDiagram
 
 ## 4. Request Lifecycle
 
-Every authenticated request traverses the same middleware pipeline: TLS terminates at the ALB; the request is reverse-proxied to a Fargate task; Flask receives the request; the correlation middleware injects `correlation_id` into the structlog and OpenTelemetry contexts; the auth middleware validates the JWT cookie and populates `g.session = Session(user_id, org_id, role)`; the per-handler RBAC decorator gates the handler against the permission matrix; the handler parses the request body via pydantic; the handler calls a service-layer function which opens a transaction, executes the state change, emits the audit event inside the same transaction, and commits; the handler formats the response; the error handler maps any exception to the uniform error envelope; the response returns through the ALB to the browser.
+Every authenticated request traverses the same middleware pipeline: TLS terminates at the ALB; the request is reverse-proxied to a Fargate task; Flask receives the request; the correlation middleware injects `correlation_id` into the structlog and OpenTelemetry contexts; the CORS middleware short-circuits OPTIONS preflight or attaches `Access-Control-*` headers to the response; the security-headers middleware attaches the defensive HTTP response headers (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, plus `Cache-Control` on `/api/*` and `/auth/*` and `Strict-Transport-Security` in production); the auth middleware validates the JWT cookie and populates `g.session = Session(user_id, org_id, role)`; the per-handler RBAC decorator gates the handler against the permission matrix; the handler parses the request body via pydantic; the handler calls a service-layer function which opens a transaction, executes the state change, emits the audit event inside the same transaction, and commits; the handler formats the response; the error handler maps any exception to the uniform error envelope; the response returns through the ALB to the browser.
 
 The full request-lifecycle sequence is in `docs/diagrams/request-lifecycle.mmd`. Rendered below:
 
@@ -286,8 +288,10 @@ The middleware stack is defined in `backend/app/__init__.py::create_app()` and a
 | Middleware | Responsibility | Order |
 |-----------|----------------|-------|
 | Correlation | Extract `X-Correlation-Id` header if present; otherwise generate `uuid4()`; bind into structlog context vars and OpenTelemetry baggage | 1 |
-| Auth | Extract JWT from the HttpOnly session cookie; validate signature and expiry against `JWT_SIGNING_KEY`; populate `g.session = Session(user_id, org_id, role)`; reject with HTTP 401 if absent or invalid on any `/api/*` endpoint | 2 |
-| RBAC (decorator) | `@requires_role(*roles)` on each handler; checks `g.session.role` against the decorator argument list; raises `PermissionError` on mismatch | 3 (per-handler) |
+| CORS | Short-circuit OPTIONS preflight with 204 and the `Access-Control-*` allowlist headers; attach `Access-Control-Allow-Origin` and `Access-Control-Allow-Credentials` to non-preflight responses for allowlisted origins | 2 |
+| Security headers | Attach `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, and `Permissions-Policy: geolocation=(), microphone=(), camera=()` on every response; attach `Cache-Control: no-store, no-cache, must-revalidate, private` on `/api/*` and `/auth/*` non-OPTIONS responses; attach `Strict-Transport-Security: max-age=31536000; includeSubDomains` only when `SESSION_COOKIE_SECURE` is True (production over HTTPS) | 3 |
+| Auth | Extract JWT from the HttpOnly session cookie; validate signature and expiry against `JWT_SIGNING_KEY`; populate `g.session = Session(user_id, org_id, role)`; reject with HTTP 401 if absent or invalid on any `/api/*` endpoint | 4 |
+| RBAC (decorator) | `@requires_role(*roles)` on each handler; checks `g.session.role` against the decorator argument list; raises `PermissionError` on mismatch | 5 (per-handler) |
 | Error handlers | Map `pydantic.ValidationError` → 422; map `AuthError` → 401; map `PermissionError` → 403; map `NotFound` → 404; map `ConflictError` → 409; map fallback `Exception` → 500; emit the uniform error envelope | last |
 
 ### Error envelope
