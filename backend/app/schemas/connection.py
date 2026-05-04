@@ -407,20 +407,32 @@ class ConnectionRead(BaseModel):
       - ``PATCH /api/connections/:id/status`` (after status change)
       - ``DELETE /api/connections/:id`` (after soft delete)
 
-    The ``deleted_at`` column on ``records`` is intentionally NOT
-    surfaced in this outbound schema (per QA Issue 8). It is a server-
-    internal soft-delete marker; default-scoped reads inject
-    ``WHERE deleted_at IS NULL`` so a non-admin caller would see only
-    ``null`` values anyway, and exposing the field could mislead
-    integrators into believing it is part of the public contract. The
-    soft-delete admin moderation view in :mod:`app.api.admin` uses a
-    separate response shape (``ConnectionAdminRead``) which retains
-    ``deleted_at`` because admins legitimately need to distinguish
-    active from soft-deleted rows. The audit-trail snapshots produced
-    by :func:`app.services.connections._record_to_audit_payload`
+    The ``deleted_at`` column on ``records`` IS surfaced on this
+    outbound schema (since QA Visual Consistency checkpoint, Issue 1).
+    The SPA's ``ConnectionFeed.tsx`` and ``ConnectionDetail.tsx``
+    components branch on ``record.deleted_at !== null`` to drive the
+    F-005 status-chip ``disabled`` state and the F-007 soft-deleted
+    visual treatment (strikethrough + amber badge + Edit/Delete
+    button visibility). Omitting the field from the response made
+    ``record.deleted_at`` evaluate to ``undefined`` on the client,
+    which compared with ``!== null`` is always ``true`` - causing
+    every active record to be rendered as if soft-deleted and the
+    Edit / Delete affordances to be hidden on the detail page. The
+    field is now part of the contract because the SPA depends on it.
+
+    For non-admin reads the field is always ``null`` because default
+    queries inject ``WHERE deleted_at IS NULL`` (F-007 invariant);
+    the schema MUST still emit the key (with the value ``null``) so
+    the client's runtime comparison ``record.deleted_at === null``
+    behaves correctly. For admin moderation paths (which can opt in
+    to soft-deleted rows via ``include_deleted=true`` or
+    ``GET /api/admin/records``) the field carries the populated
+    timestamp and the SPA renders the soft-deleted treatment.
+
+    The audit-trail snapshots produced by
+    :func:`app.services.connections._record_to_audit_payload`
     continue to capture ``deleted_at`` because the audit invariant
-    requires the full pre/post state of the row, NOT the public API
-    contract.
+    requires the full pre/post state of the row.
 
     Field provenance:
         id                         Server-generated UUID v4.
@@ -453,6 +465,12 @@ class ConnectionRead(BaseModel):
                                    ``selectinload`` to avoid N+1.
         created_at, updated_at     Server timestamps; surfaced for the
                                    SPA's "last edited" hint.
+        deleted_at                 NULL for active records (always
+                                   present on default reads); ISO
+                                   8601 timestamp when the record was
+                                   soft-deleted (only surfaced on
+                                   admin moderation paths or via
+                                   ``include_deleted=true``).
     """
 
     model_config = _OUTBOUND_CONFIG
@@ -473,9 +491,7 @@ class ConnectionRead(BaseModel):
     tags: list[TagRead] = Field(default_factory=list)
     created_at: AwareDatetime
     updated_at: AwareDatetime
-    # NOTE: ``deleted_at`` intentionally NOT exposed (QA Issue 8).
-    # Use ``ConnectionAdminRead`` for the admin moderation surface
-    # which legitimately needs the soft-delete timestamp.
+    deleted_at: AwareDatetime | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -486,35 +502,30 @@ class ConnectionRead(BaseModel):
 class ConnectionAdminRead(ConnectionRead):
     """Outbound shape for admin moderation views.
 
-    Extends :class:`ConnectionRead` with the server-internal
-    ``deleted_at`` soft-delete timestamp. Returned ONLY by the
-    admin moderation endpoints
-    (:func:`app.api.admin.list_records` and friends) where the
-    operator legitimately needs to distinguish active rows from
-    soft-deleted ones.
+    Historically this subclass added ``deleted_at`` on top of
+    :class:`ConnectionRead` for admin-only moderation surfaces.
+    Since the QA Visual Consistency fix (Issue 1), ``deleted_at`` is
+    part of :class:`ConnectionRead` itself because the SPA needs it
+    on every read to drive the F-005 status-chip and F-007
+    soft-deleted visual treatment.
 
-    Per QA Issue 8 the standard :class:`ConnectionRead` shape
-    (used by ``GET /api/connections``, ``GET /api/connections/:id``,
-    etc.) intentionally omits ``deleted_at`` because non-admin
-    callers always receive ``null`` for the field (default queries
-    inject ``WHERE deleted_at IS NULL``) and exposing the field
-    confused integrators about whether it was a public-contract
-    field. The admin surface gets its own schema so the
-    information-disclosure boundary is explicit and reviewable.
+    The class is retained as a distinct alias of
+    :class:`ConnectionRead` so existing handlers in
+    :mod:`app.api.admin` and the
+    :class:`PaginatedAdminConnections` envelope continue to compile
+    without changes. Behaviorally it is now identical to
+    :class:`ConnectionRead`.
+
+    Future work: a follow-up refactor may collapse this alias once
+    the admin paths are confirmed to need no additional fields.
 
     Field provenance:
-        deleted_at  NULL for active records; populated ISO-8601
-                    UTC timestamp for soft-deleted records. Set
-                    by :func:`app.services.connections.soft_delete_record`
-                    and never mutated thereafter (a hard delete
-                    removes the row entirely; a re-create writes
-                    a NEW row with a fresh ``id``).
-        (all other fields inherited from :class:`ConnectionRead`)
+        (all fields inherited from :class:`ConnectionRead`,
+        including ``deleted_at`` which is NULL for active records
+        and an ISO-8601 UTC timestamp for soft-deleted records).
     """
 
     model_config = _OUTBOUND_CONFIG
-
-    deleted_at: AwareDatetime | None = None
 
 
 # ---------------------------------------------------------------------------

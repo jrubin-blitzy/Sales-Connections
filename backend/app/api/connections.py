@@ -622,15 +622,18 @@ def _record_to_read_dict(record: Any) -> dict[str, Any]:
         :class:`app.schemas.connection.ConnectionRead` shape, ready
         for ``jsonify``.
     """
-    # NOTE: ``record.deleted_at`` is intentionally NOT supplied here.
-    # Per QA Issue 8 the public :class:`ConnectionRead` shape does
-    # not expose the soft-delete timestamp; non-admin callers always
-    # see ``WHERE deleted_at IS NULL`` results, and admin moderation
-    # consumes :class:`ConnectionAdminRead` via
-    # ``GET /api/admin/records``. The Pydantic schema would silently
-    # drop the key with the default ``extra='ignore'`` config, but
-    # omitting it from the input dict makes the intent explicit and
-    # avoids a subtle reader-trap.
+    # ``record.deleted_at`` IS surfaced on the public ConnectionRead
+    # shape since Visual Consistency QA Issue 1: the SPA's
+    # ConnectionFeed and ConnectionDetail components branch on
+    # ``record.deleted_at !== null`` to drive the F-005 status-chip
+    # ``disabled`` state and the F-007 soft-deleted visual treatment
+    # (strikethrough + amber badge + Edit/Delete button visibility).
+    # For active records the column is NULL (default queries inject
+    # ``WHERE deleted_at IS NULL``); for soft-deleted records reached
+    # via ``include_deleted=true`` or admin moderation the column
+    # carries the populated timestamp. The schema field is
+    # ``deleted_at: AwareDatetime | None`` so both cases serialize
+    # cleanly to JSON.
     return ConnectionRead.model_validate(
         {
             "id": record.id,
@@ -649,6 +652,7 @@ def _record_to_read_dict(record: Any) -> dict[str, Any]:
             "tags": [rt.tag for rt in record.record_tags],
             "created_at": record.created_at,
             "updated_at": record.updated_at,
+            "deleted_at": record.deleted_at,
         }
     ).model_dump(mode="json")
 

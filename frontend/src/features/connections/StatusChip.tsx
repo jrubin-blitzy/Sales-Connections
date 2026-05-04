@@ -181,6 +181,64 @@ const STATUS_TO_VARIANT: Record<OutreachStatusValue, StatusBadgeVariant> = {
 };
 
 /**
+ * Per-status background+foreground+border class strings applied to
+ * the editable Select so the F-005 status colors are preserved when
+ * a Sales Rep / Admin sees the editable chip - not just when a
+ * Contributor sees the read-only Badge.
+ *
+ * Per Visual Consistency QA Issue 2: prior to this map the
+ * EditableStatusSelect rendered a generic white-on-slate select
+ * (``border-slate-300 bg-white``) for ALL four statuses, so an
+ * admin or sales rep had no color affordance to distinguish the
+ * lifecycle state of a record at a glance. The map below uses the
+ * SAME ``outreach-*-bg`` / ``outreach-*-fg`` / ``outreach-*-border``
+ * Tailwind tokens that ``ReadOnlyStatusBadge`` consumes via the
+ * Badge primitive, so the visual contract is identical between the
+ * editable and read-only paths.
+ *
+ * The classes are written as full strings (rather than computed
+ * via ``\`bg-outreach-${value}-bg\``` interpolation) so the JIT
+ * Tailwind compiler picks every utility up at build time. Tailwind
+ * does not scan dynamic class strings.
+ *
+ * Tokens consumed (declared in frontend/tailwind.config.ts under
+ * theme.extend.colors.outreach.*):
+ *   - bg-outreach-not-started-bg      slate-100
+ *   - text-outreach-not-started-fg    slate-700
+ *   - border-outreach-not-started-border slate-300
+ *   ... and likewise for in-progress / contacted / closed.
+ *
+ * The ``!`` important prefix on the background and border utilities
+ * is required because the Select primitive declares ``bg-white`` and
+ * ``border-slate-300`` in its base classes; Tailwind's compiled CSS
+ * orders the built-in ``bg-white`` rule AFTER our extended
+ * ``bg-outreach-*`` rules, so without ``!important`` the base
+ * ``bg-white`` wins by source order regardless of the order of class
+ * strings inside ``className``. The Select primitive's ``selectClassName``
+ * is documented as a consumer override; using ``!`` makes that
+ * contract honest under Tailwind 3.x's deterministic-but-name-driven
+ * cascade.
+ */
+const STATUS_TO_SELECT_CLASS: Record<OutreachStatusValue, string> = {
+  "Not Started":
+    "!bg-outreach-not-started-bg !text-outreach-not-started-fg " +
+    "!border-outreach-not-started-border " +
+    "hover:!bg-outreach-not-started-bg/80",
+  "In Progress":
+    "!bg-outreach-in-progress-bg !text-outreach-in-progress-fg " +
+    "!border-outreach-in-progress-border " +
+    "hover:!bg-outreach-in-progress-bg/80",
+  Contacted:
+    "!bg-outreach-contacted-bg !text-outreach-contacted-fg " +
+    "!border-outreach-contacted-border " +
+    "hover:!bg-outreach-contacted-bg/80",
+  Closed:
+    "!bg-outreach-closed-bg !text-outreach-closed-fg " +
+    "!border-outreach-closed-border " +
+    "hover:!bg-outreach-closed-bg/80",
+};
+
+/**
  * Select options derived from `OUTREACH_STATUS_VALUES`.
  *
  * The label and the value are intentionally identical because the
@@ -356,10 +414,13 @@ function EditableStatusSelect({
         selectClassName={clsx(
           // Compact dimensions for a chip-like footprint.
           "h-8 min-w-[140px] text-xs font-medium",
-          // Subtle styling so the chip looks like a chip, not a full
-          // form input. Hover affordance reinforces the editable
-          // nature without dominating the row.
-          "border-slate-300 bg-white hover:bg-slate-50",
+          // Per-status background, foreground, and border tokens
+          // (Visual Consistency QA Issue 2) so the F-005 outreach
+          // colors are preserved on the editable path. The token
+          // strings come from STATUS_TO_SELECT_CLASS which mirrors
+          // the same outreach-*-bg/-fg/-border tokens consumed by
+          // ReadOnlyStatusBadge via the Badge primitive.
+          STATUS_TO_SELECT_CLASS[localValue],
         )}
         aria-label="Outreach status"
         data-testid={`status-chip-select-${recordId}`}

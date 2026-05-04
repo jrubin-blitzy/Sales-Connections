@@ -585,6 +585,15 @@ export function Table<TRow>({
                       onKeyDown={(event) => handleHeaderKeyDown(event, column)}
                       className={clsx(
                         "inline-flex items-center gap-1 rounded text-xs font-semibold uppercase tracking-wide transition-colors hover:text-slate-900",
+                        // Per Visual Consistency QA Issue 6, mobile
+                        // touch targets MUST be at least 44x44 px.
+                        // Sort buttons in <th> are very narrow at
+                        // mobile widths because the column header is
+                        // short text; min-h/min-w-[44px] enforces
+                        // the floor without expanding header
+                        // chrome on desktop (sm:min-h-0/sm:min-w-0
+                        // restores the natural compact size).
+                        "min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0",
                         "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500",
                         isSortedHere ? "text-slate-900" : "text-slate-600",
                       )}

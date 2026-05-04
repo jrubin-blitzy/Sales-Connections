@@ -746,13 +746,18 @@ describe("<Analytics />", () => {
   // -------------------------------------------------------------------------
 
   describe("accessibility and semantics", () => {
-    it("uses semantic <main> root with aria-labelledby pointing to the heading", () => {
-      // No await - the root <main> is rendered synchronously
+    it("uses semantic <section> root with aria-labelledby pointing to the heading", () => {
+      // No await - the root <section> is rendered synchronously
       // regardless of query state.
+      //
+      // Per QA Visual Consistency Issue 7 fix, route content uses a
+      // labeled <section> region rather than a nested <main> landmark
+      // (HTML5 spec permits only one <main> per document; the document's
+      // primary <main> lives in App.tsx).
       renderWithMockedSession(<Analytics />, buildAdminSession());
 
       const root = screen.getByTestId("admin-analytics");
-      expect(root.tagName.toLowerCase()).toBe("main");
+      expect(root.tagName.toLowerCase()).toBe("section");
       expect(root).toHaveAttribute("aria-labelledby", "admin-analytics-heading");
     });
 

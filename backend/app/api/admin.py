@@ -182,13 +182,13 @@ from app.models.enums import InvolvementType, OutreachStatus, UserRole
 #   ``GET /api/admin/analytics`` (three panels: top contributors,
 #   leads by status, weekly activity sparkline).
 # * :class:`PaginatedAdminConnections` is the pagination envelope for
-#   ``GET /api/admin/records`` -- mirrors the public-feed shape but
-#   embeds :class:`ConnectionAdminRead` (which exposes the server-
-#   internal ``deleted_at`` soft-delete timestamp) so admins can
-#   distinguish active rows from soft-deleted rows in the same
-#   listing. Per QA Issue 8, ``deleted_at`` is intentionally absent
-#   from the public :class:`ConnectionRead` / :class:`PaginatedConnections`
-#   shapes.
+#   ``GET /api/admin/records`` -- mirrors the public-feed shape and
+#   embeds :class:`ConnectionAdminRead` so admins can distinguish
+#   active rows from soft-deleted rows in the same listing. Since
+#   Visual Consistency QA Issue 1 ``deleted_at`` is part of the
+#   shared :class:`ConnectionRead` shape (the SPA depends on it for
+#   every read), so :class:`ConnectionAdminRead` is now a
+#   compatibility alias of :class:`ConnectionRead`.
 # * :class:`UserRead` is the outbound user shape (id, email,
 #   display_name, role, created_at). ``password_hash`` and ``org_id``
 #   are intentionally NOT exposed by the schema; even an Admin caller
@@ -197,8 +197,9 @@ from app.models.enums import InvolvementType, OutreachStatus, UserRole
 #   ``PATCH /api/admin/users/:id``. ``extra='forbid'`` rejects any
 #   field other than ``role``.
 # * :class:`ConnectionAdminRead` is the outbound shape for a single
-#   record on the admin moderation surface; extends
-#   :class:`ConnectionRead` with ``deleted_at``.
+#   record on the admin moderation surface; alias of
+#   :class:`ConnectionRead` since the latter now exposes
+#   ``deleted_at`` for SPA visual treatment.
 # * :class:`TagRead` is the embedded tag shape on
 #   :class:`ConnectionAdminRead`; used by the moderation list
 #   serializer so pydantic's ``from_attributes=True`` mode resolves
@@ -730,14 +731,14 @@ def _record_to_read_dict(record: Any) -> dict[str, Any]:
     "No direct DB or model access") so the parameter is annotated
     ``Any``; the docstring documents the expected shape.
 
-    The admin moderation surface uses :class:`ConnectionAdminRead`
-    (which extends :class:`ConnectionRead` with ``deleted_at``) per
-    QA Issue 8: ``deleted_at`` is intentionally excluded from the
-    public :class:`ConnectionRead` shape because non-admin callers
-    always see ``null`` (default queries inject
-    ``WHERE deleted_at IS NULL``); admin moderation legitimately
-    needs the timestamp to distinguish active rows from soft-
-    deleted rows in the same listing.
+    The admin moderation surface uses :class:`ConnectionAdminRead`,
+    which since Visual Consistency QA Issue 1 is now an alias of
+    :class:`ConnectionRead` (the ``deleted_at`` field has been
+    promoted to the shared :class:`ConnectionRead` shape because the
+    SPA depends on it across every read to drive the F-005 status-
+    chip and F-007 soft-deleted visual treatment). The alias is
+    retained for API stability so existing handlers and the
+    :class:`PaginatedAdminConnections` envelope continue to compile.
 
     The ``tags`` list is materialised explicitly because the ORM
     exposes the tag-association relationship as ``record.record_tags``

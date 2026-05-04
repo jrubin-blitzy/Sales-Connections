@@ -124,6 +124,53 @@
     backdrop-filter: blur(2px);
     -webkit-backdrop-filter: blur(2px);
   }
+
+  /* ----------------------------------------------------------
+   * Forced-colors mode (Visual Consistency QA Issue 11).
+   *
+   * Windows High Contrast Mode (now CSS-spec'd as
+   * `forced-colors: active`) overrides author colors with the user's
+   * system palette. Most of the SPA degrades gracefully because we
+   * use semantic <button>/<a>/<input> elements, which inherit the
+   * system colors automatically. The custom-styled badge / chip
+   * primitives (Involvement F-003, Outreach Status F-005) lose their
+   * theme tokens because the `bg-*` and `text-*` Tailwind utilities
+   * are stripped by the browser. To preserve the visual distinction
+   * we let the system "ButtonText" and "ButtonFace" CCSColors apply
+   * via `forced-color-adjust: auto` (default) AND we restore the
+   * borders on the badge/chip elements so the boundaries remain
+   * visible. The focus-ring rule below uses the system-defined
+   * `Highlight` color so keyboard users still see a clear ring under
+   * forced-colors.
+   *
+   * Per WCAG 2.1 AA SC 1.4.1 (Use of Color), our color scheme is not
+   * the sole conveyor of meaning - badge/chip labels carry the
+   * status name as text, and form errors are announced via role="alert"
+   * - so the loss of color tinting under forced-colors does not
+   * compromise the required information. This block is a quality
+   * improvement, not a correctness fix.
+   * ---------------------------------------------------------- */
+  @media (forced-colors: active) {
+    /* Preserve a 1px boundary on every Tailwind-styled badge/chip
+       so users with forced colors can still see the chip outlines. */
+    [class*="bg-involvement-"],
+    [class*="bg-outreach-"],
+    [class*="border-involvement-"],
+    [class*="border-outreach-"] {
+      border: 1px solid CanvasText;
+    }
+    /* Use the system Highlight color for the keyboard focus ring so
+       it is visible regardless of the user's color scheme. */
+    :focus-visible {
+      outline: 2px solid Highlight;
+      outline-offset: 2px;
+    }
+    /* Native <dialog> backdrop is invisible in forced-colors mode by
+       default; let the system render its standard dim. */
+    dialog::backdrop {
+      background-color: Canvas;
+    }
+  }
 }
 
 /* ============================================================

@@ -169,7 +169,7 @@ interface ErrorBoundaryState {
  *     Sentry when VITE_SENTRY_DSN is set (deferred per scope).
  *
  * Accessibility:
- *   - The fallback's <main role="alert"> ensures screen readers
+ *   - The fallback's <section role="alert"> ensures screen readers
  *     announce the failure when it appears (WCAG 4.1.3 - Status
  *     Messages).
  *   - The "Reload application" button is a real <button type="button">
@@ -233,7 +233,13 @@ class AppErrorBoundary extends Component<{ readonly children: ReactNode }, Error
   override render(): ReactNode {
     if (this.state.hasError) {
       return (
-        <main
+        // Per Visual Consistency QA Issue 7 the error fallback uses
+        // a labeled <section role="alert"> rather than <main>: the
+        // inner error boundary may be nested inside the document's
+        // primary <main> in App.tsx, and HTML5 specifies one <main>
+        // per document. role="alert" preserves the assistive-tech
+        // announcement; aria-live="assertive" preserves the urgency.
+        <section
           role="alert"
           aria-live="assertive"
           className="flex min-h-screen items-center justify-center bg-slate-50 p-6"
@@ -265,7 +271,7 @@ class AppErrorBoundary extends Component<{ readonly children: ReactNode }, Error
               Reload application
             </button>
           </div>
-        </main>
+        </section>
       );
     }
     return this.props.children;
@@ -406,6 +412,11 @@ function AppHeader(): JSX.Element {
             to="/feed"
             className={clsx(
               "flex items-center gap-2 rounded-md text-lg font-semibold text-slate-900",
+              // WCAG 2.5.8 / SC 2.5.5: 44x44 minimum touch target on
+              // mobile; full-size header retains its natural height on
+              // sm+ where pointer precision is high (Visual Consistency
+              // QA Issue 6).
+              "min-h-[44px] min-w-[44px] px-2 sm:min-h-0 sm:min-w-0 sm:px-0",
               "focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2",
             )}
             data-testid="brand-link"
@@ -466,7 +477,12 @@ function AppHeader(): JSX.Element {
             type="button"
             onClick={() => setMobileMenuOpen((open) => !open)}
             className={clsx(
-              "inline-flex items-center justify-center rounded-md p-2 md:hidden",
+              // Per Visual Consistency QA Issue 6 the mobile
+              // hamburger MUST hit the 44x44 touch-target floor. The
+              // min-h / min-w utilities apply at every viewport but
+              // the button is only rendered at < md (md:hidden) so
+              // they only matter on mobile.
+              "inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md p-2 md:hidden",
               "text-slate-700 hover:bg-slate-100 hover:text-slate-900",
               "focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2",
             )}

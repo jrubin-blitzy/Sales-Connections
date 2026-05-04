@@ -456,6 +456,65 @@ function WeeklyActivitySparkline({
                   strokeDasharray="4 4"
                 />
               )}
+              {/* Per Visual Consistency QA Issue 8: hover-driven
+                  tooltip per data point. Each point is a small
+                  invisible <circle> with a <title> child that the
+                  browser surfaces as a native tooltip on hover or
+                  focus. The radius is generous (8 px in the local
+                  viewBox, ~16 px on screen at typical sizes) so a
+                  pointer can land on it without pixel precision; the
+                  fill is fully transparent on the rest state and only
+                  becomes visible on hover (via the [&:hover>circle]
+                  attribute) so the chart line stays clean.
+
+                  The <title> element is the accessible tooltip
+                  surface; it is also exposed to assistive technology
+                  via the SVG accessibility tree. We render one
+                  <circle> per week regardless of whether pathD or
+                  areaD were drawn, so the "all zero" and "single
+                  week" edge cases also have hoverable points. */}
+              {weeks.length >= 1 &&
+                weeks.map((week, idx) => {
+                  // X-position: spread evenly across the viewBox.
+                  // For weeks.length === 1 we anchor the lone point
+                  // at the middle of the chart so it is visible.
+                  const stepX =
+                    weeks.length === 1
+                      ? VIEW_W / 2 - PADDING
+                      : (VIEW_W - PADDING * 2) / (weeks.length - 1);
+                  const x = weeks.length === 1 ? VIEW_W / 2 : PADDING + idx * stepX;
+                  // Y-position: invert as in the path computation; if
+                  // every count is zero, place the marker at the
+                  // baseline so the dashed-baseline panel has hover
+                  // affordances too.
+                  const y =
+                    maxCount > 0
+                      ? VIEW_H - PADDING - (week.record_count / maxCount) * (VIEW_H - PADDING * 2)
+                      : VIEW_H - PADDING;
+                  return (
+                    <g
+                      key={`activity-point-${week.week_start}`}
+                      className="group"
+                      data-testid={`analytics-activity-point-${idx}`}
+                    >
+                      <circle
+                        cx={x}
+                        cy={y}
+                        r="8"
+                        className="fill-transparent group-hover:fill-emerald-600/20 group-focus-within:fill-emerald-600/20"
+                      />
+                      <circle
+                        cx={x}
+                        cy={y}
+                        r="3"
+                        className="fill-emerald-600 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+                      />
+                      <title>{`Week of ${week.week_start}: ${week.record_count.toLocaleString()} ${
+                        week.record_count === 1 ? "record" : "records"
+                      }`}</title>
+                    </g>
+                  );
+                })}
             </svg>
           </>
         )}
@@ -608,7 +667,10 @@ export function Analytics(): JSX.Element {
   const query = useAnalyticsQuery();
 
   return (
-    <main
+    // Per Visual Consistency QA Issue 7 the route component renders
+    // <section> rather than nesting a second <main> landmark inside
+    // the document's primary <main> in App.tsx.
+    <section
       aria-labelledby="admin-analytics-heading"
       className="flex flex-col gap-6"
       data-testid="admin-analytics"
@@ -632,6 +694,6 @@ export function Analytics(): JSX.Element {
       )}
 
       {query.isSuccess && <AnalyticsPanels data={query.data} />}
-    </main>
+    </section>
   );
 }

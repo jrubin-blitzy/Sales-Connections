@@ -65,7 +65,10 @@
  *                                 /connections/:id.
  *
  * Accessibility:
- *   - Single <main> landmark.
+ *   - Labeled <section aria-labelledby> instead of nesting a second
+ *     <main> landmark inside the document's primary <main> in
+ *     App.tsx (per Visual Consistency QA Issue 7 - HTML5 specifies
+ *     one <main> per document).
  *   - <header> with the record's full name as the page <h1>.
  *   - Definition lists (<dl>/<dt>/<dd>) for the field grid.
  *   - Confirmation modal with aria-described summary.
@@ -304,17 +307,21 @@ export function ConnectionDetail(): JSX.Element {
 
   // -------------------------------------------------------------------------
   // Loading state
+  //
+  // Per Visual Consistency QA Issue 7 the route component renders
+  // <section> rather than a nested <main> landmark; the outer <main>
+  // in App.tsx is the document's primary main element.
   // -------------------------------------------------------------------------
   if (recordQuery.isPending) {
     return (
-      <main
+      <section
         className="mx-auto max-w-4xl px-4 py-12 text-center"
         role="status"
         aria-busy="true"
         data-testid="connection-detail-loading"
       >
         <p className="text-sm text-slate-500">Loading connection...</p>
-      </main>
+      </section>
     );
   }
 
@@ -324,7 +331,7 @@ export function ConnectionDetail(): JSX.Element {
   if (recordQuery.isError) {
     const isNotFound = recordQuery.error.status === 404;
     return (
-      <main
+      <section
         className="mx-auto max-w-4xl px-4 py-12 text-center"
         role="alert"
         data-testid="connection-detail-error"
@@ -356,7 +363,7 @@ export function ConnectionDetail(): JSX.Element {
             </Button>
           )}
         </div>
-      </main>
+      </section>
     );
   }
 
@@ -369,7 +376,7 @@ export function ConnectionDetail(): JSX.Element {
   const isSoftDeleted = record.deleted_at !== null;
 
   return (
-    <main
+    <section
       aria-labelledby="connection-detail-heading"
       className="mx-auto flex max-w-4xl flex-col gap-6 px-4 py-6 sm:py-10"
       data-testid="connection-detail"
@@ -657,6 +664,6 @@ export function ConnectionDetail(): JSX.Element {
           Admins can restore or permanently delete it from the Admin Panel.
         </p>
       </Modal>
-    </main>
+    </section>
   );
 }

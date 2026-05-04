@@ -74,6 +74,7 @@ import {
 import { isSoftAiFailure, useGenerateNotesMutation } from "@/api/notes";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
+import { Textarea } from "@/components/ui/Textarea";
 import { useToast } from "@/components/ui/Toast";
 import {
   ConnectionCreateSchema,
@@ -507,22 +508,27 @@ export function AddEditConnectionForm({ mode }: AddEditConnectionFormProps): JSX
   }
 
   // === Loading and error guards ======================================
+  //
+  // Per Visual Consistency QA Issue 7 these route components render
+  // <section> rather than nesting a second <main> landmark inside
+  // the document's primary <main> in App.tsx. HTML5 requires one
+  // <main> per document.
   if (isHydrating) {
     return (
-      <main
+      <section
         className="mx-auto max-w-3xl px-4 py-12 text-center"
         role="status"
         aria-busy="true"
         data-testid="connection-form-loading"
       >
         <p className="text-sm text-slate-500">Loading record...</p>
-      </main>
+      </section>
     );
   }
 
   if (mode === "edit" && recordQuery.isError) {
     return (
-      <main
+      <section
         className="mx-auto max-w-3xl space-y-4 px-4 py-12 text-center"
         role="alert"
         data-testid="connection-form-load-error"
@@ -531,15 +537,22 @@ export function AddEditConnectionForm({ mode }: AddEditConnectionFormProps): JSX
         <Button variant="secondary" onClick={() => navigate("/feed")}>
           Back to feed
         </Button>
-      </main>
+      </section>
     );
   }
 
   // === Render ========================================================
   return (
-    <main className="mx-auto max-w-3xl px-4 py-6 sm:py-10" data-testid="connection-form">
+    <section
+      aria-labelledby="connection-form-heading"
+      className="mx-auto max-w-3xl px-4 py-6 sm:py-10"
+      data-testid="connection-form"
+    >
       <header className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+        <h1
+          id="connection-form-heading"
+          className="text-2xl font-semibold tracking-tight text-slate-900"
+        >
           {mode === "create" ? "Add Connection" : "Edit Connection"}
         </h1>
         <p className="mt-1 text-sm text-slate-600">
@@ -714,13 +727,22 @@ export function AddEditConnectionForm({ mode }: AddEditConnectionFormProps): JSX
             </div>
           ) : null}
 
-          <Input
+          {/* Per AAP F-002 the AI / outreach notes are multi-paragraph
+              talking points. Per Visual Consistency QA Issue 9 use the
+              Textarea primitive so the contributor has a multi-line
+              editor instead of the cramped single-line <Input>. The
+              maxLength mirrors the backend pydantic 8000-char cap on
+              ai_notes (see backend/app/schemas/connection.py
+              _AI_NOTES_MAX_CHARS). */}
+          <Textarea
             label="AI / outreach notes"
             value={formState.ai_notes}
             onChange={(e) => handleChange("ai_notes", e.target.value)}
             errorMessage={submitAttempted ? fieldErrors.ai_notes : undefined}
             helperText="Optional. Edit AI suggestions or write your own."
             placeholder="Talking points to use in outreach..."
+            rows={4}
+            maxLength={8000}
             data-testid="form-ai-notes"
           />
         </section>
@@ -807,6 +829,6 @@ export function AddEditConnectionForm({ mode }: AddEditConnectionFormProps): JSX
           </Button>
         </footer>
       </form>
-    </main>
+    </section>
   );
 }

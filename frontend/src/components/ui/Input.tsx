@@ -279,6 +279,17 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
             className={clsx(
               "pointer-events-none absolute inset-y-0 left-3",
               "flex items-center text-slate-400",
+              // Per Visual Consistency QA Issue 5, prefix icons in
+              // Input must match the 16x16 px size used elsewhere
+              // in the SPA (the Filter icon in ConnectionFeed
+              // header, the ExternalLink icon in the detail view,
+              // etc.). Lucide-React renders an <svg> with intrinsic
+              // ``width="24" height="24"`` attributes; the
+              // ``[&>svg]:h-4 [&>svg]:w-4`` rule clamps the rendered
+              // glyph to 16x16 regardless of consumer input, giving
+              // a uniform visual rhythm across all input prefix
+              // glyphs (Search, Filter, Search, Mail, etc.).
+              "[&>svg]:h-4 [&>svg]:w-4",
             )}
             data-testid="input-left-icon"
           >
@@ -330,6 +341,10 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
             className={clsx(
               "pointer-events-none absolute inset-y-0 right-3",
               "flex items-center text-slate-400",
+              // See QA Issue 5 above: same 16x16 svg-clamp rule for
+              // the trailing icon for visual consistency between
+              // leftIcon and rightIcon usage.
+              "[&>svg]:h-4 [&>svg]:w-4",
             )}
             data-testid="input-right-icon"
           >

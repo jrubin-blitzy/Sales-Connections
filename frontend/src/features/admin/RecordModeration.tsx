@@ -511,7 +511,10 @@ export function RecordModeration(): JSX.Element {
   // ---------------------------------------------------------------------
 
   return (
-    <main
+    // Per Visual Consistency QA Issue 7 the route component renders
+    // <section> rather than nesting a second <main> landmark inside
+    // the document's primary <main> in App.tsx.
+    <section
       aria-labelledby="admin-record-moderation-heading"
       className="flex flex-col gap-4"
       data-testid="admin-record-moderation"
@@ -610,6 +613,6 @@ export function RecordModeration(): JSX.Element {
         }}
         onConfirm={handleConfirmHardDelete}
       />
-    </main>
+    </section>
   );
 }

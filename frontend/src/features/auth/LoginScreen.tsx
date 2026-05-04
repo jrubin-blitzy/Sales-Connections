@@ -476,13 +476,15 @@ export function LoginScreen(): JSX.Element {
   // -------------------------------------------------------------------------
   if (sessionLoading) {
     return (
-      <main
+      // Per Visual Consistency QA Issue 7 use <section> instead of
+      // a nested <main>; the document's primary main is in App.tsx.
+      <section
         className="min-h-screen flex items-center justify-center bg-slate-50 px-4 py-8"
         aria-busy="true"
         data-testid="login-screen-loading"
       >
         <div className="text-sm text-slate-500">Loading...</div>
-      </main>
+      </section>
     );
   }
 
@@ -496,7 +498,7 @@ export function LoginScreen(): JSX.Element {
   // screen readers to announce).
   // -------------------------------------------------------------------------
   if (session?.authenticated === true) {
-    return <main className="min-h-screen" aria-hidden="true" />;
+    return <section className="min-h-screen" aria-hidden="true" />;
   }
 
   // -------------------------------------------------------------------------
@@ -517,7 +519,10 @@ export function LoginScreen(): JSX.Element {
   const isSubmitting = loginMutation.isPending;
 
   return (
-    <main
+    // Per Visual Consistency QA Issue 7 the login route renders
+    // <section aria-labelledby> rather than nesting a second <main>
+    // landmark inside the document's primary <main> in App.tsx.
+    <section
       className="min-h-screen flex items-center justify-center bg-slate-50 px-4 py-8"
       aria-labelledby="login-heading"
       data-testid="login-screen"
@@ -630,7 +635,7 @@ export function LoginScreen(): JSX.Element {
           By signing in you agree to our internal usage policy.
         </p>
       </div>
-    </main>
+    </section>
   );
 }
 

@@ -208,11 +208,12 @@ class TestConnectionCreate:
         # Operational fields present.
         assert "id" in body
         assert "submission_date" in body
-        # ``deleted_at`` is intentionally NOT exposed in the public
-        # ConnectionRead shape (QA Issue 8). Admin moderation uses
-        # ConnectionAdminRead which DOES surface it; verified
-        # separately in test_admin.py.
-        assert "deleted_at" not in body
+        # ``deleted_at`` IS surfaced on ConnectionRead (Visual
+        # Consistency QA Issue 1) so the SPA can drive the F-005
+        # status-chip and F-007 soft-deleted visual treatment from
+        # the same response. For an active record it is ``null``.
+        assert "deleted_at" in body
+        assert body["deleted_at"] is None
         # RFC 7231 Location header points at the canonical detail URL.
         assert response.headers.get("Location") == f"/api/connections/{body['id']}"
         # Verify the record exists in DB.
@@ -751,12 +752,13 @@ class TestConnectionList:
         body = response.get_json()
         # Only the 5 active records are returned.
         assert body["total"] == 5
-        # Per QA Issue 8 the public ConnectionRead shape does NOT
-        # expose ``deleted_at``; default-scoped reads have no need
-        # to surface it (every row would carry ``null``). The DB-
-        # level filter ``WHERE deleted_at IS NULL`` is the only
-        # guarantee callers need.
-        assert all("deleted_at" not in item for item in body["items"])
+        # ``deleted_at`` IS surfaced on ConnectionRead (Visual
+        # Consistency QA Issue 1) so the SPA can drive the F-005
+        # status-chip and F-007 soft-deleted visual treatment from
+        # the feed payload. For active records the value is
+        # ``null`` because default-scoped reads inject
+        # ``WHERE deleted_at IS NULL``.
+        assert all("deleted_at" in item and item["deleted_at"] is None for item in body["items"])
 
     def test_list_admin_include_deleted_opt_in(
         self,
@@ -1521,10 +1523,13 @@ class TestConnectionDetail:
         assert body["company"] == "DetailCo"
         # Operational fields present.
         assert body["owner_display_name"] == contributor_user.display_name
-        # Per QA Issue 8 the public ConnectionRead shape does NOT
-        # expose ``deleted_at``; admin moderation uses
-        # ConnectionAdminRead which DOES surface it.
-        assert "deleted_at" not in body
+        # ``deleted_at`` IS surfaced on ConnectionRead (Visual
+        # Consistency QA Issue 1). For an active record fetched via
+        # the default detail endpoint it is ``null``; the SPA's
+        # ConnectionDetail uses the value to gate the soft-deleted
+        # treatment and the Edit/Delete affordances.
+        assert "deleted_at" in body
+        assert body["deleted_at"] is None
         assert "submission_date" in body
         assert "tags" in body  # eager-loaded array
 
@@ -1578,21 +1583,22 @@ class TestConnectionDetail:
         :func:`test_get_record_returns_404_for_soft_deleted_by_default`)
         is the canonical proof the flag took effect.
 
-        Per QA Issue 8 the public :class:`ConnectionRead` shape does
-        NOT expose ``deleted_at``; admins consult
-        ``GET /api/admin/records`` (which uses
-        :class:`ConnectionAdminRead`) when they need the timestamp.
+        Per Visual Consistency QA Issue 1, ``deleted_at`` IS
+        exposed on :class:`ConnectionRead` so the SPA can drive its
+        F-007 soft-deleted visual treatment from any read; for a
+        soft-deleted record the field carries the populated
+        timestamp.
         """
         record = SoftDeletedRecordFactory(owner=admin_user)
         response = admin_client.get(f"/api/connections/{record.id}?include_deleted=true")
         assert response.status_code == 200
         body = response.get_json()
         assert body["id"] == str(record.id)
-        # ConnectionRead does NOT expose ``deleted_at``; the soft-
-        # deleted state is implied by the fact that the request
-        # only succeeded because ``include_deleted=true`` was
-        # passed.
-        assert "deleted_at" not in body
+        # ConnectionRead DOES expose ``deleted_at``; for a soft-
+        # deleted record fetched via include_deleted=true the value
+        # is the populated soft-delete timestamp.
+        assert "deleted_at" in body
+        assert body["deleted_at"] is not None
 
     def test_get_record_includes_tags(
         self,
@@ -2406,11 +2412,13 @@ class TestConnectionSoftDelete:
         response = contributor_client.delete(f"/api/connections/{record.id}")
         assert response.status_code == 200, response.get_json()
         body = response.get_json()
-        # The response carries the soft-deleted record. Per QA Issue 8
-        # the public ConnectionRead does NOT expose ``deleted_at``;
-        # the soft-delete state is verified via the audit event below
-        # and via direct DB inspection.
-        assert "deleted_at" not in body
+        # The response carries the soft-deleted record. Per Visual
+        # Consistency QA Issue 1 ``deleted_at`` IS exposed on
+        # ConnectionRead so the SPA can drive its F-007 visual
+        # treatment from this response; for a soft-deleted record
+        # the value is the populated soft-delete timestamp.
+        assert "deleted_at" in body
+        assert body["deleted_at"] is not None
         # Audit event emitted.
         audit_assertion(
             event_type=AuditEventType.SOFT_DELETE,
@@ -2458,11 +2466,13 @@ class TestConnectionSoftDelete:
         response = viewer_client.delete(f"/api/connections/{record.id}")
         assert response.status_code == 200
         body = response.get_json()
-        # Per QA Issue 8 the public ConnectionRead shape does NOT
-        # expose ``deleted_at``; the soft-delete state is implied by
-        # the 200 response (which would have been 404 if the record
-        # were already soft-deleted before this call).
-        assert "deleted_at" not in body
+        # Per Visual Consistency QA Issue 1 ``deleted_at`` IS
+        # exposed on ConnectionRead; for a soft-deleted record the
+        # field carries the populated timestamp so the SPA can
+        # transition the record's visual treatment from active to
+        # soft-deleted on the optimistic mutation response.
+        assert "deleted_at" in body
+        assert body["deleted_at"] is not None
         assert body["id"] == str(record.id)
 
     def test_contributor_cannot_soft_delete_others_record_returns_403(

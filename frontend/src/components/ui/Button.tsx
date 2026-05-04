@@ -171,13 +171,30 @@ const VARIANT_CLASSES: Record<ButtonVariant, string> = {
     "shadow-none px-0",
 };
 
+/**
+ * Size class map.
+ *
+ * Per Visual Consistency QA Issue 6 every button MUST hit the
+ * 44x44 px touch-target floor on mobile (< sm breakpoint). The
+ * `min-h-[44px]` utility applies on every viewport but is paired
+ * with the natural ``h-8`` / ``h-10`` / ``h-12`` height utilities;
+ * since `min-height` always wins over `height` when the natural
+ * height is smaller, the button reads 44 px tall at mobile and the
+ * stated `h-*` height (e.g., 40 px for `md`) at desktop because we
+ * release the floor via `sm:min-h-0`.
+ *
+ * The width floor is unnecessary because button labels typically
+ * carry enough text to exceed 44 px on their own; constraining the
+ * width would prevent fluid icon-only buttons (e.g., toolbar `X`
+ * dismissal) from staying compact.
+ */
 const SIZE_CLASSES: Record<ButtonSize, { container: string; icon: string }> = {
   sm: {
-    container: "h-8 px-3 text-xs gap-1.5 rounded-md",
+    container: "min-h-[44px] sm:min-h-0 h-8 px-3 text-xs gap-1.5 rounded-md",
     icon: "h-3.5 w-3.5",
   },
   md: {
-    container: "h-10 px-4 text-sm gap-2 rounded-md",
+    container: "min-h-[44px] sm:min-h-0 h-10 px-4 text-sm gap-2 rounded-md",
     icon: "h-4 w-4",
   },
   lg: {
@@ -240,6 +257,14 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
   // When loading, swap the leftIcon for the Loader2 spinner. If no
   // leftIcon was provided, the spinner still appears (so the wait state
   // is always visible at the start of the button).
+  //
+  // Per Visual Consistency QA Issue 4: Lucide-React icons render as
+  // <svg> with intrinsic ``width="24" height="24"`` attributes, which
+  // would overflow a span sized via ``h-4 w-4`` (the wrapper relies on
+  // CSS dimensions only). The ``[&>svg]:h-full [&>svg]:w-full`` rule
+  // forces any direct <svg> child to fill the wrapper exactly, so the
+  // rendered glyph matches both the visual size and the DOM size
+  // attributes regardless of what the consumer passes.
   const renderedLeftIcon: ReactNode = loading ? (
     <Loader2
       aria-hidden="true"
@@ -247,16 +272,22 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       data-testid="button-loading-spinner"
     />
   ) : leftIcon !== undefined && leftIcon !== null ? (
-    <span aria-hidden="true" className={clsx("inline-flex shrink-0", sizeClasses.icon)}>
+    <span
+      aria-hidden="true"
+      className={clsx("inline-flex shrink-0 [&>svg]:h-full [&>svg]:w-full", sizeClasses.icon)}
+    >
       {leftIcon}
     </span>
   ) : null;
 
   // Trailing icon is hidden during loading (so only one icon - the spinner -
-  // is visible at a time).
+  // is visible at a time). Same SVG-sizing arrangement as leftIcon.
   const renderedRightIcon: ReactNode =
     !loading && rightIcon !== undefined && rightIcon !== null ? (
-      <span aria-hidden="true" className={clsx("inline-flex shrink-0", sizeClasses.icon)}>
+      <span
+        aria-hidden="true"
+        className={clsx("inline-flex shrink-0 [&>svg]:h-full [&>svg]:w-full", sizeClasses.icon)}
+      >
         {rightIcon}
       </span>
     ) : null;

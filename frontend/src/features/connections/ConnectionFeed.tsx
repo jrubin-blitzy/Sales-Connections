@@ -45,7 +45,8 @@
  *   sharing; cursor pagination is deferred per AAP scope discipline.
  *
  * Accessibility:
- *   - <main> landmark, <h1> page heading.
+ *   - Labeled <section aria-labelledby> region (not <main>; the
+ *     document's <main> is in App.tsx). <h1> page heading.
  *   - Table primitive uses <th scope="col"> + aria-sort for sortable
  *     columns (delegated to the Table primitive).
  *   - Filter chip toggles use aria-pressed for screen-reader feedback.
@@ -323,7 +324,15 @@ interface FilterBarProps {
  */
 function chipClassName(selected: boolean): string {
   return clsx(
-    "inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium",
+    "inline-flex items-center justify-center rounded-full border px-3 py-1 text-xs font-medium",
+    // Per Visual Consistency QA Issue 6, mobile touch targets MUST
+    // be at least 44x44 px (WCAG 2.5.5 / Apple HIG / Material) so
+    // contributors using a phone do not mis-tap adjacent filter
+    // pills. The min-h/min-w only apply at the mobile breakpoint;
+    // at >=sm we relax back to the natural height so dense desktop
+    // layouts remain compact. Using sm:min-h-0 / sm:min-w-0 keeps
+    // the JIT-compiler happy with explicit utilities.
+    "min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0",
     "transition-colors",
     "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500",
     selected
@@ -965,7 +974,13 @@ export function ConnectionFeed(): JSX.Element {
   const pageSize = listParams.page_size ?? DEFAULT_PAGE_SIZE;
 
   return (
-    <main
+    // Per Visual Consistency QA Issue 7, the route component renders
+    // a labeled <section> rather than a second <main> landmark. The
+    // outer <main> in App.tsx is the document's primary main; nesting
+    // a second <main> violated the HTML5 spec (one <main> per
+    // document) and surfaced as duplicate "main" landmarks in
+    // assistive technologies.
+    <section
       aria-labelledby="connection-feed-heading"
       className="mx-auto flex max-w-7xl flex-col gap-4 p-4 sm:p-6"
       data-testid="connection-feed"
@@ -1052,6 +1067,6 @@ export function ConnectionFeed(): JSX.Element {
           onPageSizeChange={handlePageSizeChange}
         />
       )}
-    </main>
+    </section>
   );
 }

@@ -544,7 +544,10 @@ export function UserManagement(): JSX.Element {
   // Render
   // -------------------------------------------------------------------------
   return (
-    <main
+    // Per Visual Consistency QA Issue 7 the route component renders
+    // <section> rather than nesting a second <main> landmark inside
+    // the document's primary <main> in App.tsx.
+    <section
       aria-labelledby="admin-user-management-heading"
       className="flex flex-col gap-4"
       data-testid="admin-user-management"
@@ -580,6 +583,6 @@ export function UserManagement(): JSX.Element {
         onClose={handleCancelChange}
         onConfirm={handleConfirmChange}
       />
-    </main>
+    </section>
   );
 }
