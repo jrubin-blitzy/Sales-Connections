@@ -24,6 +24,11 @@ Configuration selection happens inside :func:`create_app` via the
 explicit config class so that the production container's
 ``FLASK_ENV=production`` (or the default ``ProductionConfig``
 fallback) drives the secret-loading and fail-fast invariants.
+
+The module is intentionally minimal: it MUST NOT contain business
+logic, configuration mutation, or side effects beyond the factory
+call. All initialization (extensions, blueprints, middleware,
+observability) lives inside :func:`create_app`.
 """
 
 from __future__ import annotations
@@ -43,3 +48,18 @@ from app import create_app
 # what makes :class:`app.config.ProductionConfig` the resolved
 # class; no explicit override is needed here.
 app = create_app()
+
+# Note: This module is intended to be imported by Gunicorn (or another WSGI
+# server). It is NOT meant to be executed directly via ``python wsgi.py``.
+# For local development without Gunicorn, use the Flask CLI instead:
+#     flask --app app run --debug --host 0.0.0.0 --port 5000
+#
+# A ``if __name__ == "__main__":`` guard is intentionally omitted: this
+# file is never the program entrypoint. Production goes through Gunicorn
+# (``gunicorn wsgi:app``) and local development goes through the Flask CLI
+# against the ``app`` package directly. Keeping this file free of an
+# ``app.run()`` block prevents accidental invocation of Flask's built-in
+# development server in production, which would lack pre-fork concurrency
+# and the production-grade signal handling Gunicorn provides.
+
+__all__ = ["app"]
