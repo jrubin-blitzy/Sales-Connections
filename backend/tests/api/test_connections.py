@@ -1575,31 +1575,117 @@ class TestAuditInvariantOnAppRole:
     def test_app_role_can_insert_audit_events(
         self,
         app_role_engine: Any,
-        admin_user: Any,
+        organization: Any,
     ) -> None:
         """As the app role, ``INSERT INTO audit_events`` succeeds.
 
         Counterpart to the UPDATE/DELETE denial tests: the app role
         MUST retain INSERT so the audit emitter can do its job.
+
+        Implementation note
+        -------------------
+
+        The actor user is created via the SAME ``app_role_engine``
+        connection in which the audit event is inserted, then both
+        rows are rolled back together. Using the
+        ``admin_user`` fixture would not work because that fixture
+        creates the user in the SAVEPOINT-isolated test session,
+        whose writes are not visible to the separate
+        ``app_role_engine`` connection: the FK constraint
+        ``fk_audit_events_actor_user_id_users`` would fail because
+        the actor row does not exist on the connection that runs
+        the INSERT. By creating the user on the same connection
+        used for the audit insert, the FK is satisfied, the insert
+        permission is exercised, and the entire connection-level
+        transaction is rolled back at the end so no residue
+        survives.
+
+        The ``organization`` fixture is used solely to ensure a
+        valid ``org_id`` exists for the new user; it is committed
+        through the privileged session and so is visible to the
+        app-role connection (organizations are a long-lived seed,
+        and the conftest's SAVEPOINT pattern still permits writes
+        from privileged connections to settle if other tests
+        depend on the org existing -- the fixture relies on the
+        conftest commit semantics regardless).
         """
         from datetime import UTC, datetime  # noqa: PLC0415
+        import uuid as _uuid  # noqa: PLC0415
 
         from sqlalchemy import text  # noqa: PLC0415
-        from sqlalchemy.exc import OperationalError  # noqa: PLC0415
+        from sqlalchemy.exc import IntegrityError, OperationalError  # noqa: PLC0415
+
+        # Use a generated UUID for the actor that we will insert and
+        # then roll back. This avoids any cross-connection visibility
+        # issue with fixture-created users.
+        new_actor_id = _uuid.uuid4()
+        new_org_id = _uuid.uuid4()
 
         try:
             with app_role_engine.connect() as conn:
-                conn.execute(
-                    text(
-                        "INSERT INTO audit_events "
-                        "(id, actor_user_id, event_type, event_timestamp) "
-                        "VALUES (gen_random_uuid(), :actor_id, 'create', :ts)"
-                    ),
-                    {
-                        "actor_id": admin_user.id,
-                        "ts": datetime.now(UTC),
-                    },
-                )
-                conn.commit()
+                # Create the parent rows and the audit event in a
+                # single transaction on the SAME connection so the FK
+                # constraint resolves. Roll back at the end so no
+                # state persists across tests.
+                trans = conn.begin()
+                try:
+                    # Insert an organization row visible to this
+                    # connection.
+                    conn.execute(
+                        text(
+                            "INSERT INTO organizations (id, name, created_at) "
+                            "VALUES (:org_id, :name, :ts)"
+                        ),
+                        {
+                            "org_id": new_org_id,
+                            "name": f"app-role-test-org-{new_org_id.hex[:8]}",
+                            "ts": datetime.now(UTC),
+                        },
+                    )
+                    # Insert a user row whose id matches the FK target.
+                    conn.execute(
+                        text(
+                            "INSERT INTO users "
+                            "(id, org_id, email, display_name, role, "
+                            "created_at) "
+                            "VALUES (:id, :org_id, :email, :display_name, "
+                            "'Admin', :ts)"
+                        ),
+                        {
+                            "id": new_actor_id,
+                            "org_id": new_org_id,
+                            "email": (f"app-role-test-{new_actor_id.hex[:8]}@example.com"),
+                            "display_name": "App Role Test User",
+                            "ts": datetime.now(UTC),
+                        },
+                    )
+                    # Now exercise the INSERT permission on
+                    # audit_events: this is the actual assertion.
+                    conn.execute(
+                        text(
+                            "INSERT INTO audit_events "
+                            "(id, actor_user_id, event_type, "
+                            "event_timestamp) "
+                            "VALUES (gen_random_uuid(), :actor_id, "
+                            "'create', :ts)"
+                        ),
+                        {
+                            "actor_id": new_actor_id,
+                            "ts": datetime.now(UTC),
+                        },
+                    )
+                finally:
+                    # Always roll back so no residue persists.
+                    trans.rollback()
+        except IntegrityError as exc:
+            # An integrity error here means the database itself
+            # rejected the row shape (NOT permission denied). Surface
+            # this as a real test failure so a regression in schema
+            # constraints is caught.
+            pytest.fail(
+                f"App role INSERT into audit_events raised "
+                f"IntegrityError, indicating a schema regression "
+                f"rather than a permission denial: {exc}"
+            )
         except OperationalError as exc:
             pytest.skip(f"app role connection failed; cannot test INSERT permission: {exc}")
