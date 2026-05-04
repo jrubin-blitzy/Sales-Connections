@@ -246,16 +246,20 @@ def _build_resource(app: Flask) -> Resource:
         # itself import this module before ``__version__`` is defined.
         # The PLC0415 suppression keeps ruff's import-not-at-top rule
         # happy, which is the correct local idiom for a deferred
-        # module attribute lookup. The attr-defined suppression is
-        # required because ``app.__version__`` is optional (the
-        # application package may not declare it yet); we defend
-        # against the absence at runtime via the AttributeError branch.
-        from app import __version__ as app_version  # type: ignore[attr-defined] # noqa: PLC0415
+        # module attribute lookup. ``__version__`` is now declared in
+        # ``app/__init__.py`` (see AAP Section 0.5.2 Layer 0) so the
+        # attribute is always present in normal operation; the defensive
+        # ``except`` branch below covers stripped-down environments
+        # (recovery shells, minimal CI images) where the application
+        # package may have been monkey-patched to omit it.
+        from app import __version__ as app_version  # noqa: PLC0415
 
         if isinstance(app_version, str) and app_version:
             service_version = app_version
     except (ImportError, AttributeError):  # pragma: no cover - defensive
-        # ``app.__version__`` is optional; absence is not an error.
+        # ``app.__version__`` is optional in stripped-down environments;
+        # absence is not an error and falls through to the "unknown"
+        # default which is still a valid OpenTelemetry attribute value.
         service_version = "unknown"
 
     return Resource.create(
