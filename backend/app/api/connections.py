@@ -569,7 +569,22 @@ def create_connection() -> tuple[Response, int]:
     # ``ConnectionRead``.
     response_payload = _record_to_read_dict(record)
 
-    return jsonify(response_payload), 201
+    # Per RFC 7231 Section 6.3.2 ("If the resource is created, the
+    # 201 (Created) response SHOULD include a Location header field
+    # that contains an identifier for the primary resource created
+    # by the request"), attach the canonical detail URL of the new
+    # record to the response. The path matches the registered
+    # ``GET /api/connections/<uuid:record_id>`` route so subsequent
+    # GET calls hit the cached resource directly.
+    #
+    # The header value is a relative reference (path-only). Per
+    # RFC 7231, a Location header may be relative or absolute; we
+    # use the relative form because it is origin-agnostic
+    # (production, staging, and dev all serve the same SPA from
+    # different hostnames).
+    response = jsonify(response_payload)
+    response.headers["Location"] = f"/api/connections/{record.id}"
+    return response, 201
 
 
 # ---------------------------------------------------------------------------
@@ -947,7 +962,7 @@ def _build_filters_from_query(actor_role: Any) -> ConnectionFilters:
 
 
 @connections_bp.route("/duplicate-check", methods=["GET"])
-@requires_role(UserRole.ADMIN, UserRole.CONTRIBUTOR, UserRole.VIEWER)
+@requires_role(UserRole.ADMIN, UserRole.CONTRIBUTOR)
 def duplicate_check() -> tuple[Response, int]:
     """Check whether a LinkedIn URL already exists in the actor's org (F-010).
 
@@ -971,10 +986,29 @@ def duplicate_check() -> tuple[Response, int]:
 
     Failure modes:
         HTTP 401 -- auth middleware rejected unauthenticated request.
-        HTTP 403 -- ``@requires_role`` rejected (no role excluded
-                    here; defense-in-depth).
+        HTTP 403 -- ``@requires_role`` rejected (Viewer / Sales Rep
+                    role; per AAP Section 0.7.6 the duplicate-check
+                    is a pre-submit warning for the connection-creation
+                    flow, and Viewers do not submit records, so the
+                    feature semantically belongs only to Contributor
+                    and Admin).
         HTTP 422 -- ``linkedin_url`` missing, malformed, or
                     unnormalizable; ``exclude_record_id`` not a UUID.
+
+    RBAC scope rationale (CR-CKPT5-MINOR#2):
+        F-010 duplicate detection is a *pre-submit* warning surfaced
+        as the contributor types a LinkedIn URL into the
+        AddEditConnectionForm (POST /api/connections, F-001). Sales
+        Reps (Viewer role) do not submit new records: per AAP
+        Section 0.5.4 / Section 1.2 their primary surface is the
+        Connection Feed and Connection Detail views (read-only
+        consumption + outreach status mutation). The duplicate-check
+        endpoint therefore belongs only to roles that author records:
+        Contributor and Admin. Viewers can still discover existing
+        records via the standard list and detail endpoints
+        (``GET /api/connections`` / ``GET /api/connections/:id``);
+        rejecting them from /duplicate-check is a scope decision,
+        not a security measure.
 
     Raises:
         ValidationFailedError: missing ``linkedin_url`` or invalid

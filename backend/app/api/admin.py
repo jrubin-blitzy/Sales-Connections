@@ -1151,6 +1151,25 @@ def hard_delete(record_id: UUID) -> Response:
     transaction; if either fails, the entire operation rolls back
     per AAP Section 0.7.1 invariant 6.
 
+    Defense-in-depth confirmation flag (CR-CKPT5-MINOR-admin):
+        The caller MUST include ``?confirm=true`` (or ``confirm=1``,
+        ``yes``, ``on``) on the request URL. If the flag is missing
+        or false the handler returns HTTP 422 with
+        ``error.code = "confirmation_required"`` BEFORE any service
+        call fires; no audit event is emitted. The flag exists as
+        layered protection on top of:
+
+        * Admin-only RBAC (this handler's ``@requires_role``)
+        * Audit trail (``hard_delete`` event captures full state)
+        * The HTTP DELETE method's destructive semantics
+
+        It guards against accidental hard-delete via reflexive curl,
+        misclicked admin tooling, or scripts that copy a soft-delete
+        URL pattern into the admin namespace by mistake. The SPA's
+        :class:`@/features/admin/RecordModeration` component appends
+        the flag automatically after the user confirms a Modal
+        dialog; direct API consumers must pass it explicitly.
+
     Args:
         record_id: UUID extracted from the URL path; Flask's
             ``uuid`` converter performs the type coercion.
@@ -1166,7 +1185,53 @@ def hard_delete(record_id: UUID) -> Response:
         HTTP 401 -- auth middleware rejected.
         HTTP 403 -- ``@requires_role`` rejected non-Admin caller.
         HTTP 404 -- record not found in actor's org.
+        HTTP 422 -- ``?confirm=true`` query parameter missing or
+                    falsy. Validation envelope's
+                    ``error.code = "confirmation_required"``.
     """
+    # ------------------------------------------------------------------
+    # Step 0: Confirmation flag check. Hard delete is irreversible,
+    # so we require an explicit ``?confirm=true`` query parameter
+    # before any service work begins. This is BEFORE the
+    # ``db.session() as db_session`` block so that no transaction is
+    # opened and no audit event is emitted on rejection.
+    #
+    # ``_parse_bool`` raises ``ValidationFailedError`` (HTTP 422) for
+    # malformed booleans (e.g., ``confirm=banana``). We want a
+    # *missing* or *false* flag to also produce a 422 with a
+    # specialized error code, so we check the parsed value
+    # explicitly after parsing.
+    # ------------------------------------------------------------------
+    confirm = _parse_bool(request.args.get("confirm"), default=False, field="confirm")
+    if not confirm:
+        # Construct the validation error with the standard
+        # ``validation_failed`` class-level error code, then override
+        # via instance-attribute assignment to surface a more specific
+        # ``confirmation_required`` code on the SPA dispatcher. The
+        # error handler in ``app.middleware.error_handlers`` reads
+        # ``exc.error_code`` (instance attribute lookup), so the
+        # override propagates through the standard envelope without
+        # introducing a new exception class. This pattern matches
+        # ``app.services.ai_orchestration.AIServiceError`` which
+        # likewise sets ``self.error_code`` on the instance to expose
+        # finer-grained codes (``ai_timeout`` / ``ai_unavailable`` /
+        # ``ai_not_configured``) without subclassing per code.
+        confirmation_error = ValidationFailedError(
+            message="Hard delete requires ?confirm=true query parameter.",
+            fields=[
+                {
+                    "loc": ["query", "confirm"],
+                    "msg": (
+                        "Hard delete is irreversible; resubmit with "
+                        "?confirm=true to proceed."
+                    ),
+                    "type": "value_error.confirmation_required",
+                },
+            ],
+        )
+        confirmation_error.error_code = "confirmation_required"
+        raise confirmation_error
+
     # Open a single short-lived session and wrap the service call
     # in ``with db_session.begin():`` so the records DELETE and the
     # audit_events INSERT commit atomically per AAP Section 0.7.1

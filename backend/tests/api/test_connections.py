@@ -153,6 +153,11 @@ class TestPostCreate:
         assert "id" in body
         assert "owner_user_id" in body
         assert "submission_date" in body
+        # CR-CKPT5-MINOR#1: 201 responses MUST include a Location
+        # header pointing at the canonical detail URL of the new
+        # resource (RFC 7231 Section 6.3.2). This is the single
+        # source-of-truth assertion for that contract.
+        assert response.headers.get("Location") == f"/api/connections/{body['id']}"
 
     def test_admin_creates_record_returns_201(
         self,
@@ -1245,19 +1250,48 @@ class TestDuplicateCheck:
         )
         assert response.status_code == 401
 
-    def test_all_three_roles_can_check(
-        self,
-        admin_client: Any,
-        authed_client: Any,
-        viewer_client: Any,
-    ) -> None:
-        """All three authenticated roles can run duplicate-check."""
-        url = "https://www.linkedin.com/in/duplicate-check-test"
-        path = f"/api/connections/duplicate-check?linkedin_url={url}"
+    # ----- CR-CKPT5-MINOR#2 RBAC scope: Contributor + Admin only -----
+    #
+    # Per the Checkpoint 5 RBAC scope (CR-CKPT5-MINOR#2) and AAP
+    # Section 0.5.4 / Section 1.2: F-010 is a *pre-submit* warning
+    # for the connection-creation flow. Sales Reps (Viewer role) do
+    # not submit new records, so the duplicate-check feature belongs
+    # only to Contributor and Admin. Viewers can still discover
+    # existing records via the standard list/detail endpoints;
+    # rejecting them from /duplicate-check is a scope decision.
+    #
+    # Each role gets its own test method so the underlying shared
+    # ``client`` fixture's cookie state is unambiguous (only one
+    # ``_mint_session_cookie`` call per test invocation). Combining
+    # the three fixtures into one test would let the last-resolved
+    # fixture's cookie clobber the earlier ones, masking RBAC bugs.
 
-        assert admin_client.get(path).status_code == 200
-        assert authed_client.get(path).status_code == 200
-        assert viewer_client.get(path).status_code == 200
+    def test_contributor_can_check(self, authed_client: Any) -> None:
+        """Contributor (the canonical record-author role) is admitted."""
+        url = "https://www.linkedin.com/in/duplicate-check-contributor"
+        path = f"/api/connections/duplicate-check?linkedin_url={url}"
+        response = authed_client.get(path)
+        assert response.status_code == 200
+
+    def test_admin_can_check(self, admin_client: Any) -> None:
+        """Admin is admitted (Admins inherit Contributor capabilities)."""
+        url = "https://www.linkedin.com/in/duplicate-check-admin"
+        path = f"/api/connections/duplicate-check?linkedin_url={url}"
+        response = admin_client.get(path)
+        assert response.status_code == 200
+
+    def test_viewer_forbidden(self, viewer_client: Any) -> None:
+        """Viewer (Sales Rep) is rejected with 403 forbidden.
+
+        Previously the decorator admitted Viewer (the checkpoint-5
+        review identified this as a scope deviation in
+        CR-CKPT5-MINOR#2); the corrected decorator restricts the
+        endpoint to Contributor + Admin only.
+        """
+        url = "https://www.linkedin.com/in/duplicate-check-viewer"
+        path = f"/api/connections/duplicate-check?linkedin_url={url}"
+        response = viewer_client.get(path)
+        assert response.status_code == 403
 
 
 # ---------------------------------------------------------------------------
