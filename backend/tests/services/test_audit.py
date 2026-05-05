@@ -197,9 +197,7 @@ class TestEmitAuditEventTransactionRequirement:
     """
 
     @pytest.mark.integration
-    def test_emit_inside_active_transaction_succeeds(
-        self, db_session, contributor_user
-    ):
+    def test_emit_inside_active_transaction_succeeds(self, db_session, contributor_user):
         """Inside a ``with db_session.begin():`` block, emit succeeds.
 
         The returned :class:`AuditEvent` has DB-assigned ``id`` and
@@ -228,9 +226,7 @@ class TestEmitAuditEventTransactionRequirement:
         assert fetched.actor_user_id == contributor_user.id
 
     @pytest.mark.integration
-    def test_emit_outside_transaction_raises(
-        self, db_session, contributor_user
-    ):
+    def test_emit_outside_transaction_raises(self, db_session, contributor_user):
         """Calling :func:`emit_audit_event` outside an active transaction raises.
 
         The emitter's ``_assert_in_transaction`` helper raises
@@ -280,9 +276,7 @@ class TestEmitAuditEventAtomicity:
     """
 
     @pytest.mark.integration
-    def test_audit_rolls_back_with_parent_transaction(
-        self, db_session, contributor_user
-    ):
+    def test_audit_rolls_back_with_parent_transaction(self, db_session, contributor_user):
         """If the parent transaction rolls back, the audit row goes with it.
 
         Pattern: open a transaction, emit, then raise an exception
@@ -333,9 +327,7 @@ class TestEmitAuditEventAtomicity:
         # per-test ``TRUNCATE`` plus the rollback above mean the
         # actor has zero audit rows attributable to this test.
         rows = db_session.execute(
-            select(AuditEvent).where(
-                AuditEvent.actor_user_id == contributor_user.id
-            )
+            select(AuditEvent).where(AuditEvent.actor_user_id == contributor_user.id)
         ).all()
         assert rows == [], (
             f"Audit row leaked across rollback (atomicity violation): "
@@ -584,9 +576,7 @@ class TestAuthenticationShape:
 
     @pytest.mark.parametrize("method", ["password", "oauth_google", "logout"])
     @pytest.mark.integration
-    def test_authentication_method_field(
-        self, db_session, contributor_user, method
-    ):
+    def test_authentication_method_field(self, db_session, contributor_user, method):
         """All three authentication methods round-trip in ``after_payload``.
 
         The audit row records WHO authenticated (``actor_user_id``)
@@ -728,9 +718,7 @@ class TestAppendOnlyMapperConfig:
             )
 
     @pytest.mark.integration
-    def test_service_only_inserts_never_updates_or_deletes(
-        self, db_session, contributor_user
-    ):
+    def test_service_only_inserts_never_updates_or_deletes(self, db_session, contributor_user):
         """``app/services/audit.py`` issues no UPDATE/DELETE against AuditEvent.
 
         AST-walks the audit service source and rejects any
@@ -786,16 +774,12 @@ class TestAppendOnlyMapperConfig:
             if isinstance(func, ast.Name) and func.id in ("update", "delete"):
                 args_repr = [ast.dump(a) for a in node.args]
                 if any("AuditEvent" in a for a in args_repr):
-                    offending.append(
-                        f"{func.id}(AuditEvent) at line {node.lineno}"
-                    )
+                    offending.append(f"{func.id}(AuditEvent) at line {node.lineno}")
 
         # The audit service must NEVER issue UPDATE or DELETE against
         # AuditEvent regardless of database privileges. This is the
         # application-side mirror of the database-level GRANT/REVOKE.
-        assert not offending, (
-            f"app/services/audit.py issues forbidden DML: {offending}"
-        )
+        assert not offending, f"app/services/audit.py issues forbidden DML: {offending}"
 
         # Reference the fixtures so pytest does not warn about unused
         # parameters. The fixtures pull in the conftest dependency
@@ -825,9 +809,7 @@ class TestDatabaseLevelAppendOnly:
     """
 
     @pytest.mark.integration
-    def test_direct_update_against_application_role_fails(
-        self, db_session, contributor_user
-    ):
+    def test_direct_update_against_application_role_fails(self, db_session, contributor_user):
         """A direct ``UPDATE audit_events`` raises permission denied.
 
         When the application role lacks ``UPDATE`` privilege, the
@@ -887,9 +869,7 @@ class TestDatabaseLevelAppendOnly:
             )
 
     @pytest.mark.integration
-    def test_direct_delete_against_application_role_fails(
-        self, db_session, contributor_user
-    ):
+    def test_direct_delete_against_application_role_fails(self, db_session, contributor_user):
         """A direct ``DELETE FROM audit_events`` raises permission denied.
 
         The DELETE-privilege test mirrors the UPDATE test above; both
@@ -907,9 +887,7 @@ class TestDatabaseLevelAppendOnly:
 
         try:
             with db_session.begin():
-                db_session.execute(
-                    delete(AuditEvent).where(AuditEvent.id == audit_id)
-                )
+                db_session.execute(delete(AuditEvent).where(AuditEvent.id == audit_id))
         except (ProgrammingError, IntegrityError, DataError) as exc:
             # The expected outcome on a restricted role.
             error_text = str(exc).lower()
@@ -948,9 +926,7 @@ class TestEmissionBudget:
     """
 
     @pytest.mark.integration
-    def test_emission_within_100_ms_budget(
-        self, db_session, contributor_user
-    ):
+    def test_emission_within_100_ms_budget(self, db_session, contributor_user):
         """A single audit emission completes within the test ceiling.
 
         Production budget is 100 ms; the test ceiling is 500 ms to
@@ -988,14 +964,11 @@ class TestEmissionBudget:
         # gross regressions (seconds-scale slowness) rather than to
         # enforce the production budget directly.
         assert elapsed < 0.5, (
-            f"Audit emission took {elapsed:.3f}s "
-            "(budget 100ms, test ceiling 500ms)"
+            f"Audit emission took {elapsed:.3f}s (budget 100ms, test ceiling 500ms)"
         )
 
     @pytest.mark.integration
-    def test_slow_emission_logs_warning(
-        self, db_session, contributor_user, caplog
-    ):
+    def test_slow_emission_logs_warning(self, db_session, contributor_user, caplog):
         """The slow-emission warning code path exists in the audit service.
 
         Per AAP Section 0.7.3, slow emissions (above the 100 ms
@@ -1097,6 +1070,7 @@ class TestMetricRecording:
             from app.observability.metrics import (  # noqa: PLC0415
                 audit_emit_duration_seconds,
             )
+
             metric = audit_emit_duration_seconds
 
         # Skip cleanly if neither location exposes the metric. This
@@ -1131,8 +1105,7 @@ class TestMetricRecording:
             "audit_event emission - the histogram is not instrumented."
         )
         calls_with_event_type = [
-            c for c in mock_labels.call_args_list
-            if "event_type" in c.kwargs or len(c.args) >= 1
+            c for c in mock_labels.call_args_list if "event_type" in c.kwargs or len(c.args) >= 1
         ]
         assert calls_with_event_type, (
             "audit_emit_duration_seconds.labels was called but never "
@@ -1178,9 +1151,7 @@ class TestForeignKeyEnforcement:
             )
 
     @pytest.mark.integration
-    def test_unknown_target_record_raises_integrity_error(
-        self, db_session, contributor_user
-    ):
+    def test_unknown_target_record_raises_integrity_error(self, db_session, contributor_user):
         """A ``target_record_id`` that doesn't exist raises on flush.
 
         The nullable FK is enforced when non-null: a freshly-generated

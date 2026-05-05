@@ -77,9 +77,7 @@ class TestGetAnalyticsSnapshot:
             RecordFactory(organization=organization, owner=user_a)
         RecordFactory(organization=organization, owner=user_b)
 
-        snapshot = get_analytics_snapshot(
-            db_session=db_session, org_id=organization.id
-        )
+        snapshot = get_analytics_snapshot(db_session=db_session, org_id=organization.id)
         assert len(snapshot.most_active_contributors) == 2
         assert snapshot.most_active_contributors[0].display_name == "Alice"
         assert snapshot.most_active_contributors[0].record_count == 3
@@ -102,13 +100,9 @@ class TestGetAnalyticsSnapshot:
             outreach_status=OutreachStatus.CONTACTED,
         )
 
-        snapshot = get_analytics_snapshot(
-            db_session=db_session, org_id=organization.id
-        )
+        snapshot = get_analytics_snapshot(db_session=db_session, org_id=organization.id)
         # Build status -> count map for assertion.
-        status_map = {
-            entry.status: entry.count for entry in snapshot.leads_by_status
-        }
+        status_map = {entry.status: entry.count for entry in snapshot.leads_by_status}
         assert status_map[OutreachStatus.NOT_STARTED] == 0
         assert status_map[OutreachStatus.IN_PROGRESS] == 0
         assert status_map[OutreachStatus.CONTACTED] == 1
@@ -136,16 +130,13 @@ class TestGetAnalyticsSnapshot:
             outreach_status=OutreachStatus.NOT_STARTED,
         )
 
-        snapshot = get_analytics_snapshot(
-            db_session=db_session, org_id=organization.id
-        )
+        snapshot = get_analytics_snapshot(db_session=db_session, org_id=organization.id)
 
         # most_active_contributors counts only active records.
         assert snapshot.most_active_contributors[0].record_count == 1
         # leads_by_status only counts active records.
         not_started = next(
-            e for e in snapshot.leads_by_status
-            if e.status == OutreachStatus.NOT_STARTED
+            e for e in snapshot.leads_by_status if e.status == OutreachStatus.NOT_STARTED
         )
         assert not_started.count == 1
 
@@ -171,9 +162,7 @@ class TestListOrgUsers:
         UserFactory(organization=organization, display_name="Alice")
         UserFactory(organization=organization, display_name="Bob")
 
-        users = list_org_users(
-            db_session=db_session, org_id=organization.id
-        )
+        users = list_org_users(db_session=db_session, org_id=organization.id)
         names = [u.display_name for u in users]
         assert names == sorted(names)
 
@@ -191,9 +180,7 @@ class TestListOrgUsers:
         other_org = OrganizationFactory()
         UserFactory(organization=other_org, display_name="Other Org")
 
-        users = list_org_users(
-            db_session=db_session, org_id=organization.id
-        )
+        users = list_org_users(db_session=db_session, org_id=organization.id)
         names = {u.display_name for u in users}
         assert "In Org" in names
         assert "Other Org" not in names
@@ -494,9 +481,7 @@ class TestHardDeleteRecord:
         from app.models import Record  # noqa: PLC0415
         from tests.factories import RecordFactory  # noqa: PLC0415
 
-        record = RecordFactory(
-            organization=organization, owner=contributor_user
-        )
+        record = RecordFactory(organization=organization, owner=contributor_user)
         record_id = record.id
 
         with db_session.begin():
@@ -591,9 +576,7 @@ class TestHardDeleteRecord:
 
         other_org = OrganizationFactory()
         other_user = UserFactory(organization=other_org)
-        other_record = RecordFactory(
-            organization=other_org, owner=other_user
-        )
+        other_record = RecordFactory(organization=other_org, owner=other_user)
 
         with db_session.begin(), pytest.raises(NotFoundError):
             hard_delete_record(
@@ -615,9 +598,7 @@ class TestHardDeleteRecord:
         from app.models import Record  # noqa: PLC0415
         from tests.factories import SoftDeletedRecordFactory  # noqa: PLC0415
 
-        record = SoftDeletedRecordFactory(
-            organization=organization, owner=contributor_user
-        )
+        record = SoftDeletedRecordFactory(organization=organization, owner=contributor_user)
         record_id = record.id
 
         with db_session.begin():

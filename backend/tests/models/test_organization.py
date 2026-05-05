@@ -17,9 +17,7 @@ if TYPE_CHECKING:
 class TestOrganization:
     """Organization model invariants."""
 
-    def test_create_with_required_fields(
-        self, db_session: DBSession
-    ) -> None:
+    def test_create_with_required_fields(self, db_session: DBSession) -> None:
         """Organization with name persists and gets an id."""
         org = Organization(name=f"Acme-{uuid.uuid4().hex[:8]}")
         db_session.add(org)
@@ -43,9 +41,7 @@ class TestOrganization:
         # Must be timezone-aware.
         assert org.created_at.tzinfo is not None
 
-    def test_name_required(
-        self, db_session: DBSession
-    ) -> None:
+    def test_name_required(self, db_session: DBSession) -> None:
         """name is NOT NULL."""
         org = Organization(name=None)  # type: ignore[arg-type]
         db_session.add(org)
@@ -53,9 +49,7 @@ class TestOrganization:
             db_session.commit()
         db_session.rollback()
 
-    def test_repr_does_not_leak_pii(
-        self, db_session: DBSession
-    ) -> None:
+    def test_repr_does_not_leak_pii(self, db_session: DBSession) -> None:
         """__repr__ does not contain PII."""
         org = Organization(name=f"Repr-{uuid.uuid4().hex[:6]}")
         db_session.add(org)
@@ -66,9 +60,7 @@ class TestOrganization:
         # mostly a "doesn't crash" test.
         assert "Organization" in repr_str
 
-    def test_users_relationship_empty_initially(
-        self, db_session: DBSession
-    ) -> None:
+    def test_users_relationship_empty_initially(self, db_session: DBSession) -> None:
         """A new Organization has no users."""
         org = Organization(name=f"NoUsers-{uuid.uuid4().hex[:6]}")
         db_session.add(org)

@@ -112,9 +112,7 @@ class TestAuditEventTypes:
         """CREATE event with target record."""
         from tests.factories import RecordFactory  # noqa: PLC0415
 
-        record = RecordFactory(
-            organization=organization, owner=contributor_user
-        )
+        record = RecordFactory(organization=organization, owner=contributor_user)
         event = AuditEvent(
             actor_user_id=admin_user.id,
             event_type=AuditEventType.CREATE,
@@ -135,9 +133,7 @@ class TestAuditEventTypes:
         """STATUS_CHANGE event with before/after payloads."""
         from tests.factories import RecordFactory  # noqa: PLC0415
 
-        record = RecordFactory(
-            organization=organization, owner=contributor_user
-        )
+        record = RecordFactory(organization=organization, owner=contributor_user)
         event = AuditEvent(
             actor_user_id=admin_user.id,
             event_type=AuditEventType.STATUS_CHANGE,

@@ -54,9 +54,7 @@ class TestNotesGeneratePermissionMatrix:
         def _fake_generate(payload, **kwargs: object):
             return NoteGenerationResponse(notes="Mocked AI notes.")
 
-        monkeypatch.setattr(
-            "app.api.notes.generate_outreach_notes", _fake_generate
-        )
+        monkeypatch.setattr("app.api.notes.generate_outreach_notes", _fake_generate)
 
         response = admin_client.post(
             "/api/notes/generate",
@@ -83,9 +81,7 @@ class TestNotesGeneratePermissionMatrix:
         def _fake_generate(payload, **kwargs: object):
             return NoteGenerationResponse(notes="Mocked AI notes.")
 
-        monkeypatch.setattr(
-            "app.api.notes.generate_outreach_notes", _fake_generate
-        )
+        monkeypatch.setattr("app.api.notes.generate_outreach_notes", _fake_generate)
 
         response = authed_client.post(
             "/api/notes/generate",
@@ -152,20 +148,15 @@ class TestTagsPermissionMatrix:
         client_for_role: FlaskClient = request.getfixturevalue(role_fixture_name)
         response = client_for_role.get("/api/tags")
         assert response.status_code != 403, (
-            f"GET /api/tags must admit role from {role_fixture_name}; "
-            f"got {response.status_code}"
+            f"GET /api/tags must admit role from {role_fixture_name}; got {response.status_code}"
         )
 
-    def test_get_tags_rejects_unauthenticated(
-        self, app: Flask, client: FlaskClient
-    ) -> None:
+    def test_get_tags_rejects_unauthenticated(self, app: Flask, client: FlaskClient) -> None:
         """GET /api/tags requires authentication (401 from middleware)."""
         response = client.get("/api/tags")
         assert response.status_code == 401
 
-    def test_admin_can_post_tags(
-        self, app: Flask, admin_client: FlaskClient
-    ) -> None:
+    def test_admin_can_post_tags(self, app: Flask, admin_client: FlaskClient) -> None:
         """Admin admitted to POST /api/tags."""
         response = admin_client.post(
             "/api/tags",
@@ -173,9 +164,7 @@ class TestTagsPermissionMatrix:
         )
         assert response.status_code != 403
 
-    def test_contributor_can_post_tags(
-        self, app: Flask, authed_client: FlaskClient
-    ) -> None:
+    def test_contributor_can_post_tags(self, app: Flask, authed_client: FlaskClient) -> None:
         """Contributor admitted to POST /api/tags."""
         response = authed_client.post(
             "/api/tags",
@@ -183,9 +172,7 @@ class TestTagsPermissionMatrix:
         )
         assert response.status_code != 403
 
-    def test_viewer_cannot_post_tags(
-        self, app: Flask, viewer_client: FlaskClient
-    ) -> None:
+    def test_viewer_cannot_post_tags(self, app: Flask, viewer_client: FlaskClient) -> None:
         """Viewer REJECTED from POST /api/tags."""
         response = viewer_client.post(
             "/api/tags",
@@ -221,9 +208,7 @@ class TestApiMePermissionMatrix:
         # Must not be 403 (and ideally 200).
         assert response.status_code != 403
 
-    def test_unauthenticated_cannot_get_me(
-        self, app: Flask, client: FlaskClient
-    ) -> None:
+    def test_unauthenticated_cannot_get_me(self, app: Flask, client: FlaskClient) -> None:
         """Unauthenticated /api/me yields 401 (auth middleware)."""
         response = client.get("/api/me")
         assert response.status_code == 401
@@ -320,9 +305,7 @@ class TestServiceLayerOrgScopeEnforcement:
 
         other_org = OrganizationFactory()
         other_user = UserFactory(organization=other_org)
-        other_record = RecordFactory(
-            organization=other_org, owner=other_user
-        )
+        other_record = RecordFactory(organization=other_org, owner=other_user)
 
         with db_session.begin(), pytest.raises(NotFoundError):
             hard_delete_record(

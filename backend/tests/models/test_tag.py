@@ -18,18 +18,14 @@ if TYPE_CHECKING:
 class TestTag:
     """Tag model invariants."""
 
-    def test_create_with_required_fields(
-        self, db_session: DBSession, organization
-    ) -> None:
+    def test_create_with_required_fields(self, db_session: DBSession, organization) -> None:
         """Tag with org_id and name persists."""
         tag = Tag(org_id=organization.id, name=f"Industry-{uuid.uuid4().hex[:6]}")
         db_session.add(tag)
         db_session.commit()
         assert tag.id is not None
 
-    def test_org_scoped_unique_name(
-        self, db_session: DBSession, organization
-    ) -> None:
+    def test_org_scoped_unique_name(self, db_session: DBSession, organization) -> None:
         """(org_id, name) is uniquely constrained."""
         common_name = f"Logistics-{uuid.uuid4().hex[:6]}"
         db_session.add(Tag(org_id=organization.id, name=common_name))
@@ -40,9 +36,7 @@ class TestTag:
             db_session.commit()
         db_session.rollback()
 
-    def test_same_name_different_orgs_allowed(
-        self, db_session: DBSession, organization
-    ) -> None:
+    def test_same_name_different_orgs_allowed(self, db_session: DBSession, organization) -> None:
         """Same name in DIFFERENT orgs is allowed."""
         from tests.factories import OrganizationFactory  # noqa: PLC0415
 
@@ -56,9 +50,7 @@ class TestTag:
         tags = db_session.query(Tag).filter_by(name=common_name).all()
         assert len(tags) == 2
 
-    def test_id_is_uuid(
-        self, db_session: DBSession, organization
-    ) -> None:
+    def test_id_is_uuid(self, db_session: DBSession, organization) -> None:
         """Tag id is UUID."""
         tag = Tag(org_id=organization.id, name=f"UUID-Tag-{uuid.uuid4().hex[:6]}")
         db_session.add(tag)

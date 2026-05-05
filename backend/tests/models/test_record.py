@@ -65,9 +65,7 @@ class TestRecordCreation:
             owner_display_name=contributor_user.display_name,
             full_name="Default Status",
             linkedin_url="https://www.linkedin.com/in/default-status/",
-            normalized_linkedin_url=(
-                "https://linkedin.com/in/default-status"
-            ),
+            normalized_linkedin_url=("https://linkedin.com/in/default-status"),
             company="Test Co",
             job_title="Tester",
             relationship_context="Test",

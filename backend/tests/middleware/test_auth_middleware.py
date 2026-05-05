@@ -287,7 +287,6 @@ class TestSessionDataclass:
         assert a == b
 
 
-
 # ---------------------------------------------------------------------------
 # Test: Public/Protected Path Classification
 # ---------------------------------------------------------------------------
@@ -360,8 +359,7 @@ class TestPublicPathClassification:
         Security-critical: a ``/healthzx`` route must NOT bypass auth.
         """
         assert _is_public_path(path) is False, (
-            f"Path {path!r} unexpectedly classified as public; "
-            "this would bypass auth."
+            f"Path {path!r} unexpectedly classified as public; this would bypass auth."
         )
 
     @pytest.mark.parametrize(
@@ -441,24 +439,18 @@ class TestExtractToken:
 
     def test_bearer_prefix_only_returns_none(self, test_app: Flask) -> None:
         """``Authorization: Bearer `` (empty token) yields None."""
-        with test_app.test_request_context(
-            "/api/ping", headers={"Authorization": "Bearer "}
-        ):
+        with test_app.test_request_context("/api/ping", headers={"Authorization": "Bearer "}):
             from flask import request  # noqa: PLC0415
 
             token = _extract_token(request, _DEFAULT_COOKIE_NAME)
         assert token is None
 
-    def test_authorization_without_bearer_prefix_returns_none(
-        self, test_app: Flask
-    ) -> None:
+    def test_authorization_without_bearer_prefix_returns_none(self, test_app: Flask) -> None:
         """An Authorization header without 'Bearer ' prefix yields None.
 
         We do NOT support Basic auth, Digest, or any other scheme.
         """
-        with test_app.test_request_context(
-            "/api/ping", headers={"Authorization": "Basic abc"}
-        ):
+        with test_app.test_request_context("/api/ping", headers={"Authorization": "Basic abc"}):
             from flask import request  # noqa: PLC0415
 
             token = _extract_token(request, _DEFAULT_COOKIE_NAME)
@@ -466,9 +458,7 @@ class TestExtractToken:
 
     def test_cookie_name_overridable(self, test_app: Flask) -> None:
         """Cookie name is configurable via the second arg."""
-        with test_app.test_request_context(
-            "/api/ping", headers={"Cookie": "custom_session=v1"}
-        ):
+        with test_app.test_request_context("/api/ping", headers={"Cookie": "custom_session=v1"}):
             from flask import request  # noqa: PLC0415
 
             token = _extract_token(request, "custom_session")
@@ -476,9 +466,7 @@ class TestExtractToken:
 
     def test_empty_cookie_value_returns_none(self, test_app: Flask) -> None:
         """An empty-string cookie value is not treated as a valid token."""
-        with test_app.test_request_context(
-            "/api/ping", headers={"Cookie": "session="}
-        ):
+        with test_app.test_request_context("/api/ping", headers={"Cookie": "session="}):
             from flask import request  # noqa: PLC0415
 
             token = _extract_token(request, _DEFAULT_COOKIE_NAME)
@@ -587,9 +575,7 @@ class TestPublicPathBypass:
         payload = response.get_json()
         assert payload["error"]["code"] == "unauthorized"
 
-    def test_non_protected_non_public_path_unauthenticated(
-        self, test_client: Any
-    ) -> None:
+    def test_non_protected_non_public_path_unauthenticated(self, test_client: Any) -> None:
         """``GET /foo`` (non-protected, non-public) is reachable without auth.
 
         The auth middleware must NOT raise for paths outside both lists;
@@ -698,9 +684,7 @@ class TestProtectedPathAuthentication:
         """``verify_session_jwt`` returning an empty dict -> 401."""
         from app.services import auth as services_auth  # noqa: PLC0415
 
-        monkeypatch.setattr(
-            services_auth, "verify_session_jwt", lambda _t: {}
-        )
+        monkeypatch.setattr(services_auth, "verify_session_jwt", lambda _t: {})
         test_client.set_cookie("session", "valid-but-empty", domain="localhost")
         response = test_client.get("/api/ping")
         assert response.status_code == 401
@@ -712,9 +696,7 @@ class TestProtectedPathAuthentication:
         from app.services import auth as services_auth  # noqa: PLC0415
 
         bad_claims = {"org_id": str(uuid4()), "role": "Contributor", "tv": 0}
-        monkeypatch.setattr(
-            services_auth, "verify_session_jwt", lambda _t: bad_claims
-        )
+        monkeypatch.setattr(services_auth, "verify_session_jwt", lambda _t: bad_claims)
         test_client.set_cookie("session", "tok", domain="localhost")
         response = test_client.get("/api/ping")
         assert response.status_code == 401
@@ -726,9 +708,7 @@ class TestProtectedPathAuthentication:
         from app.services import auth as services_auth  # noqa: PLC0415
 
         bad_claims = _claims(role="Hacker")
-        monkeypatch.setattr(
-            services_auth, "verify_session_jwt", lambda _t: bad_claims
-        )
+        monkeypatch.setattr(services_auth, "verify_session_jwt", lambda _t: bad_claims)
         test_client.set_cookie("session", "tok", domain="localhost")
         response = test_client.get("/api/ping")
         assert response.status_code == 401
@@ -742,9 +722,7 @@ class TestProtectedPathAuthentication:
         uid = str(uuid4())
         oid = str(uuid4())
         good_claims = _claims(user_id=uid, org_id=oid, role="Admin")
-        monkeypatch.setattr(
-            services_auth, "verify_session_jwt", lambda _t: good_claims
-        )
+        monkeypatch.setattr(services_auth, "verify_session_jwt", lambda _t: good_claims)
         # The middleware also performs a token-version check against
         # the database after verifying the JWT signature/claims. In
         # this isolated test we have no DB context, so we patch the
@@ -767,9 +745,7 @@ class TestProtectedPathAuthentication:
         from app.services import auth as services_auth  # noqa: PLC0415
 
         good_claims = _claims(role="Viewer")
-        monkeypatch.setattr(
-            services_auth, "verify_session_jwt", lambda _t: good_claims
-        )
+        monkeypatch.setattr(services_auth, "verify_session_jwt", lambda _t: good_claims)
         _stub_token_version_check(monkeypatch, ok=True)
         response = test_client.get(
             "/api/ping",
@@ -830,9 +806,7 @@ class TestStructlogContextvarsBinding:
         uid = str(uuid4())
         oid = str(uuid4())
         good_claims = _claims(user_id=uid, org_id=oid, role="Contributor")
-        monkeypatch.setattr(
-            services_auth, "verify_session_jwt", lambda _t: good_claims
-        )
+        monkeypatch.setattr(services_auth, "verify_session_jwt", lambda _t: good_claims)
         _stub_token_version_check(monkeypatch, ok=True)
 
         @test_app.route("/api/inspect-contextvars")
@@ -853,9 +827,7 @@ class TestStructlogContextvarsBinding:
         assert payload["org_id"] == oid
         assert payload["role"] == "Contributor"
 
-    def test_contextvars_not_bound_for_unauthenticated_request(
-        self, test_app: Flask
-    ) -> None:
+    def test_contextvars_not_bound_for_unauthenticated_request(self, test_app: Flask) -> None:
         """Unauthenticated requests have no user_id/org_id/role in contextvars."""
 
         @test_app.route("/inspect-contextvars-public")
@@ -890,13 +862,9 @@ class TestRegisterAuthMiddleware:
         """``register_auth_middleware`` adds a before_request hook."""
         app = Flask(__name__)
         app.config["TESTING"] = True
-        before_count_before = sum(
-            len(funcs) for funcs in app.before_request_funcs.values()
-        )
+        before_count_before = sum(len(funcs) for funcs in app.before_request_funcs.values())
         register_auth_middleware(app)
-        before_count_after = sum(
-            len(funcs) for funcs in app.before_request_funcs.values()
-        )
+        before_count_after = sum(len(funcs) for funcs in app.before_request_funcs.values())
         assert before_count_after >= before_count_before + 1
 
     def test_double_registration_appends_second_hook(self) -> None:
@@ -925,9 +893,7 @@ class TestRegisterAuthMiddleware:
         response = client.get("/ping-public-x")
         assert response.status_code == 200
 
-    def test_app_config_session_cookie_name_override(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_app_config_session_cookie_name_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """``app.config['SESSION_COOKIE_NAME']`` overrides the default cookie name.
 
         When configured, the auth hook reads from the custom cookie name.
@@ -935,9 +901,7 @@ class TestRegisterAuthMiddleware:
         from app.services import auth as services_auth  # noqa: PLC0415
 
         good_claims = _claims(role="Admin")
-        monkeypatch.setattr(
-            services_auth, "verify_session_jwt", lambda _t: good_claims
-        )
+        monkeypatch.setattr(services_auth, "verify_session_jwt", lambda _t: good_claims)
         _stub_token_version_check(monkeypatch, ok=True)
 
         app = Flask(__name__)
@@ -1006,9 +970,7 @@ class TestDefensivePIISafety:
         from app.services import auth as services_auth  # noqa: PLC0415
 
         def _raise_invalid(_token: str) -> dict[str, Any]:
-            raise services_auth.AuthenticationError(
-                "JWT signature mismatch with key rotation #42"
-            )
+            raise services_auth.AuthenticationError("JWT signature mismatch with key rotation #42")
 
         monkeypatch.setattr(services_auth, "verify_session_jwt", _raise_invalid)
         test_client.set_cookie("session", "tok", domain="localhost")
@@ -1029,4 +991,3 @@ class TestDefensivePIISafety:
         assert response.headers.get("X-Correlation-Id") == "auth-trace-cid"
         payload = response.get_json()
         assert payload["error"]["correlation_id"] == "auth-trace-cid"
-

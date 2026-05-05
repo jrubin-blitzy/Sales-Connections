@@ -168,10 +168,7 @@ def _is_preflight() -> bool:
     those are server-to-server CORS-discovery probes that should be
     handled by the application, not short-circuited to 204.
     """
-    return (
-        request.method == "OPTIONS"
-        and "Access-Control-Request-Method" in request.headers
-    )
+    return request.method == "OPTIONS" and "Access-Control-Request-Method" in request.headers
 
 
 # ---------------------------------------------------------------------------
@@ -297,10 +294,7 @@ def _after_request_cors(response: Response) -> Response:
     origin = request.headers.get("Origin", "").rstrip("/")
     if origin:
         allowed_origins = _resolve_allowed_origins()
-        if (
-            origin in allowed_origins
-            and "Access-Control-Allow-Origin" not in response.headers
-        ):
+        if origin in allowed_origins and "Access-Control-Allow-Origin" not in response.headers:
             response.headers["Access-Control-Allow-Origin"] = origin
             if _resolve_allow_credentials():
                 response.headers["Access-Control-Allow-Credentials"] = "true"
@@ -308,9 +302,7 @@ def _after_request_cors(response: Response) -> Response:
             # via the fetch Response.headers API (without ``Access-
             # Control-Expose-Headers`` only the safelisted CORS
             # response headers are visible to JS).
-            response.headers["Access-Control-Expose-Headers"] = ", ".join(
-                _EXPOSED_HEADERS
-            )
+            response.headers["Access-Control-Expose-Headers"] = ", ".join(_EXPOSED_HEADERS)
 
         # Append (do not overwrite) ``Origin`` to ``Vary`` so any
         # caching layer (CloudFront, browser cache) keys the response
@@ -319,9 +311,7 @@ def _after_request_cors(response: Response) -> Response:
         # privileged origin must not serve to a different origin).
         existing_vary = response.headers.get("Vary", "")
         if "origin" not in existing_vary.lower():
-            response.headers["Vary"] = (
-                f"{existing_vary}, Origin" if existing_vary else "Origin"
-            )
+            response.headers["Vary"] = f"{existing_vary}, Origin" if existing_vary else "Origin"
 
     return response
 

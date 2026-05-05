@@ -369,9 +369,7 @@ class TestEmailPasswordLogin:
                 "password": "Secret123!",
             },
         )
-        assert response.status_code == 200, (
-            "Login must succeed to test the increment side effect"
-        )
+        assert response.status_code == 200, "Login must succeed to test the increment side effect"
         after = active_sessions._value.get()
         assert after == pytest.approx(before + 1.0), (
             f"Expected active_sessions to increment by 1 after login; "

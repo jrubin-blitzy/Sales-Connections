@@ -113,9 +113,7 @@ class TestPublicPathAllowlist:
         assert not _is_public_path("/readyz/something")
         assert not _is_public_path("/auth/login/extra")
 
-    def test_metrics_endpoint_no_auth_needed(
-        self, app: Flask, client: FlaskClient
-    ) -> None:
+    def test_metrics_endpoint_no_auth_needed(self, app: Flask, client: FlaskClient) -> None:
         """/metrics responds without a session cookie."""
         # Without a cookie, /metrics should still respond (not 401).
         response = client.get("/metrics")
@@ -150,9 +148,7 @@ class TestProtectedPathEnforcement:
         assert not _is_protected_path("/random-path")
         assert not _is_protected_path("/static/x.png")
 
-    def test_missing_cookie_returns_401(
-        self, app: Flask, client: FlaskClient
-    ) -> None:
+    def test_missing_cookie_returns_401(self, app: Flask, client: FlaskClient) -> None:
         """Request to /api/* without session cookie yields 401."""
         _attach_probe_route(app)
         response = client.get("/api/_probe")
@@ -160,18 +156,14 @@ class TestProtectedPathEnforcement:
         body = response.get_json()
         assert body["error"]["code"] == "unauthorized"
 
-    def test_invalid_cookie_returns_401(
-        self, app: Flask, client: FlaskClient
-    ) -> None:
+    def test_invalid_cookie_returns_401(self, app: Flask, client: FlaskClient) -> None:
         """Request with malformed JWT yields 401."""
         _attach_probe_route(app)
         client.set_cookie("session", "not.a.valid.jwt")
         response = client.get("/api/_probe")
         assert response.status_code == 401
 
-    def test_wrong_signature_returns_401(
-        self, app: Flask, client: FlaskClient
-    ) -> None:
+    def test_wrong_signature_returns_401(self, app: Flask, client: FlaskClient) -> None:
         """JWT signed with wrong secret yields 401."""
         _attach_probe_route(app)
         # Mint a token with the wrong secret.
@@ -190,9 +182,7 @@ class TestProtectedPathEnforcement:
         response = client.get("/api/_probe")
         assert response.status_code == 401
 
-    def test_expired_token_returns_401(
-        self, app: Flask, client: FlaskClient
-    ) -> None:
+    def test_expired_token_returns_401(self, app: Flask, client: FlaskClient) -> None:
         """Expired JWT yields 401."""
         _attach_probe_route(app)
         # Mint an expired token using the app's signing key.
@@ -284,21 +274,15 @@ class TestSessionPopulation:
 class TestTokenExtraction:
     """Verify _extract_token's cookie-vs-header precedence."""
 
-    def test_cookie_returned_when_present(
-        self, app: Flask
-    ) -> None:
+    def test_cookie_returned_when_present(self, app: Flask) -> None:
         """Cookie value returned when set."""
-        with app.test_request_context(
-            "/api/_probe", headers={"Cookie": "session=cookie-value"}
-        ):
+        with app.test_request_context("/api/_probe", headers={"Cookie": "session=cookie-value"}):
             from flask import request  # noqa: PLC0415
 
             token = _extract_token(request, "session")
             assert token == "cookie-value"
 
-    def test_bearer_returned_when_no_cookie(
-        self, app: Flask
-    ) -> None:
+    def test_bearer_returned_when_no_cookie(self, app: Flask) -> None:
         """Bearer header returned when cookie absent."""
         with app.test_request_context(
             "/api/_probe",
@@ -333,9 +317,7 @@ class TestTokenExtraction:
 
     def test_empty_bearer_returns_none(self, app: Flask) -> None:
         """Bearer with empty token returns None."""
-        with app.test_request_context(
-            "/api/_probe", headers={"Authorization": "Bearer "}
-        ):
+        with app.test_request_context("/api/_probe", headers={"Authorization": "Bearer "}):
             from flask import request  # noqa: PLC0415
 
             token = _extract_token(request, "session")
