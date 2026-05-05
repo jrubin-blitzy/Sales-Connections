@@ -42,7 +42,7 @@ const STORAGE_EMAIL_KEY = "sc_user_email";
 const STORAGE_ID_KEY = "sc_user_id";
 
 function buildSession(email: string, userId: string): SessionRead {
-  const namePart = email.split("@")[0];
+  const namePart = email.split("@")[0] ?? "";
   const displayName = namePart
     .replace(/[._-]+/g, " ")
     .replace(/\b\w/g, (c) => c.toUpperCase());

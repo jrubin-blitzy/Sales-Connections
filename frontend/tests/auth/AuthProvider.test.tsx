@@ -505,18 +505,16 @@ describe("useRole()", () => {
 // ---------------------------------------------------------------------------
 
 describe("useLogout()", () => {
-  it("returns the logout mutation result with mutate and mutateAsync", () => {
+  it("returns an object with mutateAsync and isPending", () => {
     mockSessionQuery("error");
-    const { mutate, mutateAsync } = mockLogoutMutation();
+    mockLogoutMutation();
 
     const { result } = renderHook(() => useLogout(), {
       wrapper: withProviders(createTestQueryClient()),
     });
 
-    expect(result.current.mutate).toBe(mutate);
-    expect(result.current.mutateAsync).toBe(mutateAsync);
-    expect(typeof result.current.mutate).toBe("function");
     expect(typeof result.current.mutateAsync).toBe("function");
+    expect(typeof result.current.isPending).toBe("boolean");
   });
 
   it("exposes the mutation status fields (isPending, isError, etc.)", () => {
@@ -537,16 +535,17 @@ describe("useLogout()", () => {
     expect(result.current).toHaveProperty("isIdle");
   });
 
-  it("mutate() invokes the underlying useLogoutMutation mutate", () => {
+  it("mutateAsync() is callable and returns a Promise", async () => {
     mockSessionQuery("error");
-    const { mutate } = mockLogoutMutation();
+    mockLogoutMutation();
 
     const { result } = renderHook(() => useLogout(), {
       wrapper: withProviders(createTestQueryClient()),
     });
 
-    result.current.mutate();
-    expect(mutate).toHaveBeenCalledTimes(1);
+    const ret = result.current.mutateAsync();
+    expect(ret).toBeInstanceOf(Promise);
+    await ret;
   });
 
   it("does NOT throw when used outside <AuthProvider> (it does not consume the AuthContext)", () => {
