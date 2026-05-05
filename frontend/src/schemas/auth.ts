@@ -204,3 +204,32 @@ export type SessionRead = z.infer<typeof SessionReadSchema>;
  * `Session`; raw API hooks conventionally use `SessionRead`.
  */
 export type Session = SessionRead;
+
+// ---------------------------------------------------------------------------
+// RegisterRequestSchema - inbound payload for POST /auth/register
+// ---------------------------------------------------------------------------
+
+export const RegisterRequestSchema = z
+  .object({
+    email: z
+      .string()
+      .min(1, { message: "Email is required" })
+      .email({ message: "Please enter a valid email address" })
+      .max(320, { message: "Email exceeds 320 characters" }),
+    display_name: z
+      .string()
+      .min(1, { message: "Name is required" })
+      .max(100, { message: "Name must be 100 characters or fewer" }),
+    password: z
+      .string()
+      .min(8, { message: "Password must be at least 8 characters" })
+      .max(128, { message: "Password must be 128 characters or fewer" }),
+    confirm_password: z.string().min(1, { message: "Please confirm your password" }),
+  })
+  .strict()
+  .refine((data: { password: string; confirm_password: string }) => data.password === data.confirm_password, {
+    message: "Passwords do not match",
+    path: ["confirm_password"],
+  });
+
+export type RegisterRequest = z.infer<typeof RegisterRequestSchema>;

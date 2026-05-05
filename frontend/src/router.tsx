@@ -85,7 +85,6 @@
  */
 /* eslint-disable react-refresh/only-export-components */
 
-import { useEffect, type JSX } from "react";
 import { createBrowserRouter, Navigate } from "react-router-dom";
 
 import { App } from "@/App";
@@ -98,82 +97,11 @@ import { RecordModeration } from "@/features/admin/RecordModeration";
 import { UserManagement } from "@/features/admin/UserManagement";
 
 import { LoginScreen } from "@/features/auth/LoginScreen";
+import { RegisterScreen } from "@/features/auth/RegisterScreen";
 
 import { AddEditConnectionForm } from "@/features/connections/AddEditConnectionForm";
 import { ConnectionDetail } from "@/features/connections/ConnectionDetail";
 import { ConnectionFeed } from "@/features/connections/ConnectionFeed";
-
-// ---------------------------------------------------------------------------
-// OAuth helper components
-// ---------------------------------------------------------------------------
-
-/**
- * Performs a full-page navigation to the backend's /auth/google/start endpoint.
- *
- * The /auth/google/start route is handled server-side by Flask (per AAP
- * Sec 0.4.5): Flask issues a 302 redirect to Google's authorization URL with
- * state and PKCE parameters. The Vite dev-server proxy (configured in
- * vite.config.ts) forwards /auth/* to the Flask backend, so in normal flow
- * the SPA never actually renders this route - the browser navigates directly
- * to Flask before any React rendering occurs.
- *
- * This component exists for completeness and as a fallback for the rare
- * cases where a user lands on /auth/google/start via a direct URL or a
- * stale bookmark and the proxy has been bypassed (e.g., in production
- * environments where the proxy lives in nginx/ALB rather than Vite).
- *
- * Implementation notes:
- *   - useEffect runs after mount, so the side effect is not performed during
- *     render (which would violate React's rules-of-render). The empty
- *     dependency array ensures the navigation fires exactly once per mount.
- *   - window.location.replace (not assign) is chosen so the back button does
- *     not return the user to this transient redirect page; instead, it skips
- *     past it to the page they were on before /auth/google/start.
- *   - The function returns null because there is nothing to render: the
- *     browser is about to navigate away. A spinner could be added, but the
- *     navigation typically completes within a few hundred milliseconds, far
- *     too brief for a useful loading affordance.
- *   - Strict Mode in development invokes effects twice. The second
- *     window.location.replace call is a no-op because the navigation
- *     initiated by the first call has already taken control of the browser.
- *
- * @returns null - nothing renders; the browser is about to navigate away.
- */
-function OAuthStartRedirect(): null {
-  useEffect(() => {
-    // Use replace (not assign) so the back button does not return to this
-    // transient redirect page. The browser will navigate to Flask, which
-    // 302s to Google's authorization URL.
-    window.location.replace("/auth/google/start");
-  }, []);
-  return null;
-}
-
-/**
- * Fallback element for the /auth/google/callback route.
- *
- * The /auth/google/callback route is handled server-side by Flask (per AAP
- * Sec 0.4.5): Flask validates the state cookie, exchanges the OAuth code for
- * an ID token, validates the ID token signature against Google's JWKS,
- * upserts the user, mints a session JWT, sets it as an HttpOnly cookie, and
- * 302-redirects to /feed. The SPA should never render this route in the
- * happy path because the Vite dev-server proxy (and nginx/ALB in production)
- * forwards /auth/* to Flask before React boots.
- *
- * This component exists for the edge case where the proxy is misconfigured
- * (e.g., a contributor running the SPA without the Flask backend, or a
- * production deploy where /auth/* is incorrectly routed to the SPA bundle).
- * In that case, redirecting to /feed lets the AuthProvider's session-hydration
- * query fire against /api/me. If a session cookie was set by the OAuth
- * callback, the user lands on the feed; otherwise, ProtectedRoute bounces
- * them to /login.
- *
- * @returns A <Navigate> element that redirects to /feed with `replace`
- *          history semantics so the back button does not return here.
- */
-function OAuthCallbackFallback(): JSX.Element {
-  return <Navigate to="/feed" replace />;
-}
 
 // ---------------------------------------------------------------------------
 // Route table
@@ -213,12 +141,8 @@ export const router = createBrowserRouter([
     element: <LoginScreen />,
   },
   {
-    path: "/auth/google/start",
-    element: <OAuthStartRedirect />,
-  },
-  {
-    path: "/auth/google/callback",
-    element: <OAuthCallbackFallback />,
+    path: "/register",
+    element: <RegisterScreen />,
   },
 
   // =========================================================================

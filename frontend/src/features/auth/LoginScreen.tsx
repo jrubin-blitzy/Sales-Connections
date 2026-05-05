@@ -72,7 +72,7 @@
  */
 
 import { useCallback, useEffect, useState, type FormEvent, type JSX } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Lock, LogIn, Mail } from "lucide-react";
 
 import { useLoginMutation } from "@/api/auth";
@@ -317,33 +317,6 @@ export function LoginScreen(): JSX.Element {
   }, [session, sessionLoading, nextDestination, navigate]);
 
   // -------------------------------------------------------------------------
-  // Google OAuth handler
-  //
-  // The full-page navigation is intentional and architectural per AAP
-  // Sec 0.4.5: Flask handles /auth/google/start by setting the OAuth
-  // state cookie and 302-redirecting to Google's authorization endpoint.
-  // The SPA cannot - and must not - intercept this because:
-  //   1. Authlib (the backend OAuth client) needs to set the state
-  //      cookie BEFORE the redirect to Google so the callback can
-  //      validate the state. An XHR/fetch would not let Flask write
-  //      cookies that the next browser request would honor.
-  //   2. The Google authorization page itself is a top-level browser
-  //      view; it cannot live inside an iframe (X-Frame-Options:
-  //      DENY on Google's side).
-  //
-  // The OAuth flow does NOT carry the ?next= param - per AAP Sec 0.4.5
-  // the Flask callback hard-codes /feed as the post-OAuth destination.
-  // Users wanting to land on a specific page must use email/password.
-  //
-  // useCallback memoizes the handler so React does not consider the
-  // Button's onClick prop changed on every render (preventing
-  // unnecessary re-renders of the Button subtree).
-  // -------------------------------------------------------------------------
-  const handleGoogleSignIn = useCallback((): void => {
-    window.location.href = "/auth/google/start";
-  }, []);
-
-  // -------------------------------------------------------------------------
   // Email/password submit handler
   //
   // Three phases:
@@ -536,33 +509,6 @@ export function LoginScreen(): JSX.Element {
         </div>
 
         {/*
-          Google OAuth button. Full-page navigation, NOT a SPA route
-          transition. See handleGoogleSignIn comment for why.
-        */}
-        <Button
-          type="button"
-          variant="secondary"
-          size="md"
-          fullWidth
-          onClick={handleGoogleSignIn}
-          leftIcon={<GoogleIcon />}
-          data-testid="login-google-button"
-        >
-          Sign in with Google
-        </Button>
-
-        {/* "Or" divider between OAuth and email/password options. */}
-        <div
-          className="my-6 flex items-center gap-3"
-          role="separator"
-          aria-orientation="horizontal"
-        >
-          <span className="h-px flex-1 bg-slate-200" />
-          <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Or</span>
-          <span className="h-px flex-1 bg-slate-200" />
-        </div>
-
-        {/*
           Email / password form. noValidate prevents the browser's
           built-in HTML5 validation tooltip from fighting our Zod-driven
           messages (which are richer and more consistent across browsers).
@@ -631,66 +577,14 @@ export function LoginScreen(): JSX.Element {
           </div>
         </form>
 
-        <p className="mt-6 text-center text-xs text-slate-500">
-          By signing in you agree to our internal usage policy.
+        <p className="mt-6 text-center text-sm text-slate-600">
+          Don&apos;t have an account?{" "}
+          <Link to="/register" className="font-medium text-blue-600 hover:text-blue-500">
+            Create one
+          </Link>
         </p>
       </div>
     </section>
   );
 }
 
-// ---------------------------------------------------------------------------
-// GoogleIcon - inline SVG component for the Google "G" brand mark
-// ---------------------------------------------------------------------------
-
-/**
- * Inline Google "G" brand mark as an SVG component.
- *
- * Why inline rather than Lucide-React: Lucide does not ship the Google
- * brand mark (Google's brand guidelines restrict third-party
- * redistribution; brand-specific marks live in libraries like
- * @lobehub/icons or react-icons, neither of which is in the project's
- * dependency manifest per AAP Sec 0.3.4). The inline SVG is < 1 KB and
- * sized via the className "h-4 w-4" so it matches the visual rhythm of
- * the Lucide icons used elsewhere on the screen.
- *
- * The SVG uses Google's published brand colors (#4285F4 blue, #34A853
- * green, #FBBC05 yellow, #EA4335 red) per the Google Identity
- * guidelines; aria-hidden="true" because the icon is decorative (the
- * accompanying button label "Sign in with Google" is the accessible
- * name for the action).
- *
- * Module-private (not exported) because the icon is only used by the
- * LoginScreen and has no broader application elsewhere in the SPA.
- *
- * @returns The SVG element representing Google's "G" mark.
- */
-function GoogleIcon(): JSX.Element {
-  return (
-    <svg
-      aria-hidden="true"
-      width="16"
-      height="16"
-      viewBox="0 0 18 18"
-      xmlns="http://www.w3.org/2000/svg"
-      className="h-4 w-4"
-    >
-      <path
-        fill="#4285F4"
-        d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"
-      />
-      <path
-        fill="#34A853"
-        d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332C2.438 15.983 5.482 18 9 18z"
-      />
-      <path
-        fill="#FBBC05"
-        d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"
-      />
-      <path
-        fill="#EA4335"
-        d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0 5.482 0 2.438 2.017.957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z"
-      />
-    </svg>
-  );
-}

@@ -92,7 +92,7 @@ import {
 import { apiGet, apiPost, type ApiError } from "@/api/client";
 import { useToast } from "@/components/ui/Toast";
 import { resetCorrelationId } from "@/lib/correlationId";
-import type { LoginRequest, LoginResponse, SessionRead } from "@/schemas/auth";
+import type { LoginRequest, LoginResponse, RegisterRequest, SessionRead } from "@/schemas/auth";
 
 // ---------------------------------------------------------------------------
 // Cache key factory
@@ -274,6 +274,34 @@ export function useLoginMutation(): UseMutationResult<LoginResponse, ApiError, L
       // falls back to a default-message-for-status string when the
       // backend envelope is malformed), so the `||` branch is defensive.
       toast.error(error.message || "Sign-in failed. Please try again.");
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// useRegisterMutation - POST /auth/register
+// ---------------------------------------------------------------------------
+
+export function useRegisterMutation(): UseMutationResult<LoginResponse, ApiError, RegisterRequest> {
+  const queryClient = useQueryClient();
+  const toast = useToast();
+
+  return useMutation<LoginResponse, ApiError, RegisterRequest>({
+    mutationFn: (payload) =>
+      apiPost<LoginResponse, RegisterRequest>("/auth/register", payload, {
+        skipAuthRedirect: true,
+      }),
+    onSuccess: () => {
+      resetCorrelationId();
+      void queryClient.invalidateQueries({ queryKey: authKeys.session() });
+      toast.success("Account created. Welcome!");
+    },
+    onError: (error) => {
+      if (error.status === 409) {
+        toast.error("An account with that email already exists.");
+        return;
+      }
+      toast.error(error.message || "Registration failed. Please try again.");
     },
   });
 }
