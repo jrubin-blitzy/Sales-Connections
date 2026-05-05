@@ -305,10 +305,120 @@ jobs:
         run: |
           application_url="$(terraform output -raw application_url 2>/dev/null || echo '')"
           alb_dns_name="$(terraform output -raw alb_dns_name 2>/dev/null || echo '')"
+          ecs_cluster_name="$(terraform output -raw ecs_cluster_name 2>/dev/null || echo '')"
+          ecs_migration_task_definition_family="$(terraform output -raw ecs_migration_task_definition_family 2>/dev/null || echo '')"
+          ecs_security_group_id="$(terraform output -raw ecs_security_group_id 2>/dev/null || echo '')"
+          private_subnet_ids="$(terraform output -json private_subnet_ids 2>/dev/null || echo '[]')"
           echo "application_url=${application_url}" >> "${GITHUB_OUTPUT}"
           echo "alb_dns_name=${alb_dns_name}" >> "${GITHUB_OUTPUT}"
+          echo "ecs_cluster_name=${ecs_cluster_name}" >> "${GITHUB_OUTPUT}"
+          echo "ecs_migration_task_definition_family=${ecs_migration_task_definition_family}" >> "${GITHUB_OUTPUT}"
+          echo "ecs_security_group_id=${ecs_security_group_id}" >> "${GITHUB_OUTPUT}"
+          echo "private_subnet_ids=${private_subnet_ids}" >> "${GITHUB_OUTPUT}"
           echo "Application URL: ${application_url}"
           echo "ALB DNS:         ${alb_dns_name}"
+          echo "ECS cluster:     ${ecs_cluster_name}"
+          echo "Migration task:  ${ecs_migration_task_definition_family}"
+
+      # =====================================================================
+      # Run Alembic schema migrations BEFORE rolling out new application code
+      # =====================================================================
+      # Per docs/operations.md "Database migrations" and AAP Sec 0.5.2 Layer 0,
+      # the production deployment workflow runs schema migrations as a
+      # one-shot ECS RunTask invocation BEFORE the long-running backend tasks
+      # roll over to the new image. The Alembic migration task definition is
+      # provisioned by Terraform as `<name_prefix>-migration` (see
+      # infra/terraform/modules/ecs/migration.tf); the `terraform apply` step
+      # above registers a new revision of that task definition with the
+      # current TF_VAR_backend_image_tag so the migration runs against the
+      # SAME image SHA that the long-running tasks will eventually run.
+      #
+      # The `aws ecs run-task --task-definition <family>` invocation
+      # automatically targets the latest ACTIVE revision (which is the
+      # revision Terraform just produced with the new image SHA).
+      #
+      # `aws ecs wait tasks-stopped` polls until the migration task exits
+      # (success or failure). The subsequent `describe-tasks` call inspects
+      # the container exit code; non-zero exits fail the deployment, leaving
+      # the long-running service on its previous (working) task definition
+      # because the backend ECS service has lifecycle.ignore_changes =
+      # [task_definition] and was therefore never asked to roll over.
+      #
+      # Migration idempotency (per Alembic semantics + DL-0043): re-running
+      # `alembic upgrade head` against an already-migrated database is a
+      # no-op that exits 0 in milliseconds. This makes the step safe to
+      # retry on transient infrastructure errors.
+      # =====================================================================
+      - name: Run database migrations (one-shot ECS task)
+        if: steps.tf-output.outputs.ecs_migration_task_definition_family != ''
+        env:
+          ECS_CLUSTER: ${{ steps.tf-output.outputs.ecs_cluster_name }}
+          MIGRATION_FAMILY: ${{ steps.tf-output.outputs.ecs_migration_task_definition_family }}
+          ECS_SG: ${{ steps.tf-output.outputs.ecs_security_group_id }}
+          SUBNETS: ${{ steps.tf-output.outputs.private_subnet_ids }}
+        run: |
+          set -euo pipefail
+          # Convert the JSON array of subnet IDs into the comma-separated
+          # form `aws ecs run-task --network-configuration` expects.
+          subnet_csv="$(echo "${SUBNETS}" | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)))')"
+          if [ -z "${subnet_csv}" ]; then
+            echo "::error::No private subnet IDs available from Terraform outputs; cannot launch migration task."
+            exit 1
+          fi
+
+          echo "Launching one-shot migration task..."
+          echo "  Cluster: ${ECS_CLUSTER}"
+          echo "  Family:  ${MIGRATION_FAMILY}"
+          echo "  Subnets: ${subnet_csv}"
+          echo "  SG:      ${ECS_SG}"
+
+          # `aws ecs run-task --task-definition <family>` targets the latest
+          # ACTIVE revision automatically. propagateTags=TASK_DEFINITION
+          # copies the migration task definition's tags onto the running
+          # task for cost-explorer drill-down.
+          run_task_output="$(
+            aws ecs run-task \
+              --cluster "${ECS_CLUSTER}" \
+              --task-definition "${MIGRATION_FAMILY}" \
+              --launch-type FARGATE \
+              --network-configuration "awsvpcConfiguration={subnets=[${subnet_csv}],securityGroups=[${ECS_SG}],assignPublicIp=DISABLED}" \
+              --propagate-tags TASK_DEFINITION \
+              --started-by "gha-cd-deploy-dev-${GITHUB_RUN_ID}"
+          )"
+          echo "${run_task_output}"
+
+          # Extract the ARN of the launched task; bail if no task ARN was
+          # returned (failure to launch is itself a deployment failure).
+          task_arn="$(echo "${run_task_output}" | python3 -c 'import json,sys; data=json.load(sys.stdin); print(data["tasks"][0]["taskArn"]) if data.get("tasks") else sys.exit(1)')"
+          if [ -z "${task_arn}" ]; then
+            echo "::error::run-task did not return a taskArn; migration failed to launch."
+            exit 1
+          fi
+          echo "Launched migration task: ${task_arn}"
+
+          # Wait for the task to reach the STOPPED state (success or failure).
+          # `aws ecs wait tasks-stopped` polls every 6 seconds and times out
+          # after 100 polls (10 minutes) — well above the typical
+          # additive-migration runtime of 5-30 seconds.
+          echo "Waiting for migration task to stop..."
+          aws ecs wait tasks-stopped \
+            --cluster "${ECS_CLUSTER}" \
+            --tasks "${task_arn}"
+
+          # Inspect the task's container exit code. Non-zero exits fail
+          # the deployment.
+          describe_output="$(aws ecs describe-tasks --cluster "${ECS_CLUSTER}" --tasks "${task_arn}")"
+          echo "${describe_output}"
+
+          exit_code="$(echo "${describe_output}" | python3 -c 'import json,sys; data=json.load(sys.stdin); c=data["tasks"][0]["containers"][0]; print(c.get("exitCode", -1))')"
+          stopped_reason="$(echo "${describe_output}" | python3 -c 'import json,sys; data=json.load(sys.stdin); print(data["tasks"][0].get("stoppedReason", "unknown"))')"
+
+          if [ "${exit_code}" != "0" ]; then
+            echo "::error::Migration task ${task_arn} exited with code ${exit_code}: ${stopped_reason}"
+            echo "::error::See CloudWatch Logs (awslogs-stream-prefix=migration) for the failure details."
+            exit 1
+          fi
+          echo "Migration task succeeded (exit_code=0)."
 
       - name: Verify dev deployment
         if: steps.tf-output.outputs.alb_dns_name != ''
@@ -475,8 +585,79 @@ jobs:
         run: |
           application_url="$(terraform output -raw application_url 2>/dev/null || echo '')"
           alb_dns_name="$(terraform output -raw alb_dns_name 2>/dev/null || echo '')"
+          ecs_cluster_name="$(terraform output -raw ecs_cluster_name 2>/dev/null || echo '')"
+          ecs_migration_task_definition_family="$(terraform output -raw ecs_migration_task_definition_family 2>/dev/null || echo '')"
+          ecs_security_group_id="$(terraform output -raw ecs_security_group_id 2>/dev/null || echo '')"
+          private_subnet_ids="$(terraform output -json private_subnet_ids 2>/dev/null || echo '[]')"
           echo "application_url=${application_url}" >> "${GITHUB_OUTPUT}"
           echo "alb_dns_name=${alb_dns_name}" >> "${GITHUB_OUTPUT}"
+          echo "ecs_cluster_name=${ecs_cluster_name}" >> "${GITHUB_OUTPUT}"
+          echo "ecs_migration_task_definition_family=${ecs_migration_task_definition_family}" >> "${GITHUB_OUTPUT}"
+          echo "ecs_security_group_id=${ecs_security_group_id}" >> "${GITHUB_OUTPUT}"
+          echo "private_subnet_ids=${private_subnet_ids}" >> "${GITHUB_OUTPUT}"
+
+      # =====================================================================
+      # Run Alembic schema migrations BEFORE rolling out new application code
+      # =====================================================================
+      # Per docs/operations.md "Database migrations" - the production
+      # deployment workflow runs schema migrations as a one-shot ECS RunTask
+      # invocation BEFORE the long-running backend tasks roll over to the
+      # new image. See the equivalent step in deploy-dev for the full
+      # rationale (idempotency, exit-code handling, CloudWatch log routing).
+      # =====================================================================
+      - name: Run database migrations (one-shot ECS task)
+        if: steps.tf-output.outputs.ecs_migration_task_definition_family != ''
+        env:
+          ECS_CLUSTER: ${{ steps.tf-output.outputs.ecs_cluster_name }}
+          MIGRATION_FAMILY: ${{ steps.tf-output.outputs.ecs_migration_task_definition_family }}
+          ECS_SG: ${{ steps.tf-output.outputs.ecs_security_group_id }}
+          SUBNETS: ${{ steps.tf-output.outputs.private_subnet_ids }}
+        run: |
+          set -euo pipefail
+          subnet_csv="$(echo "${SUBNETS}" | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)))')"
+          if [ -z "${subnet_csv}" ]; then
+            echo "::error::No private subnet IDs available from Terraform outputs; cannot launch migration task."
+            exit 1
+          fi
+          echo "Launching one-shot migration task in staging..."
+          echo "  Cluster: ${ECS_CLUSTER}"
+          echo "  Family:  ${MIGRATION_FAMILY}"
+
+          run_task_output="$(
+            aws ecs run-task \
+              --cluster "${ECS_CLUSTER}" \
+              --task-definition "${MIGRATION_FAMILY}" \
+              --launch-type FARGATE \
+              --network-configuration "awsvpcConfiguration={subnets=[${subnet_csv}],securityGroups=[${ECS_SG}],assignPublicIp=DISABLED}" \
+              --propagate-tags TASK_DEFINITION \
+              --started-by "gha-cd-deploy-staging-${GITHUB_RUN_ID}"
+          )"
+          echo "${run_task_output}"
+
+          task_arn="$(echo "${run_task_output}" | python3 -c 'import json,sys; data=json.load(sys.stdin); print(data["tasks"][0]["taskArn"]) if data.get("tasks") else sys.exit(1)')"
+          if [ -z "${task_arn}" ]; then
+            echo "::error::run-task did not return a taskArn; migration failed to launch."
+            exit 1
+          fi
+          echo "Launched migration task: ${task_arn}"
+
+          echo "Waiting for migration task to stop..."
+          aws ecs wait tasks-stopped \
+            --cluster "${ECS_CLUSTER}" \
+            --tasks "${task_arn}"
+
+          describe_output="$(aws ecs describe-tasks --cluster "${ECS_CLUSTER}" --tasks "${task_arn}")"
+          echo "${describe_output}"
+
+          exit_code="$(echo "${describe_output}" | python3 -c 'import json,sys; data=json.load(sys.stdin); c=data["tasks"][0]["containers"][0]; print(c.get("exitCode", -1))')"
+          stopped_reason="$(echo "${describe_output}" | python3 -c 'import json,sys; data=json.load(sys.stdin); print(data["tasks"][0].get("stoppedReason", "unknown"))')"
+
+          if [ "${exit_code}" != "0" ]; then
+            echo "::error::Migration task ${task_arn} exited with code ${exit_code}: ${stopped_reason}"
+            echo "::error::See CloudWatch Logs (awslogs-stream-prefix=migration) for the failure details."
+            exit 1
+          fi
+          echo "Migration task succeeded (exit_code=0)."
 
       - name: Verify staging deployment
         if: steps.tf-output.outputs.alb_dns_name != ''
@@ -638,8 +819,89 @@ jobs:
         run: |
           application_url="$(terraform output -raw application_url 2>/dev/null || echo '')"
           alb_dns_name="$(terraform output -raw alb_dns_name 2>/dev/null || echo '')"
+          ecs_cluster_name="$(terraform output -raw ecs_cluster_name 2>/dev/null || echo '')"
+          ecs_migration_task_definition_family="$(terraform output -raw ecs_migration_task_definition_family 2>/dev/null || echo '')"
+          ecs_security_group_id="$(terraform output -raw ecs_security_group_id 2>/dev/null || echo '')"
+          private_subnet_ids="$(terraform output -json private_subnet_ids 2>/dev/null || echo '[]')"
           echo "application_url=${application_url}" >> "${GITHUB_OUTPUT}"
           echo "alb_dns_name=${alb_dns_name}" >> "${GITHUB_OUTPUT}"
+          echo "ecs_cluster_name=${ecs_cluster_name}" >> "${GITHUB_OUTPUT}"
+          echo "ecs_migration_task_definition_family=${ecs_migration_task_definition_family}" >> "${GITHUB_OUTPUT}"
+          echo "ecs_security_group_id=${ecs_security_group_id}" >> "${GITHUB_OUTPUT}"
+          echo "private_subnet_ids=${private_subnet_ids}" >> "${GITHUB_OUTPUT}"
+
+      # =====================================================================
+      # Run Alembic schema migrations BEFORE rolling out new application code
+      # =====================================================================
+      # Per docs/operations.md "Database migrations" - the production
+      # deployment workflow runs schema migrations as a one-shot ECS RunTask
+      # invocation BEFORE the long-running backend tasks roll over to the
+      # new image. The Alembic migration task definition is provisioned by
+      # Terraform as `<name_prefix>-migration` (sales-connections-prod-migration
+      # in this environment); the `terraform apply` step above registers a
+      # new revision of that task definition with the current
+      # TF_VAR_backend_image_tag so the migration runs against the SAME
+      # image SHA that the long-running tasks will eventually run.
+      #
+      # Migration failures fail the deploy-prod job, leaving the long-running
+      # service on its previous (working) task definition because the backend
+      # ECS service has lifecycle.ignore_changes = [task_definition] and was
+      # therefore never asked to roll over. Operators can re-run the workflow
+      # after fixing the migration without manual intervention.
+      # =====================================================================
+      - name: Run database migrations (one-shot ECS task)
+        if: steps.tf-output.outputs.ecs_migration_task_definition_family != ''
+        env:
+          ECS_CLUSTER: ${{ steps.tf-output.outputs.ecs_cluster_name }}
+          MIGRATION_FAMILY: ${{ steps.tf-output.outputs.ecs_migration_task_definition_family }}
+          ECS_SG: ${{ steps.tf-output.outputs.ecs_security_group_id }}
+          SUBNETS: ${{ steps.tf-output.outputs.private_subnet_ids }}
+        run: |
+          set -euo pipefail
+          subnet_csv="$(echo "${SUBNETS}" | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)))')"
+          if [ -z "${subnet_csv}" ]; then
+            echo "::error::No private subnet IDs available from Terraform outputs; cannot launch migration task."
+            exit 1
+          fi
+          echo "Launching one-shot migration task in production..."
+          echo "  Cluster: ${ECS_CLUSTER}"
+          echo "  Family:  ${MIGRATION_FAMILY}"
+
+          run_task_output="$(
+            aws ecs run-task \
+              --cluster "${ECS_CLUSTER}" \
+              --task-definition "${MIGRATION_FAMILY}" \
+              --launch-type FARGATE \
+              --network-configuration "awsvpcConfiguration={subnets=[${subnet_csv}],securityGroups=[${ECS_SG}],assignPublicIp=DISABLED}" \
+              --propagate-tags TASK_DEFINITION \
+              --started-by "gha-cd-deploy-prod-${GITHUB_RUN_ID}"
+          )"
+          echo "${run_task_output}"
+
+          task_arn="$(echo "${run_task_output}" | python3 -c 'import json,sys; data=json.load(sys.stdin); print(data["tasks"][0]["taskArn"]) if data.get("tasks") else sys.exit(1)')"
+          if [ -z "${task_arn}" ]; then
+            echo "::error::run-task did not return a taskArn; migration failed to launch."
+            exit 1
+          fi
+          echo "Launched migration task: ${task_arn}"
+
+          echo "Waiting for migration task to stop..."
+          aws ecs wait tasks-stopped \
+            --cluster "${ECS_CLUSTER}" \
+            --tasks "${task_arn}"
+
+          describe_output="$(aws ecs describe-tasks --cluster "${ECS_CLUSTER}" --tasks "${task_arn}")"
+          echo "${describe_output}"
+
+          exit_code="$(echo "${describe_output}" | python3 -c 'import json,sys; data=json.load(sys.stdin); c=data["tasks"][0]["containers"][0]; print(c.get("exitCode", -1))')"
+          stopped_reason="$(echo "${describe_output}" | python3 -c 'import json,sys; data=json.load(sys.stdin); print(data["tasks"][0].get("stoppedReason", "unknown"))')"
+
+          if [ "${exit_code}" != "0" ]; then
+            echo "::error::Migration task ${task_arn} exited with code ${exit_code}: ${stopped_reason}"
+            echo "::error::See CloudWatch Logs (awslogs-stream-prefix=migration) for the failure details."
+            exit 1
+          fi
+          echo "Migration task succeeded (exit_code=0)."
 
       - name: Verify prod deployment
         if: steps.tf-output.outputs.alb_dns_name != ''

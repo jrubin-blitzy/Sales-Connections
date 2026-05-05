@@ -95,6 +95,28 @@ output "frontend_task_definition_arn" {
 }
 
 ###############################################################################
+# Migration task definition outputs (per QA Final Checkpoint 13 Issue #4)
+#
+# Exposed for the CD pipeline (`.github/workflows/cd.yml`) to invoke
+# `aws ecs run-task --task-definition <family>` with the migration task
+# definition before the rolling deployment of the long-running backend
+# service. Per docs/operations.md "Database migrations", the migration
+# is a separate one-shot ECS RunTask that runs `alembic upgrade head`
+# with RUN_MIGRATIONS=true, ensuring schema changes apply before the new
+# application version takes traffic.
+###############################################################################
+
+output "migration_task_definition_family" {
+  description = "Family name of the one-shot Alembic migration task definition (e.g., 'sales-connections-prod-migration'). Consumed by .github/workflows/cd.yml's pre-deploy migration step which invokes `aws ecs run-task --task-definition <family>` BEFORE the rolling deployment of the long-running backend service. The family name is stable across revisions; image-tag updates produce new revisions but the family stays the same. Matches docs/operations.md lines 81-91 and 132-138."
+  value       = aws_ecs_task_definition.migration.family
+}
+
+output "migration_task_definition_arn" {
+  description = "ARN of the Terraform-managed migration task definition revision. The CD pipeline registers new revisions outside of Terraform via `aws ecs register-task-definition --family <family> --container-definitions ...` with the new image tag, then invokes `aws ecs run-task` against the latest revision. This output reflects only the Terraform baseline."
+  value       = aws_ecs_task_definition.migration.arn
+}
+
+###############################################################################
 # IAM Role outputs (two-role separation per AAP Sec 0.4.6)
 #
 # Task role: runtime application identity (least-privilege secret reads,

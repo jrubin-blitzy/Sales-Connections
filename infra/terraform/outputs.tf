@@ -201,6 +201,11 @@ output "ecs_task_definition_family" {
   value       = module.ecs.task_definition_family
 }
 
+output "ecs_migration_task_definition_family" {
+  description = "Family name of the one-shot Alembic migration ECS task definition (e.g., 'sales-connections-prod-migration'). Per docs/operations.md the CD pipeline invokes `aws ecs run-task --task-definition <family>` with this family BEFORE the rolling deployment of the long-running backend service so schema migrations apply ahead of new application code. Family is stable across revisions; the CD pipeline registers new revisions on each image bump."
+  value       = module.ecs.migration_task_definition_family
+}
+
 output "ecs_task_role_arn" {
   description = "IAM task role ARN used by ECS containers at RUNTIME to read secrets and write CloudWatch logs (per the two-role separation in AAP Sec 0.4.6). This role has secretsmanager:GetSecretValue scoped to the four secret ARNs only."
   value       = module.ecs.task_role_arn

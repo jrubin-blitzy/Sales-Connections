@@ -487,3 +487,57 @@ updates:
       - dependency-name: "*"
         update-types:
           - "version-update:semver-major"
+
+  # =====================================================================
+  # Ecosystem 5: Terraform providers
+  # =====================================================================
+  # Tracks Terraform provider version constraints declared in
+  # infra/terraform/versions.tf (AWS provider ~> 5.70, random ~> 3.6,
+  # null ~> 3.2). Dependabot opens a PR when a newer provider release is
+  # available, bumping the version constraint within the configured
+  # update-type set (patch + minor only; major bumps require an explicit
+  # decision-log entry per AAP Sec 0.7.5 / DL-0022 because AWS provider
+  # major bumps - e.g., 5.x -> 6.x - typically introduce breaking
+  # attribute deprecations such as the data.aws_region.current.name -> .region
+  # change deferred per DL-0059 to a future coordinated provider upgrade).
+  #
+  # Per AAP Sec 0.7.7 "Pinned versions everywhere" applies equally to
+  # IaC: drifting provider versions across CI runs would produce
+  # plan-vs-apply discrepancies and is unacceptable for production
+  # deploys. Reviewer routing is platform-team because Terraform changes
+  # have infrastructure-blast-radius implications that require ops review.
+  # =====================================================================
+  - package-ecosystem: "terraform"
+    directory: "/infra/terraform"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 3
+    target-branch: "main"
+    commit-message:
+      prefix: "chore(terraform)"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "terraform"
+      - "infrastructure"
+    reviewers:
+      - "sales-connections/security-team"
+    assignees:
+      - "sales-connections/platform-team"
+    allow:
+      - dependency-type: "direct"
+    ignore:
+      # AWS provider major-version bumps (5.x -> 6.x) frequently introduce
+      # breaking attribute changes (see DL-0059 for the data.aws_region
+      # .name -> .region migration deferred until 6.x adoption); they
+      # require an explicit decision-log entry, a coordinated provider
+      # upgrade across all modules, and a planned terraform plan/apply
+      # in the dev environment before merge. Auto-PRing major bumps
+      # would risk a CD pipeline outage if a deprecated attribute were
+      # referenced anywhere in the composition.
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
