@@ -64,8 +64,9 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 
-import { apiDelete, apiGet, apiPatch, apiPost, type ApiError } from "@/api/client";
+import type { ApiError } from "@/api/client";
 import { useToast } from "@/components/ui/Toast";
+import * as store from "@/lib/localStore";
 import type {
   ConnectionCreate,
   ConnectionDuplicateCheckResponse,
@@ -201,92 +202,6 @@ export const tagKeys = {
   lists: () => [...tagKeys.all, "list"] as const,
 };
 
-// ---------------------------------------------------------------------------
-// URL builder helper
-// ---------------------------------------------------------------------------
-
-/**
- * Build a URL query string from a `ConnectionListParams`.
- *
- * Encoding semantics:
- *   - Multi-valued array params use repeating keys
- *     (e.g., `tag_ids=a&tag_ids=b`); Flask's `request.args.getlist`
- *     parses these into a Python list at the parameter level.
- *   - Boolean params serialize to the strings "true" / "false";
- *     pydantic's bool coercion accepts both.
- *   - Numeric params serialize via String() so they round-trip
- *     through pydantic's int validation.
- *   - Undefined fields are omitted entirely so the backend's defaults
- *     apply (sort, sort_dir, page, page_size, include_deleted).
- *
- * Returns the empty string when no params are set, so the caller can
- * safely concatenate without producing a trailing "?" with no body.
- *
- * @param params The filter / sort / pagination parameters.
- * @returns      Either "" (no params) or "?<encoded body>".
- */
-function buildConnectionListQuery(params: ConnectionListParams): string {
-  const search = new URLSearchParams();
-
-  // Scalar string filters - skipped when undefined or empty string so
-  // the backend treats them as "no filter" (and the cache key stays
-  // tight without empty values polluting it).
-  if (params.company) {
-    search.set("company", params.company);
-  }
-  if (params.full_name_search) {
-    search.set("full_name_search", params.full_name_search);
-  }
-  if (params.submission_date_from) {
-    search.set("submission_date_from", params.submission_date_from);
-  }
-  if (params.submission_date_to) {
-    search.set("submission_date_to", params.submission_date_to);
-  }
-
-  // Boolean flag - explicitly check for undefined so that an explicit
-  // `false` value is preserved on the wire (the backend distinguishes
-  // "omitted" from "false" only by presence of the key).
-  if (params.include_deleted !== undefined) {
-    search.set("include_deleted", String(params.include_deleted));
-  }
-
-  // Numeric pagination - same explicit-undefined check so 0 (an invalid
-  // value the backend will reject with 422) round-trips clearly.
-  if (params.page !== undefined) {
-    search.set("page", String(params.page));
-  }
-  if (params.page_size !== undefined) {
-    search.set("page_size", String(params.page_size));
-  }
-
-  // Sort fields - omit when undefined so the backend default applies.
-  if (params.sort) {
-    search.set("sort", params.sort);
-  }
-  if (params.sort_dir) {
-    search.set("sort_dir", params.sort_dir);
-  }
-
-  // Multi-valued enum / UUID filters - repeated keys (Flask's
-  // `getlist` parses them into a Python list). The `?? []` fallback
-  // means an undefined array is treated identically to an empty array.
-  for (const v of params.involvement ?? []) {
-    search.append("involvement", v);
-  }
-  for (const v of params.outreach_status ?? []) {
-    search.append("outreach_status", v);
-  }
-  for (const v of params.owner_user_ids ?? []) {
-    search.append("owner_user_ids", v);
-  }
-  for (const v of params.tag_ids ?? []) {
-    search.append("tag_ids", v);
-  }
-
-  const qs = search.toString();
-  return qs ? `?${qs}` : "";
-}
 
 // ---------------------------------------------------------------------------
 // Connection query hooks
@@ -311,8 +226,7 @@ export function useConnectionsQuery(
 ): UseQueryResult<PaginatedConnections, ApiError> {
   return useQuery<PaginatedConnections, ApiError>({
     queryKey: connectionKeys.list(params),
-    queryFn: () =>
-      apiGet<PaginatedConnections>(`/api/connections${buildConnectionListQuery(params)}`),
+    queryFn: () => store.listConnections(params),
   });
 }
 
@@ -330,7 +244,7 @@ export function useConnectionsQuery(
 export function useConnectionQuery(id: string): UseQueryResult<ConnectionRead, ApiError> {
   return useQuery<ConnectionRead, ApiError>({
     queryKey: connectionKeys.detail(id),
-    queryFn: () => apiGet<ConnectionRead>(`/api/connections/${encodeURIComponent(id)}`),
+    queryFn: () => store.getConnection(id),
     enabled: id.length > 0,
   });
 }
@@ -351,21 +265,11 @@ export function useConnectionQuery(id: string): UseQueryResult<ConnectionRead, A
 export function useConnectionHistoryQuery(
   id: string,
   page: number = 1,
-  pageSize: number = 25,
+  _pageSize: number = 25,
 ): UseQueryResult<PaginatedHistory, ApiError> {
-  // Build the query string explicitly here (vs reusing
-  // buildConnectionListQuery) because the history endpoint accepts a
-  // simpler, fixed shape - just page and page_size.
-  const search = new URLSearchParams({
-    page: String(page),
-    page_size: String(pageSize),
-  });
   return useQuery<PaginatedHistory, ApiError>({
     queryKey: connectionKeys.history(id, page),
-    queryFn: () =>
-      apiGet<PaginatedHistory>(
-        `/api/connections/${encodeURIComponent(id)}/history?${search.toString()}`,
-      ),
+    queryFn: () => store.getConnectionHistory(id),
     enabled: id.length > 0,
   });
 }
@@ -399,16 +303,9 @@ export function useDuplicateCheckQuery(
   linkedinUrl: string,
   options: { enabled: boolean; excludeRecordId?: string } = { enabled: false },
 ): UseQueryResult<ConnectionDuplicateCheckResponse, ApiError> {
-  const search = new URLSearchParams({ linkedin_url: linkedinUrl });
-  if (options.excludeRecordId) {
-    search.set("exclude_record_id", options.excludeRecordId);
-  }
   return useQuery<ConnectionDuplicateCheckResponse, ApiError>({
     queryKey: connectionKeys.duplicateCheck(linkedinUrl, options.excludeRecordId),
-    queryFn: () =>
-      apiGet<ConnectionDuplicateCheckResponse>(
-        `/api/connections/duplicate-check?${search.toString()}`,
-      ),
+    queryFn: () => store.duplicateCheck(linkedinUrl, options.excludeRecordId),
     enabled: options.enabled && linkedinUrl.length > 0,
     // Per-hook stale time override (longer than the QueryClient default
     // of 60 s) - duplicate-check responses are stable enough that
@@ -451,7 +348,7 @@ export function useCreateConnectionMutation(): UseMutationResult<
   const toast = useToast();
 
   return useMutation<ConnectionRead, ApiError, ConnectionCreate>({
-    mutationFn: (payload) => apiPost<ConnectionRead, ConnectionCreate>("/api/connections", payload),
+    mutationFn: (payload) => store.createConnection(payload),
     onSuccess: () => {
       // Invalidate every list cache; the next render of the feed
       // refetches and the new record appears at the appropriate sort
@@ -495,11 +392,7 @@ export function useUpdateConnectionMutation(): UseMutationResult<
   const toast = useToast();
 
   return useMutation<ConnectionRead, ApiError, { id: string; payload: ConnectionUpdate }>({
-    mutationFn: ({ id, payload }) =>
-      apiPatch<ConnectionRead, ConnectionUpdate>(
-        `/api/connections/${encodeURIComponent(id)}`,
-        payload,
-      ),
+    mutationFn: ({ id, payload }) => store.updateConnection(id, payload),
     // The unused `data` parameter is required because TanStack Query
     // passes (data, variables, context) to the onSuccess callback in
     // that order; we destructure variables to read the id.
@@ -561,11 +454,7 @@ export function useUpdateStatusMutation(): UseMutationResult<
     { id: string; payload: ConnectionStatusUpdate },
     { previousDetail: ConnectionRead | undefined }
   >({
-    mutationFn: ({ id, payload }) =>
-      apiPatch<ConnectionRead, ConnectionStatusUpdate>(
-        `/api/connections/${encodeURIComponent(id)}/status`,
-        payload,
-      ),
+    mutationFn: ({ id, payload }) => store.updateConnectionStatus(id, payload),
     onMutate: async ({ id, payload }) => {
       // Cancel any in-flight detail refetches so the optimistic value
       // does not race with a stale server response and lose.
@@ -640,7 +529,7 @@ export function useSoftDeleteConnectionMutation(): UseMutationResult<
   const toast = useToast();
 
   return useMutation<ConnectionRead, ApiError, { id: string }>({
-    mutationFn: ({ id }) => apiDelete<ConnectionRead>(`/api/connections/${encodeURIComponent(id)}`),
+    mutationFn: ({ id }) => store.softDeleteConnection(id),
     onSuccess: (_data, { id }) => {
       void queryClient.invalidateQueries({ queryKey: connectionKeys.lists() });
       void queryClient.invalidateQueries({ queryKey: connectionKeys.detail(id) });
@@ -673,7 +562,7 @@ export function useSoftDeleteConnectionMutation(): UseMutationResult<
 export function useTagsQuery(): UseQueryResult<TagRead[], ApiError> {
   return useQuery<TagRead[], ApiError>({
     queryKey: tagKeys.lists(),
-    queryFn: () => apiGet<TagRead[]>("/api/tags"),
+    queryFn: () => store.listTags(),
   });
 }
 
@@ -697,7 +586,7 @@ export function useCreateTagMutation(): UseMutationResult<TagRead, ApiError, Tag
   const toast = useToast();
 
   return useMutation<TagRead, ApiError, TagCreate>({
-    mutationFn: (payload) => apiPost<TagRead, TagCreate>("/api/tags", payload),
+    mutationFn: (payload) => store.createTag(payload),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: tagKeys.lists() });
       toast.success("Tag added");

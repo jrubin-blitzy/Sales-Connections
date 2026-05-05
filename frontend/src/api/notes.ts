@@ -51,7 +51,7 @@
 
 import { useMutation, type UseMutationResult } from "@tanstack/react-query";
 
-import { apiPost, type ApiError } from "@/api/client";
+import { ApiError } from "@/api/client";
 import { useToast } from "@/components/ui/Toast";
 
 // ---------------------------------------------------------------------------
@@ -242,8 +242,10 @@ export function useGenerateNotesMutation(): UseMutationResult<
   const toast = useToast();
 
   return useMutation<GenerateNotesResponse, ApiError, GenerateNotesRequest>({
-    mutationFn: (payload) =>
-      apiPost<GenerateNotesResponse, GenerateNotesRequest>("/api/notes/generate", payload),
+    mutationFn: (_payload) =>
+      Promise.reject(
+        new ApiError(502, "ai_unavailable", "AI generation is not available in demo mode"),
+      ),
     retry: 0,
     onError: (error) => {
       // Soft AI failures (504 timeout / 502 provider error) are surfaced
