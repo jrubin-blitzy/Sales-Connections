@@ -423,7 +423,7 @@ def create_tag() -> tuple[Response, int]:
                 "code": "validation_failed",
                 "message": "Request body must be a JSON object.",
                 "correlation_id": "...",
-                "fields": [{"loc": ["body"], "msg": "...", "type": "invalid_json"}],
+                "fields": [{"field": "_root", "code": "invalid_json", "message": "..."}],
             }
         }
 
@@ -434,7 +434,7 @@ def create_tag() -> tuple[Response, int]:
                 "code": "validation_failed",
                 "message": "The request payload failed validation.",
                 "correlation_id": "...",
-                "fields": [{"loc": ["name"], "msg": "...", "type": "..."}],
+                "fields": [{"field": "name", "code": "...", "message": "..."}],
             }
         }
 
@@ -499,9 +499,9 @@ def create_tag() -> tuple[Response, int]:
             message="Request body must be a JSON object.",
             fields=[
                 {
-                    "loc": ["body"],
-                    "msg": "Expected a JSON object containing 'name'.",
-                    "type": "invalid_json",
+                    "field": "_root",
+                    "code": "invalid_json",
+                    "message": "Expected a JSON object containing 'name'.",
                 }
             ],
         )
@@ -531,18 +531,27 @@ def create_tag() -> tuple[Response, int]:
     # ``app.middleware.error_handlers._serialize_pydantic_errors``
     # and the pattern in ``app.api.notes.generate``: drop pydantic's
     # ``input``/``ctx``/``url`` keys (PII / internal-detail leakage
-    # risks) and keep only ``loc``/``msg``/``type``.
+    # risks) and emit the canonical ``{field, code, message}`` shape
+    # documented in ``docs/api.md`` and consumed by ``ApiErrorField``
+    # in ``frontend/src/api/client.ts``. The leading ``"body"``
+    # segment that pydantic adds during request-body validation is
+    # stripped so the SPA's form-field names match directly.
     try:
         payload = TagCreate.model_validate(raw_body)
     except ValidationError as exc:
-        fields = [
-            {
-                "loc": [str(seg) for seg in err.get("loc", ())],
-                "msg": str(err.get("msg", "Invalid value.")),
-                "type": str(err.get("type", "value_error")),
-            }
-            for err in exc.errors()
-        ]
+        fields = []
+        for err in exc.errors():
+            loc_segments = [str(seg) for seg in err.get("loc", ())]
+            if loc_segments and loc_segments[0] == "body":
+                loc_segments = loc_segments[1:]
+            field_path = ".".join(loc_segments) if loc_segments else "_root"
+            fields.append(
+                {
+                    "field": field_path,
+                    "code": str(err.get("type", "value_error")),
+                    "message": str(err.get("msg", "Invalid value.")),
+                }
+            )
         raise ValidationFailedError(
             message="The request payload failed validation.",
             fields=fields,
@@ -568,9 +577,9 @@ def create_tag() -> tuple[Response, int]:
             message="Tag name cannot be empty after trimming whitespace.",
             fields=[
                 {
-                    "loc": ["name"],
-                    "msg": "Tag name cannot be empty after trimming whitespace.",
-                    "type": "value_error.empty",
+                    "field": "name",
+                    "code": "value_error.empty",
+                    "message": "Tag name cannot be empty after trimming whitespace.",
                 }
             ],
         )
@@ -667,9 +676,11 @@ def create_tag() -> tuple[Response, int]:
                 message="Could not create tag due to a constraint violation.",
                 fields=[
                     {
-                        "loc": ["name"],
-                        "msg": "Tag could not be created due to a database constraint violation.",
-                        "type": "constraint",
+                        "field": "name",
+                        "code": "constraint",
+                        "message": (
+                            "Tag could not be created due to a database constraint violation."
+                        ),
                     }
                 ],
             ) from exc

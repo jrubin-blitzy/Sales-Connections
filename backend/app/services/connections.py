@@ -510,9 +510,9 @@ def create_record(payload: ConnectionCreate, actor: Session) -> Record:
             message="The provided LinkedIn URL could not be normalized.",
             fields=[
                 {
-                    "loc": ["linkedin_url"],
-                    "msg": "Could not normalize LinkedIn URL.",
-                    "type": "value_error.url",
+                    "field": "linkedin_url",
+                    "code": "value_error.url",
+                    "message": "Could not normalize LinkedIn URL.",
                 }
             ],
         )
@@ -783,9 +783,9 @@ def list_records(
             message=f"Unknown sort key '{sort_key}'.",
             fields=[
                 {
-                    "loc": ["sort"],
-                    "msg": (f"sort must be one of: {sorted(_SORT_COLUMNS.keys())}"),
-                    "type": "value_error.invalid_sort",
+                    "field": "sort",
+                    "code": "value_error.invalid_sort",
+                    "message": (f"sort must be one of: {sorted(_SORT_COLUMNS.keys())}"),
                 }
             ],
         )
@@ -943,9 +943,9 @@ def update_record(
                         message="The provided LinkedIn URL could not be normalized.",
                         fields=[
                             {
-                                "loc": ["linkedin_url"],
-                                "msg": "Could not normalize LinkedIn URL.",
-                                "type": "value_error.url",
+                                "field": "linkedin_url",
+                                "code": "value_error.url",
+                                "message": "Could not normalize LinkedIn URL.",
                             }
                         ],
                     )
@@ -1522,9 +1522,9 @@ def _resolve_org_tags(session: DBSession, org_id: UUID, tag_ids: Iterable[UUID])
         # defense).
         fields = [
             {
-                "loc": ["tag_ids", str(tid)],
-                "msg": "Tag does not exist in your organization.",
-                "type": "value_error.unknown_tag",
+                "field": f"tag_ids.{tid}",
+                "code": "value_error.unknown_tag",
+                "message": "Tag does not exist in your organization.",
             }
             for tid in missing_ids
         ]

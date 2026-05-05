@@ -605,10 +605,12 @@ class TestAdminUpdateUserRole:
         body = response.get_json()
         assert body["error"]["code"] == "validation_failed"
         # Verify the response references the offending field. The
-        # envelope's ``fields`` array is a list of dicts with ``loc``
-        # entries; we look for any entry that references ``email``.
+        # envelope's ``fields`` array is a list of dicts with the
+        # canonical ``{field, code, message}`` shape (per docs/api.md);
+        # we look for any entry whose dotted ``field`` path references
+        # ``email``.
         fields = body["error"].get("fields", [])
-        email_referenced = any("email" in (entry.get("loc") or []) for entry in fields)
+        email_referenced = any("email" in str(entry.get("field", "")) for entry in fields)
         assert email_referenced, (
             f"Expected 422 fields to reference the unexpected 'email' key, got fields={fields!r}"
         )

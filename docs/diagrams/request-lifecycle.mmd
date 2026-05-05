@@ -17,7 +17,7 @@ sequenceDiagram
     F->>CM: enter middleware stack
     CM->>CM: generate UUID4 if X-Correlation-Id absent, bind to structlog and OTel context
     CM->>AM: pass to auth middleware
-    AM->>AM: extract session cookie, verify JWT against current/prior signing keys, populate g.session
+    AM->>AM: extract session cookie, verify JWT signature + tv claim against users.token_version, populate g.session
     Note over AM: Failure here -> 401 unauthorized (no g.session populated, error_handlers emits envelope)
     AM->>H: pass to handler
     H->>RB: @requires_role(...) decorator runs
@@ -25,13 +25,13 @@ sequenceDiagram
     Note over RB: Failure here -> 403 forbidden (also covers cross-org access)
     RB-->>H: admit
     H->>H: parse request body via pydantic (e.g., ConnectionCreate), reject client-supplied owner fields
-    Note over H: pydantic failure -> 422 validation_error with fields[] array
+    Note over H: pydantic failure -> 422 validation_failed with fields[] array
     H->>S: create_record(g.session, payload)
     rect rgb(220, 240, 220)
         S->>DB: BEGIN transaction
         S->>DB: INSERT INTO records (org_id, owner_user_id, normalized_linkedin_url, fields...)
         S->>AU: emit_audit_event(event_type=create, actor=session.user_id, target=new_record_id, before=null, after=snapshot)
-        AU->>DB: INSERT INTO audit_events (correlation_id propagated)
+        AU->>DB: INSERT INTO audit_events (event_type, actor, target, before, after)
         S->>DB: COMMIT (atomic state-change + audit pair)
     end
     Note over S,DB: ATOMIC -- any error in BEGIN..COMMIT triggers ROLLBACK, both records and audit_events INSERTs undone
@@ -71,14 +71,16 @@ sequenceDiagram
 %% - Correlation propagation (AAP Section 0.7.5, Observability rule):
 %%     The X-Correlation-Id is generated (or echoed if client-provided) at Step 4 and propagates
 %%     through every structlog log line, every OpenTelemetry span, the response headers, and the
-%%     uniform error envelope's error.correlation_id field (when an error occurs). It is also
-%%     persisted on audit_events.correlation_id for end-to-end tracing.
+%%     uniform error envelope's error.correlation_id field (when an error occurs). The audit_events
+%%     table does NOT carry a correlation_id column in the MVP schema; end-to-end tracing of a
+%%     state-changing request that joins logs/traces to the audit row is performed externally by
+%%     correlating event_timestamp + actor_user_id against the structured-log stream.
 %% - Middleware stack order (AAP Section 0.5.2, Layer 0):
 %%     correlation -> auth -> RBAC -> handler -> error_handlers (registered last; intercepts failures).
 %% - Failure modes and HTTP status codes (uniform error envelope):
 %%     401 unauthorized       missing or invalid session cookie at Step 6 (Auth MW).
 %%     403 forbidden          RBAC role mismatch or cross-org access at Step 9 (RBAC Decorator).
-%%     422 validation_error   pydantic schema rejection at Step 11 (Handler); fields[] enumerates errors.
+%%     422 validation_failed  pydantic schema rejection at Step 11 (Handler); fields[] enumerates errors.
 %%     500 internal_error     unexpected exception in any layer; ROLLBACK if inside the rect block.
 %%     504 ai_timeout         applies only to POST /api/notes/generate (5s watchdog); not in this diagram.
 %% - Performance budgets (AAP Section 0.7.3):

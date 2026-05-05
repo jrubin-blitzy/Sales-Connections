@@ -284,9 +284,9 @@ def generate() -> tuple[Response, int]:
                 "correlation_id": "...",
                 "fields": [
                     {
-                        "loc": ["body"],
-                        "msg": "Expected a JSON object containing 'relationship_context'.",
-                        "type": "invalid_json",
+                        "field": "_root",
+                        "code": "invalid_json",
+                        "message": "Expected a JSON object containing 'relationship_context'.",
                     }
                 ],
             }
@@ -299,7 +299,7 @@ def generate() -> tuple[Response, int]:
                 "code": "validation_failed",
                 "message": "The request payload failed validation.",
                 "correlation_id": "...",
-                "fields": [{"loc": ["relationship_context"], "msg": "...", "type": "..."}],
+                "fields": [{"field": "relationship_context", "code": "...", "message": "..."}],
             }
         }
 
@@ -373,9 +373,9 @@ def generate() -> tuple[Response, int]:
             message="Request body must be a JSON object.",
             fields=[
                 {
-                    "loc": ["body"],
-                    "msg": ("Expected a JSON object containing 'relationship_context'."),
-                    "type": "invalid_json",
+                    "field": "_root",
+                    "code": "invalid_json",
+                    "message": ("Expected a JSON object containing 'relationship_context'."),
                 }
             ],
         )
@@ -403,20 +403,26 @@ def generate() -> tuple[Response, int]:
         payload = NoteGenerationRequest.model_validate(raw_body)
     except ValidationError as exc:
         # Convert pydantic's structured errors() output to the
-        # ValidationFailedError fields shape. We DROP pydantic's
-        # ``input``, ``ctx``, and ``url`` keys for the same reason
-        # ``app.middleware.error_handlers._serialize_pydantic_errors``
-        # does: ``input`` may echo user data (PII risk); ``ctx`` may
-        # leak internal regex patterns or constraint values; ``url``
-        # is documentation noise the SPA does not consume.
-        fields = [
-            {
-                "loc": [str(seg) for seg in err.get("loc", ())],
-                "msg": str(err.get("msg", "Invalid value.")),
-                "type": str(err.get("type", "value_error")),
-            }
-            for err in exc.errors()
-        ]
+        # canonical ``{field, code, message}`` envelope shape
+        # documented in ``docs/api.md`` and consumed by
+        # ``ApiErrorField`` in ``frontend/src/api/client.ts``. We DROP
+        # pydantic's ``input``, ``ctx``, and ``url`` keys (PII risk /
+        # internal-detail leakage / payload weight) and strip the
+        # leading ``"body"`` segment that pydantic adds during request-
+        # body validation so the SPA's field names match directly.
+        fields = []
+        for err in exc.errors():
+            loc_segments = [str(seg) for seg in err.get("loc", ())]
+            if loc_segments and loc_segments[0] == "body":
+                loc_segments = loc_segments[1:]
+            field_path = ".".join(loc_segments) if loc_segments else "_root"
+            fields.append(
+                {
+                    "field": field_path,
+                    "code": str(err.get("type", "value_error")),
+                    "message": str(err.get("msg", "Invalid value.")),
+                }
+            )
         raise ValidationFailedError(
             message="The request payload failed validation.",
             fields=fields,

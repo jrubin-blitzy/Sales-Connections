@@ -363,8 +363,10 @@ class TestCreateRecord:
             create_record(payload=payload, actor=actor)
 
         # The error must reference the cross-org tag id as a
-        # field-scoped problem, not a generic 422.
-        assert any("tag_ids" in field.get("loc", []) for field in exc_info.value.fields)
+        # field-scoped problem, not a generic 422. The canonical
+        # envelope-field shape is {field, code, message}; ``field`` is
+        # a dotted path string (e.g., ``"tag_ids.<uuid>"``).
+        assert any("tag_ids" in str(field.get("field", "")) for field in exc_info.value.fields)
 
     def test_rejects_duplicate_normalized_url_via_pre_check(
         self,
@@ -1016,7 +1018,7 @@ class TestListRecords:
                 actor=actor,
                 sort_key="not_a_real_column",
             )
-        assert any("sort" in field.get("loc", []) for field in exc_info.value.fields)
+        assert any("sort" in str(field.get("field", "")) for field in exc_info.value.fields)
 
     def test_invalid_sort_dir_falls_back_silently(
         self,

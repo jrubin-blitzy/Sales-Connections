@@ -507,7 +507,7 @@ def hash_password(plain: str) -> str:
         # field-level error message rather than a generic 500.
         raise ValidationFailedError(
             message="Password must be a string.",
-            fields=[{"loc": ["password"], "msg": "must be a string", "type": "type_error"}],
+            fields=[{"field": "password", "code": "type_error", "message": "must be a string"}],
         )
     if not plain:
         # Defense-in-depth against zero-length passwords. The pydantic
@@ -538,9 +538,9 @@ def hash_password(plain: str) -> str:
             message="Password too long; bcrypt accepts at most 72 bytes.",
             fields=[
                 {
-                    "loc": ["password"],
-                    "msg": f"encoded length {len(encoded)} exceeds 72-byte bcrypt limit",
-                    "type": "value_error.too_long",
+                    "field": "password",
+                    "code": "value_error.too_long",
+                    "message": f"encoded length {len(encoded)} exceeds 72-byte bcrypt limit",
                 }
             ],
         )
@@ -1617,9 +1617,7 @@ def revoke_session_and_audit(
     from sqlalchemy import update  # noqa: PLC0415  (lazy import keeps test isolation cheap)
 
     update_result = db_session.execute(
-        update(User)
-        .where(User.id == user_id)
-        .values(token_version=User.token_version + 1)
+        update(User).where(User.id == user_id).values(token_version=User.token_version + 1)
     )
     rows_updated = int(update_result.rowcount or 0)
 

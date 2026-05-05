@@ -2,14 +2,7 @@
 
 Validates the uniform JSON error envelope contract per AAP s 0.4.3::
 
-    {
-        "error": {
-            "code": "...",
-            "message": "...",
-            "correlation_id": "...",
-            "fields": []
-        }
-    }
+    {"error": {"code": "...", "message": "...", "correlation_id": "...", "fields": []}}
 
 Coverage:
 
@@ -324,13 +317,14 @@ class TestExceptionHierarchy:
         """``fields`` is normalized to ``list[dict]``.
 
         Constructor accepts any Sequence[Mapping]; storage is always
-        list[dict].
+        list[dict]. The canonical envelope-field shape is
+        ``{field, code, message}`` per ``docs/api.md``.
         """
         exc = ValidationFailedError(
             "bad",
             fields=[
-                {"loc": ["body", "x"], "msg": "required"},
-                {"loc": ["body", "y"], "msg": "too long"},
+                {"field": "x", "code": "missing", "message": "required"},
+                {"field": "y", "code": "string_too_long", "message": "too long"},
             ],
         )
         assert isinstance(exc.fields, list)
@@ -343,7 +337,7 @@ class TestExceptionHierarchy:
         exc = AuthError()
         assert exc.fields == []
         # And it is mutable so handlers can append to it.
-        exc.fields.append({"foo": "bar"})
+        exc.fields.append({"field": "foo", "code": "bar", "message": "baz"})
         assert len(exc.fields) == 1
 
     def test_fields_tuple_input_normalized_to_list(self) -> None:
@@ -351,8 +345,8 @@ class TestExceptionHierarchy:
         exc = ValidationFailedError(
             "bad",
             fields=(
-                {"loc": ["body", "x"], "msg": "required"},
-                {"loc": ["body", "y"], "msg": "too long"},
+                {"field": "x", "code": "missing", "message": "required"},
+                {"field": "y", "code": "string_too_long", "message": "too long"},
             ),
         )
         assert isinstance(exc.fields, list)
@@ -366,14 +360,14 @@ class TestExceptionHierarchy:
         deep-copies each mapping into a fresh dict. Callers can rely
         on the stored value being independent of the input list.
         """
-        original = [{"loc": ["x"], "msg": "first"}]
+        original = [{"field": "x", "code": "missing", "message": "first"}]
         exc = ValidationFailedError("bad", fields=original)
         # Mutate the original AFTER construction.
-        original.append({"loc": ["y"], "msg": "added later"})
-        original[0]["msg"] = "mutated"
+        original.append({"field": "y", "code": "missing", "message": "added later"})
+        original[0]["message"] = "mutated"
         # Stored fields should be unaffected.
         assert len(exc.fields) == 1
-        assert exc.fields[0]["msg"] == "first"
+        assert exc.fields[0]["message"] == "first"
 
 
 # ---------------------------------------------------------------------------
@@ -419,9 +413,7 @@ class TestBuildErrorResponse:
         """The ``X-Correlation-Id`` header is set on the response."""
         with test_app.test_request_context():
             g.correlation_id = "header-cid"
-            response, _ = build_error_response(
-                code="x", message="y", status=500
-            )
+            response, _ = build_error_response(code="x", message="y", status=500)
         assert response.headers[CORRELATION_HEADER_NAME] == "header-cid"
 
     def test_correlation_id_falls_back_to_empty_when_g_unset(
@@ -439,17 +431,15 @@ class TestBuildErrorResponse:
         with app.app_context():
             # No request context here; ``g`` exists but
             # ``correlation_id`` is unset.
-            response, _ = build_error_response(
-                code="x", message="y", status=500
-            )
+            response, _ = build_error_response(code="x", message="y", status=500)
             payload = response.get_json()
         assert payload["error"]["correlation_id"] == ""
 
     def test_fields_passed_through(self, test_app: Flask) -> None:
         """Provided ``fields`` make it into the envelope."""
         provided_fields = [
-            {"loc": ["body", "name"], "msg": "required"},
-            {"loc": ["body", "age"], "msg": "must be positive"},
+            {"field": "name", "code": "missing", "message": "required"},
+            {"field": "age", "code": "greater_than_equal", "message": "must be positive"},
         ]
         with test_app.test_request_context():
             g.correlation_id = "f-cid"
@@ -465,8 +455,8 @@ class TestBuildErrorResponse:
     def test_fields_normalized_to_list(self, test_app: Flask) -> None:
         """Tuple of mappings is normalized to list of dicts."""
         provided_fields = (
-            {"loc": ["x"], "msg": "a"},
-            {"loc": ["y"], "msg": "b"},
+            {"field": "x", "code": "missing", "message": "a"},
+            {"field": "y", "code": "missing", "message": "b"},
         )
         with test_app.test_request_context():
             g.correlation_id = ""
@@ -479,18 +469,14 @@ class TestBuildErrorResponse:
         for entry in payload["error"]["fields"]:
             assert isinstance(entry, dict)
 
-    def test_no_correlation_header_when_cid_empty(
-        self, test_app: Flask
-    ) -> None:
+    def test_no_correlation_header_when_cid_empty(self, test_app: Flask) -> None:
         """When correlation_id is empty, X-Correlation-Id is NOT set.
 
         Avoids polluting headers with an empty string value.
         """
         with test_app.test_request_context():
             g.correlation_id = ""
-            response, _ = build_error_response(
-                code="x", message="y", status=400
-            )
+            response, _ = build_error_response(code="x", message="y", status=400)
         assert CORRELATION_HEADER_NAME not in response.headers
 
     def test_response_content_type_is_json(self, test_app: Flask) -> None:
@@ -502,14 +488,10 @@ class TestBuildErrorResponse:
         """
         with test_app.test_request_context():
             g.correlation_id = "cid"
-            response, _ = build_error_response(
-                code="x", message="y", status=400
-            )
+            response, _ = build_error_response(code="x", message="y", status=400)
         assert "application/json" in response.content_type
 
-    def test_returns_tuple_of_response_and_status(
-        self, test_app: Flask
-    ) -> None:
+    def test_returns_tuple_of_response_and_status(self, test_app: Flask) -> None:
         """The return value is a ``(response, status_int)`` tuple.
 
         Flask handlers may return either ``Response`` or
@@ -518,9 +500,7 @@ class TestBuildErrorResponse:
         """
         with test_app.test_request_context():
             g.correlation_id = "cid"
-            result = build_error_response(
-                code="x", message="y", status=409
-            )
+            result = build_error_response(code="x", message="y", status=409)
         assert isinstance(result, tuple)
         assert len(result) == 2
         response, status = result
@@ -603,9 +583,7 @@ class TestAppErrorSubclassHandlers:
         assert payload["error"]["code"] == "conflict"
         assert payload["error"]["message"] == "duplicate URL"
 
-    def test_validation_failed_error_returns_422(
-        self, test_app: Flask
-    ) -> None:
+    def test_validation_failed_error_returns_422(self, test_app: Flask) -> None:
         """``ValidationFailedError`` -> 422 with code 'validation_failed'.
 
         Includes the ``fields`` list passed in.
@@ -615,7 +593,7 @@ class TestAppErrorSubclassHandlers:
         def _h() -> Any:
             raise ValidationFailedError(
                 "bad",
-                fields=[{"loc": ["body", "x"], "msg": "required"}],
+                fields=[{"field": "x", "code": "missing", "message": "required"}],
             )
 
         client = test_app.test_client()
@@ -624,7 +602,7 @@ class TestAppErrorSubclassHandlers:
         payload = response.get_json()
         assert payload["error"]["code"] == "validation_failed"
         assert payload["error"]["fields"] == [
-            {"loc": ["body", "x"], "msg": "required"}
+            {"field": "x", "code": "missing", "message": "required"}
         ]
 
     def test_correlation_id_in_envelope(self, test_app: Flask) -> None:
@@ -643,9 +621,7 @@ class TestAppErrorSubclassHandlers:
         assert payload["error"]["correlation_id"] == "trace-cid-1234"
         assert response.headers[CORRELATION_HEADER_NAME] == "trace-cid-1234"
 
-    def test_default_message_used_when_none_supplied(
-        self, test_app: Flask
-    ) -> None:
+    def test_default_message_used_when_none_supplied(self, test_app: Flask) -> None:
         """When the exception is raised with no message, the default
         message of the subclass is what reaches the envelope."""
 
@@ -659,9 +635,7 @@ class TestAppErrorSubclassHandlers:
         # Default message is non-empty and is the class default.
         assert payload["error"]["message"] == ConflictError().default_message
 
-    def test_envelope_contains_only_four_keys(
-        self, test_app: Flask
-    ) -> None:
+    def test_envelope_contains_only_four_keys(self, test_app: Flask) -> None:
         """The error envelope's ``error`` dict contains exactly the
         four canonical keys from AAP s 0.4.3."""
 
@@ -679,14 +653,12 @@ class TestAppErrorSubclassHandlers:
             "fields",
         }
 
-    def test_fields_list_passed_through_subclass(
-        self, test_app: Flask
-    ) -> None:
+    def test_fields_list_passed_through_subclass(self, test_app: Flask) -> None:
         """Multiple fields pass through to the envelope unchanged."""
         provided = [
-            {"loc": ["body", "x"], "msg": "required"},
-            {"loc": ["body", "y"], "msg": "too long"},
-            {"loc": ["body", "z"], "msg": "out of range"},
+            {"field": "x", "code": "missing", "message": "required"},
+            {"field": "y", "code": "string_too_long", "message": "too long"},
+            {"field": "z", "code": "value_error", "message": "out of range"},
         ]
 
         @test_app.route("/raise-multifield")
@@ -754,25 +726,19 @@ class TestPydanticValidationHandler:
 
         @test_app.route("/raise-pydantic", methods=["POST"])
         def _h() -> Any:
-            _TestPayload.model_validate(
-                {"name": "x", "age": -1, "linkedin_url": "bad"}
-            )
+            _TestPayload.model_validate({"name": "x", "age": -1, "linkedin_url": "bad"})
             return jsonify(ok=True)
 
         client = test_app.test_client()
         response = client.post("/raise-pydantic", json={})
         assert response.status_code == 422
 
-    def test_pydantic_error_envelope_has_field_list(
-        self, test_app: Flask
-    ) -> None:
+    def test_pydantic_error_envelope_has_field_list(self, test_app: Flask) -> None:
         """The envelope's ``fields`` list contains entries for each error."""
 
         @test_app.route("/raise-pydantic-list", methods=["POST"])
         def _h() -> Any:
-            _TestPayload.model_validate(
-                {"name": "x", "age": -1, "linkedin_url": "bad"}
-            )
+            _TestPayload.model_validate({"name": "x", "age": -1, "linkedin_url": "bad"})
             return jsonify(ok=True)
 
         client = test_app.test_client()
@@ -783,29 +749,36 @@ class TestPydanticValidationHandler:
         assert len(payload["error"]["fields"]) >= 3
 
     def test_pydantic_field_entry_shape(self, test_app: Flask) -> None:
-        """Each ``fields`` entry has ``loc``, ``msg``, ``type``."""
+        """Each ``fields`` entry has the canonical ``field``, ``code``, ``message`` keys.
+
+        Per ``docs/api.md`` and ``frontend/src/api/client.ts`` ApiErrorField
+        interface, the envelope-field shape is exactly these three string keys.
+        Earlier drafts emitted ``{loc, msg, type}`` from raw pydantic; the
+        handler now normalizes to the canonical contract.
+        """
 
         @test_app.route("/raise-pydantic-shape", methods=["POST"])
         def _h() -> Any:
-            _TestPayload.model_validate(
-                {"name": "x", "age": -1, "linkedin_url": "bad"}
-            )
+            _TestPayload.model_validate({"name": "x", "age": -1, "linkedin_url": "bad"})
             return jsonify(ok=True)
 
         client = test_app.test_client()
         response = client.post("/raise-pydantic-shape", json={})
         payload = response.get_json()
         for entry in payload["error"]["fields"]:
-            assert "loc" in entry
-            assert "msg" in entry
-            assert "type" in entry
-            assert isinstance(entry["loc"], list)
-            assert isinstance(entry["msg"], str)
-            assert isinstance(entry["type"], str)
+            assert "field" in entry
+            assert "code" in entry
+            assert "message" in entry
+            assert isinstance(entry["field"], str)
+            assert isinstance(entry["code"], str)
+            assert isinstance(entry["message"], str)
+            # The legacy raw-pydantic keys MUST NOT appear; this is
+            # the regression guard for the canonical contract.
+            assert "loc" not in entry
+            assert "msg" not in entry
+            assert "type" not in entry
 
-    def test_pydantic_input_field_dropped(
-        self, test_app: Flask
-    ) -> None:
+    def test_pydantic_input_field_dropped(self, test_app: Flask) -> None:
         """The user-supplied ``input`` value is NOT echoed in the envelope.
 
         PII protection: pydantic's ``errors()`` may include the offending
@@ -815,9 +788,7 @@ class TestPydanticValidationHandler:
 
         @test_app.route("/raise-pydantic-input", methods=["POST"])
         def _h() -> Any:
-            _TestPayload.model_validate(
-                {"name": "x", "age": secret_token, "linkedin_url": "bad"}
-            )
+            _TestPayload.model_validate({"name": "x", "age": secret_token, "linkedin_url": "bad"})
             return jsonify(ok=True)
 
         client = test_app.test_client()
@@ -836,9 +807,7 @@ class TestPydanticValidationHandler:
             "PII leak: user-supplied input appeared in response body."
         )
 
-    def test_pydantic_ctx_field_dropped(
-        self, test_app: Flask
-    ) -> None:
+    def test_pydantic_ctx_field_dropped(self, test_app: Flask) -> None:
         """Pydantic's ``ctx`` field (regex pattern, constraint values)
         is dropped.
 
@@ -851,9 +820,7 @@ class TestPydanticValidationHandler:
         def _h() -> Any:
             # linkedin_url pattern requires http(s)://; failing it
             # produces ctx={"pattern": "..."} in pydantic's errors().
-            _TestPayload.model_validate(
-                {"name": "ok", "age": 25, "linkedin_url": "ftp://"}
-            )
+            _TestPayload.model_validate({"name": "ok", "age": 25, "linkedin_url": "ftp://"})
             return jsonify(ok=True)
 
         client = test_app.test_client()
@@ -865,9 +832,7 @@ class TestPydanticValidationHandler:
                 "_serialize_pydantic_errors must strip it."
             )
 
-    def test_pydantic_url_field_dropped(
-        self, test_app: Flask
-    ) -> None:
+    def test_pydantic_url_field_dropped(self, test_app: Flask) -> None:
         """Pydantic's ``url`` field (link to docs) is dropped.
 
         Pydantic 2.x adds a ``url`` key in each error dict pointing to
@@ -884,18 +849,17 @@ class TestPydanticValidationHandler:
         response = client.post("/raise-pydantic-url", json={})
         payload = response.get_json()
         for entry in payload["error"]["fields"]:
-            assert "url" not in entry, (
-                "Leak: pydantic 'url' field appeared in envelope."
-            )
+            assert "url" not in entry, "Leak: pydantic 'url' field appeared in envelope."
 
-    def test_pydantic_loc_normalized_to_strings(
-        self, test_app: Flask
-    ) -> None:
-        """``loc`` segments are normalized to str (JSON-safe).
+    def test_pydantic_loc_normalized_to_dotted_field_path(self, test_app: Flask) -> None:
+        """``field`` is a dotted path string (e.g., ``"name"`` or ``"tags.0"``).
 
         Pydantic 2.x sometimes produces tuples of mixed types
-        (str + int for list indices). The handler converts every
-        segment to string so the SPA can render them uniformly.
+        (str + int for list indices). The handler joins every
+        segment with ``.`` after string-normalizing each, and strips
+        any leading ``"body"`` segment that Flask adds for body-level
+        validation. The resulting ``field`` is a JSON-safe dotted path
+        the SPA can compare directly against its form-field names.
         """
 
         @test_app.route("/raise-pydantic-loc", methods=["POST"])
@@ -907,12 +871,14 @@ class TestPydanticValidationHandler:
         response = client.post("/raise-pydantic-loc", json={})
         payload = response.get_json()
         for entry in payload["error"]["fields"]:
-            for seg in entry["loc"]:
-                assert isinstance(seg, str)
+            assert isinstance(entry["field"], str)
+            # The leading "body." prefix that pydantic adds during
+            # request-body validation MUST be stripped so the SPA's
+            # field names match directly.
+            assert not entry["field"].startswith("body.")
+            assert entry["field"] != "body"
 
-    def test_pydantic_envelope_has_correlation_id(
-        self, test_app: Flask
-    ) -> None:
+    def test_pydantic_envelope_has_correlation_id(self, test_app: Flask) -> None:
         """The envelope from a pydantic error still carries
         correlation_id."""
 
@@ -931,9 +897,7 @@ class TestPydanticValidationHandler:
         assert payload["error"]["correlation_id"] == "pydantic-cid"
         assert response.headers[CORRELATION_HEADER_NAME] == "pydantic-cid"
 
-    def test_pydantic_envelope_uses_validation_code(
-        self, test_app: Flask
-    ) -> None:
+    def test_pydantic_envelope_uses_validation_code(self, test_app: Flask) -> None:
         """The envelope's ``code`` is 'validation_failed'."""
 
         @test_app.route("/raise-pydantic-code", methods=["POST"])
@@ -947,9 +911,7 @@ class TestPydanticValidationHandler:
         assert payload["error"]["code"] == ERROR_CODE_VALIDATION
         assert payload["error"]["code"] == "validation_failed"
 
-    def test_pydantic_envelope_message_is_generic(
-        self, test_app: Flask
-    ) -> None:
+    def test_pydantic_envelope_message_is_generic(self, test_app: Flask) -> None:
         """The envelope's ``message`` is a generic string, not raw
         pydantic output.
 
@@ -973,7 +935,6 @@ class TestPydanticValidationHandler:
         assert payload["error"]["message"]
 
 
-
 # ---------------------------------------------------------------------------
 # TestWerkzeugHTTPExceptionHandler - werkzeug HTTPException -> envelope
 # ---------------------------------------------------------------------------
@@ -990,9 +951,7 @@ class TestWerkzeugHTTPExceptionHandler:
     was raised by application code or by the framework.
     """
 
-    def test_abort_404_returns_uniform_envelope(
-        self, test_app: Flask
-    ) -> None:
+    def test_abort_404_returns_uniform_envelope(self, test_app: Flask) -> None:
         """``flask.abort(404)`` returns the JSON envelope, NOT default HTML."""
 
         @test_app.route("/abort-404")
@@ -1008,9 +967,7 @@ class TestWerkzeugHTTPExceptionHandler:
         assert "error" in payload
         assert payload["error"]["code"] == "not_found"
 
-    def test_abort_400_returns_uniform_envelope(
-        self, test_app: Flask
-    ) -> None:
+    def test_abort_400_returns_uniform_envelope(self, test_app: Flask) -> None:
         """``abort(400)`` returns 400 with code derived from status name."""
 
         @test_app.route("/abort-400")
@@ -1025,9 +982,7 @@ class TestWerkzeugHTTPExceptionHandler:
         # Code derived from HTTPStatus.BAD_REQUEST.name.lower()
         assert payload["error"]["code"] == "bad_request"
 
-    def test_abort_413_request_entity_too_large(
-        self, test_app: Flask
-    ) -> None:
+    def test_abort_413_request_entity_too_large(self, test_app: Flask) -> None:
         """``abort(413)`` produces 'request_entity_too_large' code.
 
         Tests that the handler correctly uses the
@@ -1047,9 +1002,7 @@ class TestWerkzeugHTTPExceptionHandler:
         # which lowercases to "request_entity_too_large".
         assert payload["error"]["code"] == "request_entity_too_large"
 
-    def test_unmapped_status_uses_http_generic_code(
-        self, test_app: Flask
-    ) -> None:
+    def test_unmapped_status_uses_http_generic_code(self, test_app: Flask) -> None:
         """When the status maps to a known HTTPStatus member, the
         derived code uses that name; for 418 in modern Python this is
         ``im_a_teapot``.
@@ -1070,9 +1023,7 @@ class TestWerkzeugHTTPExceptionHandler:
         # 418 IS in HTTPStatus (im_a_teapot since Python 3.9)
         assert payload["error"]["code"] in {"im_a_teapot", "http_error"}
 
-    def test_unhandled_route_returns_404_uniform_envelope(
-        self, test_app: Flask
-    ) -> None:
+    def test_unhandled_route_returns_404_uniform_envelope(self, test_app: Flask) -> None:
         """A request to an unregistered route returns the uniform 404
         envelope.
 
@@ -1086,9 +1037,7 @@ class TestWerkzeugHTTPExceptionHandler:
         payload = response.get_json()
         assert payload["error"]["code"] == "not_found"
 
-    def test_method_not_allowed_returns_uniform_envelope(
-        self, test_app: Flask
-    ) -> None:
+    def test_method_not_allowed_returns_uniform_envelope(self, test_app: Flask) -> None:
         """Sending a wrong HTTP method to a registered route produces
         a 405 envelope, NOT Flask's default HTML response."""
 
@@ -1103,9 +1052,7 @@ class TestWerkzeugHTTPExceptionHandler:
         payload = response.get_json()
         assert payload["error"]["code"] == "method_not_allowed"
 
-    def test_correlation_id_in_werkzeug_envelope(
-        self, test_app: Flask
-    ) -> None:
+    def test_correlation_id_in_werkzeug_envelope(self, test_app: Flask) -> None:
         """Werkzeug-derived envelopes also carry correlation_id."""
 
         @test_app.route("/abort-with-cid")
@@ -1121,9 +1068,7 @@ class TestWerkzeugHTTPExceptionHandler:
         assert payload["error"]["correlation_id"] == "werkzeug-cid"
         assert response.headers[CORRELATION_HEADER_NAME] == "werkzeug-cid"
 
-    def test_raise_werkzeug_notfound_class_directly(
-        self, test_app: Flask
-    ) -> None:
+    def test_raise_werkzeug_notfound_class_directly(self, test_app: Flask) -> None:
         """Raising the werkzeug NotFound class directly is also handled.
 
         Some service code may ``raise NotFound("...")`` instead of
@@ -1142,9 +1087,7 @@ class TestWerkzeugHTTPExceptionHandler:
         payload = response.get_json()
         assert payload["error"]["code"] == "not_found"
 
-    def test_5xx_werkzeug_exception_uses_generic_message(
-        self, test_app: Flask
-    ) -> None:
+    def test_5xx_werkzeug_exception_uses_generic_message(self, test_app: Flask) -> None:
         """For 5xx werkzeug exceptions, the user-facing message is the
         generic internal-error message, NOT the werkzeug description.
 
@@ -1182,9 +1125,7 @@ class TestGenericExceptionHandler:
     that IS present in the envelope.
     """
 
-    def test_unhandled_exception_returns_500(
-        self, test_app: Flask
-    ) -> None:
+    def test_unhandled_exception_returns_500(self, test_app: Flask) -> None:
         """A bare ``Exception`` raised in a handler -> 500."""
 
         @test_app.route("/raise-generic")
@@ -1195,9 +1136,7 @@ class TestGenericExceptionHandler:
         response = client.get("/raise-generic")
         assert response.status_code == 500
 
-    def test_500_envelope_uses_internal_error_code(
-        self, test_app: Flask
-    ) -> None:
+    def test_500_envelope_uses_internal_error_code(self, test_app: Flask) -> None:
         """The envelope's ``code`` is 'internal_error'."""
 
         @test_app.route("/raise-generic-code")
@@ -1210,9 +1149,7 @@ class TestGenericExceptionHandler:
         assert payload["error"]["code"] == ERROR_CODE_INTERNAL
         assert payload["error"]["code"] == "internal_error"
 
-    def test_500_envelope_does_not_leak_exception_message(
-        self, test_app: Flask
-    ) -> None:
+    def test_500_envelope_does_not_leak_exception_message(self, test_app: Flask) -> None:
         """The ``message`` field is the GENERIC message, NOT the
         exception's str().
 
@@ -1231,9 +1168,7 @@ class TestGenericExceptionHandler:
         assert secret_internal not in payload["error"]["message"]
         assert "RuntimeError" not in payload["error"]["message"]
 
-    def test_500_envelope_does_not_leak_exception_class_name(
-        self, test_app: Flask
-    ) -> None:
+    def test_500_envelope_does_not_leak_exception_class_name(self, test_app: Flask) -> None:
         """Custom exception class names do not appear in the response.
 
         Defense-in-depth: even if the exception class name is
@@ -1256,9 +1191,7 @@ class TestGenericExceptionHandler:
         for forbidden in ("RuntimeError", "ValueError", "TypeError"):
             assert forbidden not in body_str
 
-    def test_500_envelope_has_no_traceback_field(
-        self, test_app: Flask
-    ) -> None:
+    def test_500_envelope_has_no_traceback_field(self, test_app: Flask) -> None:
         """The response payload contains NO traceback string anywhere."""
 
         @test_app.route("/raise-traceback")
@@ -1283,9 +1216,7 @@ class TestGenericExceptionHandler:
             "fields",
         }
 
-    def test_500_envelope_message_is_user_friendly(
-        self, test_app: Flask
-    ) -> None:
+    def test_500_envelope_message_is_user_friendly(self, test_app: Flask) -> None:
         """The 500 message is the generic user-friendly string.
 
         Confirms the message references ``correlation_id`` so users
@@ -1304,9 +1235,7 @@ class TestGenericExceptionHandler:
         # phrase or a permissive containment check on the substring.
         assert "correlation_id" in payload["error"]["message"]
 
-    def test_500_envelope_has_correlation_id(
-        self, test_app: Flask
-    ) -> None:
+    def test_500_envelope_has_correlation_id(self, test_app: Flask) -> None:
         """500 responses also carry the correlation_id."""
 
         @test_app.route("/raise-with-cid")
@@ -1416,9 +1345,7 @@ class TestAppErrorSafetyNetHandler:
     ``Exception`` and be reported as a 500.
     """
 
-    def test_custom_app_error_subclass_uses_instance_metadata(
-        self, test_app: Flask
-    ) -> None:
+    def test_custom_app_error_subclass_uses_instance_metadata(self, test_app: Flask) -> None:
         """A user-defined AppError subclass produces the envelope using
         its own status_code and error_code.
 
@@ -1455,9 +1382,7 @@ class TestAppErrorSafetyNetHandler:
             "fields",
         }
 
-    def test_custom_app_error_with_default_message(
-        self, test_app: Flask
-    ) -> None:
+    def test_custom_app_error_with_default_message(self, test_app: Flask) -> None:
         """A custom AppError raised without a message uses
         ``default_message``."""
 
@@ -1475,9 +1400,7 @@ class TestAppErrorSafetyNetHandler:
         if response.status_code == 451:
             assert payload["error"]["message"] == "Custom legal reason."
 
-    def test_custom_app_error_envelope_has_correlation_id(
-        self, test_app: Flask
-    ) -> None:
+    def test_custom_app_error_envelope_has_correlation_id(self, test_app: Flask) -> None:
         """The custom-subclass envelope still carries correlation_id."""
 
         @test_app.route("/raise-custom-cid")
@@ -1617,9 +1540,7 @@ class TestRegisterErrorHandlers:
         stdlib logging handlers in this app.
         """
         app = Flask(__name__)
-        with patch(
-            "app.middleware.error_handlers._stdlib_logger"
-        ) as mock_logger:
+        with patch("app.middleware.error_handlers._stdlib_logger") as mock_logger:
             register_error_handlers(app)
         # Either info() or some other level was called at least once
         # with a message about registration; we accept any positive
@@ -1642,9 +1563,7 @@ class TestContentTypeHeader:
     that covers all four registered handler paths.
     """
 
-    def test_app_error_response_is_json(
-        self, test_app: Flask
-    ) -> None:
+    def test_app_error_response_is_json(self, test_app: Flask) -> None:
         """Custom AppError envelope is application/json."""
 
         @test_app.route("/json-app-error")
@@ -1655,9 +1574,7 @@ class TestContentTypeHeader:
         response = client.get("/json-app-error")
         assert "application/json" in response.content_type
 
-    def test_pydantic_validation_response_is_json(
-        self, test_app: Flask
-    ) -> None:
+    def test_pydantic_validation_response_is_json(self, test_app: Flask) -> None:
         """Pydantic ValidationError envelope is application/json."""
 
         @test_app.route("/json-pydantic", methods=["POST"])
@@ -1680,9 +1597,7 @@ class TestContentTypeHeader:
         response = client.get("/json-werkzeug")
         assert "application/json" in response.content_type
 
-    def test_generic_exception_response_is_json(
-        self, test_app: Flask
-    ) -> None:
+    def test_generic_exception_response_is_json(self, test_app: Flask) -> None:
         """500 envelope is application/json."""
 
         @test_app.route("/json-500")
@@ -1693,9 +1608,7 @@ class TestContentTypeHeader:
         response = client.get("/json-500")
         assert "application/json" in response.content_type
 
-    def test_unhandled_route_response_is_json(
-        self, test_app: Flask
-    ) -> None:
+    def test_unhandled_route_response_is_json(self, test_app: Flask) -> None:
         """Hitting a non-existent route also returns JSON, not HTML."""
         client = test_app.test_client()
         response = client.get("/no-such-path")
@@ -1755,4 +1668,3 @@ class TestErrorCodeConstants:
         ):
             assert isinstance(code, str)
             assert code  # not empty
-

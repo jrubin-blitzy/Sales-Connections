@@ -402,9 +402,9 @@ def _parse_uuid(value: str | None, *, field: str) -> UUID:
             message=f"Field '{field}' is required.",
             fields=[
                 {
-                    "loc": ["query", field],
-                    "msg": f"{field} is required.",
-                    "type": "value_error.missing",
+                    "field": f"query.{field}",
+                    "code": "value_error.missing",
+                    "message": f"{field} is required.",
                 },
             ],
         )
@@ -415,9 +415,9 @@ def _parse_uuid(value: str | None, *, field: str) -> UUID:
             message=f"Field '{field}' must be a valid UUID.",
             fields=[
                 {
-                    "loc": ["query", field],
-                    "msg": f"'{value}' is not a valid UUID.",
-                    "type": "value_error.uuid",
+                    "field": f"query.{field}",
+                    "code": "value_error.uuid",
+                    "message": f"'{value}' is not a valid UUID.",
                 },
             ],
         ) from exc
@@ -467,9 +467,9 @@ def _parse_int(
             message=f"Query parameter '{field}' must be an integer.",
             fields=[
                 {
-                    "loc": ["query", field],
-                    "msg": "Expected an integer value.",
-                    "type": "value_error.integer",
+                    "field": f"query.{field}",
+                    "code": "value_error.integer",
+                    "message": "Expected an integer value.",
                 },
             ],
         ) from exc
@@ -478,9 +478,9 @@ def _parse_int(
             message=f"Query parameter '{field}' must be >= {minimum}.",
             fields=[
                 {
-                    "loc": ["query", field],
-                    "msg": f"Value must be >= {minimum}.",
-                    "type": "value_error.min",
+                    "field": f"query.{field}",
+                    "code": "value_error.min",
+                    "message": f"Value must be >= {minimum}.",
                 },
             ],
         )
@@ -559,12 +559,12 @@ def _parse_enum_list(
         except (KeyError, ValueError):
             invalid_fields.append(
                 {
-                    "loc": ["query", field],
-                    "msg": (
+                    "field": f"query.{field}",
+                    "code": "value_error.enum",
+                    "message": (
                         f"'{value}' is not a valid {enum_cls.__name__} value. "
                         f"Allowed: {sorted(member.value for member in enum_cls)}"
                     ),
-                    "type": "value_error.enum",
                 }
             )
     if invalid_fields:
@@ -607,9 +607,9 @@ def _parse_uuid_list(values: list[str], *, field: str) -> tuple[UUID, ...]:
         except (TypeError, ValueError):
             invalid_fields.append(
                 {
-                    "loc": ["query", field],
-                    "msg": f"'{value}' is not a valid UUID.",
-                    "type": "value_error.uuid",
+                    "field": f"query.{field}",
+                    "code": "value_error.uuid",
+                    "message": f"'{value}' is not a valid UUID.",
                 }
             )
     if invalid_fields:
@@ -656,9 +656,9 @@ def _parse_bool(raw: str | None, *, default: bool, field: str) -> bool:
         message=f"Query parameter '{field}' must be a boolean.",
         fields=[
             {
-                "loc": ["query", field],
-                "msg": "Expected one of: true, false, 1, 0, yes, no, on, off.",
-                "type": "value_error.bool",
+                "field": f"query.{field}",
+                "code": "value_error.bool",
+                "message": "Expected one of: true, false, 1, 0, yes, no, on, off.",
             },
         ],
     )
@@ -698,23 +698,28 @@ def _parse_json_body(schema_cls: type[Any]) -> Any:
             message="Request body must be a JSON object.",
             fields=[
                 {
-                    "loc": ["body"],
-                    "msg": "Expected a JSON object.",
-                    "type": "invalid_json",
+                    "field": "_root",
+                    "code": "invalid_json",
+                    "message": "Expected a JSON object.",
                 },
             ],
         )
     try:
         return schema_cls.model_validate(raw_body)
     except ValidationError as exc:
-        safe_fields = [
-            {
-                "loc": [str(seg) for seg in err.get("loc", ())],
-                "msg": str(err.get("msg", "Invalid value.")),
-                "type": str(err.get("type", "value_error")),
-            }
-            for err in exc.errors()
-        ]
+        safe_fields = []
+        for err in exc.errors():
+            loc_segments = [str(seg) for seg in err.get("loc", ())]
+            if loc_segments and loc_segments[0] == "body":
+                loc_segments = loc_segments[1:]
+            field_path = ".".join(loc_segments) if loc_segments else "_root"
+            safe_fields.append(
+                {
+                    "field": field_path,
+                    "code": str(err.get("type", "value_error")),
+                    "message": str(err.get("msg", "Invalid value.")),
+                }
+            )
         raise ValidationFailedError(
             message="The request payload failed validation.",
             fields=safe_fields,
@@ -1100,9 +1105,9 @@ def list_admin_records() -> tuple[Response, int]:
             message=f"Unknown sort key '{sort_key}'.",
             fields=[
                 {
-                    "loc": ["query", "sort"],
-                    "msg": (f"sort must be one of: {sorted(_ALLOWED_SORT_KEYS)}"),
-                    "type": "value_error.invalid_sort",
+                    "field": "query.sort",
+                    "code": "value_error.invalid_sort",
+                    "message": (f"sort must be one of: {sorted(_ALLOWED_SORT_KEYS)}"),
                 },
             ],
         )
@@ -1111,9 +1116,9 @@ def list_admin_records() -> tuple[Response, int]:
             message=f"Unknown sort direction '{sort_dir}'.",
             fields=[
                 {
-                    "loc": ["query", "sort_dir"],
-                    "msg": "sort_dir must be 'asc' or 'desc'.",
-                    "type": "value_error.invalid_sort_dir",
+                    "field": "query.sort_dir",
+                    "code": "value_error.invalid_sort_dir",
+                    "message": "sort_dir must be 'asc' or 'desc'.",
                 },
             ],
         )
@@ -1258,12 +1263,11 @@ def hard_delete(record_id: UUID) -> Response:
             message="Hard delete requires ?confirm=true query parameter.",
             fields=[
                 {
-                    "loc": ["query", "confirm"],
-                    "msg": (
-                        "Hard delete is irreversible; resubmit with "
-                        "?confirm=true to proceed."
+                    "field": "query.confirm",
+                    "code": "value_error.confirmation_required",
+                    "message": (
+                        "Hard delete is irreversible; resubmit with ?confirm=true to proceed."
                     ),
-                    "type": "value_error.confirmation_required",
                 },
             ],
         )

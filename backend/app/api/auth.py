@@ -393,9 +393,9 @@ def login() -> tuple[Response, int]:
             message="Request body must be a JSON object.",
             fields=[
                 {
-                    "loc": ["body"],
-                    "msg": "Expected a JSON object with 'email' and 'password'.",
-                    "type": "invalid_json",
+                    "field": "_root",
+                    "code": "invalid_json",
+                    "message": "Expected a JSON object with 'email' and 'password'.",
                 }
             ],
         )
@@ -403,18 +403,26 @@ def login() -> tuple[Response, int]:
     # Step 2: schema validation via pydantic. We catch ValidationError
     # explicitly so we can drop the ``input``/``ctx``/``url`` fields
     # from each error before surfacing to the client -- the ``input``
-    # field would echo back the password (PII).
+    # field would echo back the password (PII). The output shape is
+    # the canonical ``{field, code, message}`` documented in
+    # ``docs/api.md``; the leading ``"body"`` segment that pydantic
+    # adds is stripped so the SPA's form-field names match directly.
     try:
         payload = LoginRequest.model_validate(raw_body)
     except ValidationError as exc:
-        safe_fields: list[dict[str, Any]] = [
-            {
-                "loc": [str(seg) for seg in err.get("loc", ())],
-                "msg": str(err.get("msg", "Invalid value.")),
-                "type": str(err.get("type", "value_error")),
-            }
-            for err in exc.errors()
-        ]
+        safe_fields: list[dict[str, Any]] = []
+        for err in exc.errors():
+            loc_segments = [str(seg) for seg in err.get("loc", ())]
+            if loc_segments and loc_segments[0] == "body":
+                loc_segments = loc_segments[1:]
+            field_path = ".".join(loc_segments) if loc_segments else "_root"
+            safe_fields.append(
+                {
+                    "field": field_path,
+                    "code": str(err.get("type", "value_error")),
+                    "message": str(err.get("msg", "Invalid value.")),
+                }
+            )
         raise ValidationFailedError(
             message="The request payload failed validation.",
             fields=safe_fields,
@@ -675,9 +683,7 @@ def google_start() -> Response:
         # in ``app.api.admin`` for ``confirmation_required``) so the
         # SPA can dispatch on the more specific code. The class
         # ``status_code = 503`` is preserved.
-        oauth_error = ServiceUnavailableError(
-            "Google OAuth is not configured on this server."
-        )
+        oauth_error = ServiceUnavailableError("Google OAuth is not configured on this server.")
         oauth_error.error_code = "oauth_unconfigured"
         raise oauth_error
 

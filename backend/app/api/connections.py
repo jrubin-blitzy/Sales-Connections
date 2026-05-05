@@ -372,7 +372,7 @@ def create_connection() -> tuple[Response, int]:
                 "code": "validation_failed",
                 "message": "Request body must be a JSON object.",
                 "correlation_id": "...",
-                "fields": [{"loc": ["body"], "msg": "...", "type": "invalid_json"}],
+                "fields": [{"field": "_root", "code": "invalid_json", "message": "..."}],
             }
         }
 
@@ -383,7 +383,7 @@ def create_connection() -> tuple[Response, int]:
                 "code": "validation_failed",
                 "message": "The request payload failed validation.",
                 "correlation_id": "...",
-                "fields": [{"loc": ["full_name"], "msg": "...", "type": "..."}, ...],
+                "fields": [{"field": "full_name", "code": "...", "message": "..."}, ...],
             }
         }
 
@@ -456,9 +456,9 @@ def create_connection() -> tuple[Response, int]:
             message="Request body must be a JSON object.",
             fields=[
                 {
-                    "loc": ["body"],
-                    "msg": "Expected a JSON object.",
-                    "type": "invalid_json",
+                    "field": "_root",
+                    "code": "invalid_json",
+                    "message": "Expected a JSON object.",
                 }
             ],
         )
@@ -495,18 +495,27 @@ def create_connection() -> tuple[Response, int]:
     # and the pattern in ``app.api.notes.generate`` /
     # ``app.api.tags.create_tag``: drop pydantic's
     # ``input``/``ctx``/``url`` keys (PII / internal-detail leakage
-    # risks) and keep only ``loc``/``msg``/``type``.
+    # risks) and emit the canonical ``{field, code, message}`` shape
+    # documented in ``docs/api.md`` and consumed by ``ApiErrorField``
+    # in ``frontend/src/api/client.ts``. ``field`` is a dotted path
+    # with the leading ``"body"`` segment stripped so the SPA's form
+    # field names match directly.
     try:
         payload = ConnectionCreate.model_validate(raw_body)
     except ValidationError as exc:
-        fields = [
-            {
-                "loc": [str(seg) for seg in err.get("loc", ())],
-                "msg": str(err.get("msg", "Invalid value.")),
-                "type": str(err.get("type", "value_error")),
-            }
-            for err in exc.errors()
-        ]
+        fields = []
+        for err in exc.errors():
+            loc_segments = [str(seg) for seg in err.get("loc", ())]
+            if loc_segments and loc_segments[0] == "body":
+                loc_segments = loc_segments[1:]
+            field_path = ".".join(loc_segments) if loc_segments else "_root"
+            fields.append(
+                {
+                    "field": field_path,
+                    "code": str(err.get("type", "value_error")),
+                    "message": str(err.get("msg", "Invalid value.")),
+                }
+            )
         raise ValidationFailedError(
             message="The request payload failed validation.",
             fields=fields,
@@ -698,9 +707,9 @@ def _parse_int_arg(name: str, default: int, *, minimum: int = 0) -> int:
             message=f"Query parameter '{name}' must be an integer.",
             fields=[
                 {
-                    "loc": ["query", name],
-                    "msg": "Expected an integer value.",
-                    "type": "value_error.integer",
+                    "field": f"query.{name}",
+                    "code": "value_error.integer",
+                    "message": "Expected an integer value.",
                 },
             ],
         ) from exc
@@ -709,9 +718,9 @@ def _parse_int_arg(name: str, default: int, *, minimum: int = 0) -> int:
             message=f"Query parameter '{name}' must be >= {minimum}.",
             fields=[
                 {
-                    "loc": ["query", name],
-                    "msg": f"Value must be >= {minimum}.",
-                    "type": "value_error.min",
+                    "field": f"query.{name}",
+                    "code": "value_error.min",
+                    "message": f"Value must be >= {minimum}.",
                 },
             ],
         )
@@ -770,12 +779,12 @@ def _parse_enum_args(
         except ValueError:
             invalid_fields.append(
                 {
-                    "loc": ["query", name],
-                    "msg": (
+                    "field": f"query.{name}",
+                    "code": "value_error.enum",
+                    "message": (
                         f"'{value}' is not a valid {enum_cls.__name__} value. "
                         f"Allowed: {sorted(member.value for member in enum_cls)}"
                     ),
-                    "type": "value_error.enum",
                 }
             )
     if invalid_fields:
@@ -836,9 +845,9 @@ def _parse_uuid_args(name: str, *aliases: str) -> tuple[Any, ...]:
         except (TypeError, ValueError):
             invalid_fields.append(
                 {
-                    "loc": ["query", name],
-                    "msg": f"'{value}' is not a valid UUID.",
-                    "type": "value_error.uuid",
+                    "field": f"query.{name}",
+                    "code": "value_error.uuid",
+                    "message": f"'{value}' is not a valid UUID.",
                 }
             )
     if invalid_fields:
@@ -874,9 +883,9 @@ def _parse_date_arg(name: str) -> Any:
             message=f"Query parameter '{name}' must be an ISO-8601 date.",
             fields=[
                 {
-                    "loc": ["query", name],
-                    "msg": "Expected a YYYY-MM-DD date.",
-                    "type": "value_error.date",
+                    "field": f"query.{name}",
+                    "code": "value_error.date",
+                    "message": "Expected a YYYY-MM-DD date.",
                 },
             ],
         ) from exc
@@ -908,9 +917,9 @@ def _parse_bool_arg(name: str, default: bool = False) -> bool:
         message=f"Query parameter '{name}' must be a boolean.",
         fields=[
             {
-                "loc": ["query", name],
-                "msg": "Expected one of: true, false, 1, 0, yes, no.",
-                "type": "value_error.bool",
+                "field": f"query.{name}",
+                "code": "value_error.bool",
+                "message": "Expected one of: true, false, 1, 0, yes, no.",
             },
         ],
     )
@@ -1056,9 +1065,9 @@ def duplicate_check() -> tuple[Response, int]:
             message="Query parameter 'linkedin_url' is required.",
             fields=[
                 {
-                    "loc": ["query", "linkedin_url"],
-                    "msg": "linkedin_url is required.",
-                    "type": "value_error.missing",
+                    "field": "query.linkedin_url",
+                    "code": "value_error.missing",
+                    "message": "linkedin_url is required.",
                 },
             ],
         )
@@ -1073,9 +1082,9 @@ def duplicate_check() -> tuple[Response, int]:
                 message="Query parameter 'exclude_record_id' must be a UUID.",
                 fields=[
                     {
-                        "loc": ["query", "exclude_record_id"],
-                        "msg": "Expected a valid UUID.",
-                        "type": "value_error.uuid",
+                        "field": "query.exclude_record_id",
+                        "code": "value_error.uuid",
+                        "message": "Expected a valid UUID.",
                     },
                 ],
             ) from exc
@@ -1388,9 +1397,9 @@ def update_connection(record_id: UUID) -> tuple[Response, int]:
             message="Request body must be a JSON object.",
             fields=[
                 {
-                    "loc": ["body"],
-                    "msg": "Expected a JSON object.",
-                    "type": "invalid_json",
+                    "field": "_root",
+                    "code": "invalid_json",
+                    "message": "Expected a JSON object.",
                 },
             ],
         )
@@ -1398,14 +1407,19 @@ def update_connection(record_id: UUID) -> tuple[Response, int]:
     try:
         payload = ConnectionUpdate.model_validate(raw_body)
     except ValidationError as exc:
-        fields = [
-            {
-                "loc": [str(seg) for seg in err.get("loc", ())],
-                "msg": str(err.get("msg", "Invalid value.")),
-                "type": str(err.get("type", "value_error")),
-            }
-            for err in exc.errors()
-        ]
+        fields = []
+        for err in exc.errors():
+            loc_segments = [str(seg) for seg in err.get("loc", ())]
+            if loc_segments and loc_segments[0] == "body":
+                loc_segments = loc_segments[1:]
+            field_path = ".".join(loc_segments) if loc_segments else "_root"
+            fields.append(
+                {
+                    "field": field_path,
+                    "code": str(err.get("type", "value_error")),
+                    "message": str(err.get("msg", "Invalid value.")),
+                }
+            )
         raise ValidationFailedError(
             message="The request payload failed validation.",
             fields=fields,
@@ -1474,9 +1488,9 @@ def update_connection_status(record_id: UUID) -> tuple[Response, int]:
             message="Request body must be a JSON object.",
             fields=[
                 {
-                    "loc": ["body"],
-                    "msg": "Expected a JSON object.",
-                    "type": "invalid_json",
+                    "field": "_root",
+                    "code": "invalid_json",
+                    "message": "Expected a JSON object.",
                 },
             ],
         )
@@ -1484,14 +1498,19 @@ def update_connection_status(record_id: UUID) -> tuple[Response, int]:
     try:
         payload = ConnectionStatusUpdate.model_validate(raw_body)
     except ValidationError as exc:
-        fields = [
-            {
-                "loc": [str(seg) for seg in err.get("loc", ())],
-                "msg": str(err.get("msg", "Invalid value.")),
-                "type": str(err.get("type", "value_error")),
-            }
-            for err in exc.errors()
-        ]
+        fields = []
+        for err in exc.errors():
+            loc_segments = [str(seg) for seg in err.get("loc", ())]
+            if loc_segments and loc_segments[0] == "body":
+                loc_segments = loc_segments[1:]
+            field_path = ".".join(loc_segments) if loc_segments else "_root"
+            fields.append(
+                {
+                    "field": field_path,
+                    "code": str(err.get("type", "value_error")),
+                    "message": str(err.get("msg", "Invalid value.")),
+                }
+            )
         raise ValidationFailedError(
             message="The request payload failed validation.",
             fields=fields,

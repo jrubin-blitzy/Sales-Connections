@@ -229,14 +229,64 @@ Then open `http://localhost:5173/` in a browser and confirm the Sales-Connection
 
 ### Step 7 — Create your first user account
 
-The first user account in a fresh org is automatically promoted to Admin role for bootstrap convenience; this avoids the chicken-and-egg problem where no one has permission to grant Admin. The auto-bootstrap rule is documented in [`security.md`](security.md).
+The MVP backend does NOT expose a public signup endpoint and does NOT auto-promote any user to `Admin`. Two implications follow:
 
-Create the account in one of two ways:
+- `POST /auth/login` rejects an unknown email with HTTP 401 `{"error":{"code":"unauthorized","message":"Invalid credentials."}}`. There is no auto-create-on-login behavior.
+- A successful Google OAuth callback (`GET /auth/google/callback`) upserts the caller as a `Contributor` (the value of `DEFAULT_NEW_USER_ROLE`); it never assigns `Admin` automatically. See `backend/app/services/auth.py::upsert_oauth_user` for the canonical implementation.
 
-- Click "Sign in with Google" if you populated the OAuth keys; the OAuth handshake creates the user automatically.
-- Use the email/password form on the login page; submitting a fresh email address creates the account on the fly.
+You therefore have to seed at least one `Admin` user explicitly the first time you bring up a fresh database. Two recipes are documented; pick the one that matches whether you intend to log in with Google OAuth or with email/password:
 
-After login you land on the Connection Feed (empty until you add the first record). Try the "Add Connection" flow to verify the AI note generation and audit trail end-to-end.
+#### Recipe 7a — Provision an email/password Admin via psql + bcrypt
+
+This recipe creates an `Admin` user that logs in via the email/password form on `/login`. It is the recommended path for local development because it does not require a Google OAuth client.
+
+```bash
+# 1. Pick credentials. Use a value you can remember; this is dev-only.
+EMAIL=admin@local.dev
+DISPLAY_NAME='Local Admin'
+PASSWORD='ChangeMe123!'
+
+# 2. Compute a bcrypt cost-12 hash inside the backend container so the
+#    bcrypt library version matches what the verifier in
+#    backend/app/services/auth.py:authenticate_password expects.
+HASH=$(docker compose exec -T backend python -c "import bcrypt; print(bcrypt.hashpw(b'$PASSWORD', bcrypt.gensalt(12)).decode('ascii'))")
+
+# 3. Resolve the default org id from the running backend (DEFAULT_ORG_ID
+#    in app/config.py; the seed organization is created by the initial
+#    Alembic migration).
+ORG_ID=$(docker compose exec -T postgres psql -U sales_connections -d sales_connections -At -c \
+  "SELECT id FROM organizations ORDER BY created_at LIMIT 1;")
+
+# 4. Insert the Admin user. The composite unique index (org_id, email)
+#    enforces idempotency; ON CONFLICT updates the role and password
+#    so re-running the recipe is safe.
+docker compose exec -T postgres psql -U sales_connections -d sales_connections -c \
+  "INSERT INTO users (org_id, email, display_name, password_hash, role)
+     VALUES ('$ORG_ID', '$EMAIL', '$DISPLAY_NAME', '$HASH', 'Admin')
+     ON CONFLICT (org_id, email) DO UPDATE
+       SET role = 'Admin',
+           password_hash = EXCLUDED.password_hash,
+           display_name = EXCLUDED.display_name;"
+```
+
+Sign in at `http://localhost:5173/` with the email/password you chose; the SPA redirects to the Connection Feed (empty until you add the first record). Try the "Add Connection" flow to verify AI note generation, the audit trail, and the Admin-only `/admin` panel end-to-end.
+
+#### Recipe 7b — Promote a Google-OAuth user to Admin
+
+Use this recipe if you populated `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` and want to log in with the Google sign-in button.
+
+1. Click "Sign in with Google" on `/login`. The first successful callback creates a `Contributor` row in the `users` table for your Google email.
+2. Promote that row to `Admin` via psql:
+
+   ```bash
+   GOOGLE_EMAIL=you@your-org.example.com
+   docker compose exec -T postgres psql -U sales_connections -d sales_connections -c \
+     "UPDATE users SET role = 'Admin' WHERE email = '$GOOGLE_EMAIL';"
+   ```
+
+3. Log out and log back in. The fresh session JWT carries `role: "Admin"` and the `/admin` panel becomes reachable.
+
+For both recipes the audit trail captures every state change (record CRUD, role mutation, hard delete) per F-013 and is queryable from the connection detail view's edit-history feed.
 
 ### Step 8 — Tear down (when done)
 
@@ -512,63 +562,6 @@ docker compose exec frontend npm run type-check
 ```
 
 Every command above runs in CI on every pull request. Local execution is the recommended pre-push step.
-
-
-| Edit own record | Yes | Yes | No |
-| Edit any record | Yes | No | No |
-| Soft-delete own record | Yes | Yes | No |
-| Hard-delete any record | Yes | No | No |
-| Update outreach status | Yes | No | Yes |
-| Manage users / roles | Yes | No | No |
-| View admin analytics | Yes | No | No |
-| Generate AI notes | Yes | Yes | No |
-| Tag records | Yes | Yes | No |
-| Run duplicate-check pre-submit | Yes | Yes | No |
-| View edit history | Yes | Yes | Yes |
-
-The status-mutation column reflects the user's stated rule that outreach progress belongs to the sales team and cannot be overwritten by the original submitter without Admin rights.
-
-### The audit trail
-
-Every state-changing operation in the platform emits a row in the `audit_events` table inside the same database transaction as the state change itself. The two writes are atomic: failure of either rolls back both. This invariant is the foundation of the platform's accountability story.
-
-The eight event types are:
-
-| Event Type | Emitted By | Payload Notes |
-|------------|------------|---------------|
-| `create` | `POST /api/connections` | Captures the full new-record payload in `after_payload`. |
-| `status_change` | `PATCH /api/connections/:id/status` | Captures `before_status` and `after_status`. |
-| `edit` | `PATCH /api/connections/:id` | Captures field-level diff in `before_payload` / `after_payload`. |
-| `soft_delete` | `DELETE /api/connections/:id` | Captures the record state at deletion time. |
-| `hard_delete` | Admin-only `DELETE /api/admin/records/:id` | Captures the record state at hard-delete time. |
-| `role_change` | `PATCH /api/admin/users/:id` | Captures `before_role` and `after_role`. |
-| `authentication` | `/auth/login`, `/auth/google/callback`, `/auth/logout` | Captures session-event metadata. |
-| `admin_op` | Other Admin-only operations | Captures action description in `after_payload`. |
-
-The append-only invariant is enforced at the database privilege layer: the application database role has only `INSERT` privilege on `audit_events`; `UPDATE` and `DELETE` are revoked. Even SQL injection cannot mutate audit history.
-
-### Multi-tenancy posture
-
-The platform is single-tenant in MVP runtime but multi-tenant at the data layer. Every entity (records, users, tags, audit events) carries an `org_id` foreign key. Every read and every write injects `WHERE org_id = g.session.org_id`; cross-org access returns 403 from the API. The user interface for organization onboarding, the org-switcher, and per-org branding are deferred to a future increment (see [Suggested Next Tasks](#9-suggested-next-tasks)).
-
-### The three primary user flows
-
-The three primary flows are the user's verbatim descriptions, mapped here to actual code paths so a contributor can trace each step from UI to database.
-
-**Flow 1 — Add a Connection Idea (Contributor):**
-"Click 'Add Connection' → Fill in name, LinkedIn, company, title → Enter relationship context → Trigger AI note generation → Review/edit AI notes → Select involvement level → Tag and submit → Record appears in team feed."
-
-Maps to: `frontend/src/features/connections/AddEditConnectionForm.tsx` issues `POST /api/notes/generate` (optional, non-blocking) followed by `POST /api/connections`. The backend wires through `backend/app/api/connections.py` to `backend/app/services/connections.py:create_record`, which opens a transaction, persists the record (deriving owner from `g.session`), and emits an `audit_events.event_type = create` row in the same transaction.
-
-**Flow 2 — Browse and Claim a Lead (Sales Rep):**
-"Open connection list → Filter by involvement type or industry tag → Select a record → Review AI notes and submitter context → Update outreach status to 'In Progress' → Work the lead."
-
-Maps to: `frontend/src/features/connections/ConnectionFeed.tsx` issues `GET /api/connections?involvement=...&tag_ids=...` driving a TanStack Query cache; click navigates to `frontend/src/features/connections/ConnectionDetail.tsx`; the status chip mounts a `PATCH /api/connections/:id/status` mutation gated to `Viewer` and `Admin` roles. The status change emits an `audit_events.event_type = status_change` row capturing the before / after status.
-
-**Flow 3 — Manage the Platform (Admin):**
-"View all submissions → Edit or remove records → Manage users and roles → View activity across contributors."
-
-Maps to: `frontend/src/features/admin/AdminPanel.tsx` is a tabbed surface routing to `UserManagement.tsx`, `RecordModeration.tsx`, and `Analytics.tsx`. All admin endpoints under `/api/admin/*` are gated by `@requires_role('Admin')`. Hard delete (`DELETE /api/admin/records/:id`) emits `event_type = hard_delete`; role mutation emits `event_type = role_change`.
 
 ## 6. Common Pitfalls
 
@@ -884,7 +877,7 @@ The terms below are domain-specific or project-specific. Use them consistently i
 | Org-scoped | Pertaining to a query or operation that constrains its result to the current session's `org_id`. The default behaviour for every read and write. |
 | Append-only | Pertaining to the `audit_events` table; only `INSERT` is permitted by the application database role. |
 | Edit-in-place | The semantic for record updates: existing fields are mutated rather than producing a new record version. The audit trail captures the diff. |
-| Bootstrap user | The first user account in a fresh org, automatically promoted to Admin role to break the chicken-and-egg permissioning problem. Documented in [`security.md`](security.md). |
+| Bootstrap admin | A seed `Admin` user provisioned out-of-band the first time a fresh organization is brought online. Created via the psql recipes documented in [Step 7](#step-7--create-your-first-user-account); not created automatically by any code path. Subsequent `Admin` mutations flow through the standard `PATCH /api/admin/users/:id` endpoint. |
 | Correlation ID | The per-request UUID injected by `backend/app/middleware/correlation.py` into every log line, span, and outbound HTTP header. Threaded via the `X-Correlation-Id` header. |
 
 ## 12. See Also

@@ -54,7 +54,7 @@ The following threat catalogue maps every concrete attack surface to its enforce
 | Cross-Site Request Forgery (CSRF) | `SameSite=Lax` cookie attribute plus an Origin/Referer header check on state-changing endpoints in `backend/app/middleware/auth.py` |
 | TLS downgrade | TLS 1.2+ only at the ALB; security policy `ELBSecurityPolicy-TLS13-1-2-2021-06` or newer; HTTP listener on port 80 redirects to HTTPS |
 | Prompt injection in AI requests | `backend/app/utils/sanitization.py` strips control characters and applies length caps to `relationship_context` before templating into the Claude prompt |
-| Replay of expired tokens | JWT `exp` claim validated on every request; expired tokens are rejected with HTTP 401; clock skew tolerance bounded to 60 seconds |
+| Replay of expired tokens | JWT `exp` claim validated on every request; expired tokens are rejected with HTTP 401; clock skew tolerance is 0 seconds (strict) — `verify_session_jwt()` invokes `pyjwt.decode` without a `leeway` argument, so the decoder applies the PyJWT default of 0. Clock drift is mitigated operationally via NTP on the ALB and Fargate hosts rather than via `exp` leeway |
 | Denial of service via expensive AI requests | 5-second timeout watchdog in `backend/app/services/ai_orchestration.py`; HTTP 504 returned with `error.code = "ai_timeout"`; Prometheus alarm on the 95th percentile of AI latency |
 | Privilege escalation via JWT tampering | HS256 signature verified against `JWT_SIGNING_KEY` from Secrets Manager; tampered tokens fail signature verification and are rejected with HTTP 401 |
 | Container image supply chain | ECR native scanner runs on every image push; Dependabot raises pull requests for vulnerable Python and npm dependencies |
@@ -86,7 +86,7 @@ Both mechanisms culminate in the server minting a session JWT and setting it as 
 The session JWT is the only credential exposed to the browser after authentication completes. Its format is fully specified to enable independent verification.
 
 - Algorithm: HS256.
-- Claims: `user_id`, `org_id`, `role`, `iat` (issued-at, Unix seconds), `exp` (expiry, 8 hours after `iat`, Unix seconds), `kid` (signing-key version identifier for rotation).
+- Claims (as minted by `mint_session_jwt()` in `backend/app/services/auth.py`): `user_id`, `org_id`, `role`, `email`, `display_name`, `tv` (the user's `token_version` snapshot — see [Token rotation strategy](#token-rotation-strategy)), `iat` (issued-at, Unix seconds), `exp` (expiry, 8 hours after `iat`, Unix seconds). The `email` and `display_name` claims are denormalized for log enrichment and are not authoritative; the auth middleware treats `user_id`, `org_id`, `role`, and `tv` as authoritative.
 - Cookie name: `session`.
 - Cookie attributes: `HttpOnly; Secure; SameSite=Lax; Path=/`.
 - Cookie domain: the deployment's root domain (for example, `sales-connections.example.com`).
@@ -123,32 +123,44 @@ The Google OAuth 2.0 authorization-code flow with PKCE is implemented across `ba
 6. The callback handler validates that the `state` parameter matches the value stored in the `oauth_state` cookie; mismatch rejects with HTTP 400 and `error.code = "invalid_state"`.
 7. The callback handler exchanges `code` for an ID token at the Google token endpoint, sending `code_verifier` to satisfy PKCE.
 8. The handler validates the ID token signature against Google's JWKS at `https://www.googleapis.com/oauth2/v3/certs`, validates the `iss` claim is `accounts.google.com` or `https://accounts.google.com`, validates the `aud` claim matches the configured `GOOGLE_OAUTH_CLIENT_ID`, and validates `exp` is in the future.
-9. The handler upserts the user by `email` within the configured organization. If the user is the first user in the organization, the user is promoted to `Admin` (bootstrap invariant); subsequent users default to `Contributor`.
-10. The handler emits an `audit_events` row with `event_type = authentication` and `after = { method: "google" }`.
+9. The handler upserts the user by `email` within the configured organization (`upsert_oauth_user()` in `backend/app/services/auth.py`). All users created via the OAuth flow are assigned the `Contributor` role unconditionally; there is no automatic promotion of any user to `Admin`. The seed `Admin` account must be provisioned out-of-band — see [`docs/onboarding.md`](onboarding.md#step-7--bootstrap-an-admin-account-required-before-step-8) Step 7 for the canonical procedure (psql + bcrypt for email/password Admin, or OAuth login followed by `UPDATE users SET role = 'Admin' WHERE email = '<your-email>'`).
+10. The handler emits an `audit_events` row with `event_type = authentication` and `after = { method: "oauth_google" }`.
 11. The handler mints a session JWT, sets it as the `session` cookie, clears the `oauth_state` cookie, and issues HTTP 302 to `/feed`.
 
 OAuth tokens (access, refresh, ID) are held only in the local variables of the callback handler. They are never persisted to the database, never returned to the SPA, and never logged. Once the user upsert completes, references to them go out of scope and are garbage-collected.
 
 ### Logout
 
-Logout is `POST /auth/logout`. The handler performs the following steps.
+Logout is `POST /auth/logout`. The handler invokes `revoke_session_and_audit()` in `backend/app/services/auth.py`, which performs both effects in a single SQLAlchemy transaction so the cookie clear, the `token_version` increment, and the audit emission either all succeed or all roll back together.
 
 - Clears the `session` cookie by issuing `Set-Cookie: session=; Max-Age=0; HttpOnly; Secure; SameSite=Lax; Path=/`.
-- For email/password users, advances the per-user signing-key version stored on the `users` row. Any previously issued JWT now has a `kid` that no longer matches; the verifier rejects it.
-- For OAuth users, the same per-user signing-key version advancement invalidates the local session JWT. The user's Google session is unaffected; logging out of Google requires a separate operation against `accounts.google.com`.
-- Emits an `audit_events` row with `event_type = authentication` and `after = { event: "logout" }`.
+- Increments the user's per-user `token_version` column (`UPDATE users SET token_version = token_version + 1 WHERE id = :user_id`). Any previously issued JWT for this user carries a stale `tv` claim; the next request that presents the old JWT is rejected by `_verify_token_version()` in `backend/app/middleware/auth.py` with HTTP 401. The same mechanism applies to BOTH email/password and OAuth-minted JWTs because the same column gates both flows.
+- For OAuth users, the user's Google session is unaffected by this server-side revocation; logging out of Google requires a separate operation against `accounts.google.com`.
+- Emits an `audit_events` row with `event_type = authentication` and `after_payload = { method: "logout", result: "success", user_id, org_id }`.
 
 ### Token rotation strategy
 
-The JWT signing key supports zero-downtime rotation via a versioned key list.
+JWT revocation uses a per-user counter (`users.token_version`), NOT a global signing-key version. The signing key (`JWT_SIGNING_KEY` in AWS Secrets Manager) is held flat — there is exactly one active value at any moment — and the per-user counter is what allows individual sessions to be invalidated independently of the key material. Rationale and the alternatives considered live in [`docs/decision-log.md`](decision-log.md) DL-0043.
 
-- Secrets Manager stores the signing key as a JSON document `{ "current": { "kid": "v3", "value": "..." }, "prior": { "kid": "v2", "value": "..." } }`.
-- New tokens are always signed with `current` and carry `current.kid` as the `kid` claim.
-- Validation accepts both `current` and `prior` during the overlap window.
-- One TTL after a rotation (8 hours), `prior` is removed from Secrets Manager.
-- The application reads the keys at startup and on a periodic refresh; rotation does not require a deployment, only a Secrets Manager update.
+How the per-user counter mechanism works:
 
-The operational rotation procedure (when to rotate, who runs the procedure, post-rotation verification) is documented in `docs/operations.md` §4.
+- Each `users` row carries a `token_version: int` column (introduced by `backend/migrations/versions/0002_token_version_and_app_role.py`), defaulting to `0`.
+- `mint_session_jwt(user)` snapshots `user.token_version` into the JWT's `tv` claim at issuance.
+- The auth middleware's `_verify_token_version(session)` (in `backend/app/middleware/auth.py`) compares the JWT's `tv` claim against the live `users.token_version` value on every protected request via a single PK-lookup query (`SELECT token_version FROM users WHERE id = :user_id`). Equality admits the request; any mismatch (including a stored value greater than `tv`, which means the user has logged out or had their session revoked) rejects with HTTP 401.
+- `revoke_session_and_audit()` increments the column atomically via a SQL expression (`User.token_version + 1`, evaluated server-side) so two concurrent logouts cannot race.
+
+Properties of this design:
+
+- Revocation is scoped per-user. Logging out user A does not affect user B's sessions, even though both are signed by the same `JWT_SIGNING_KEY`.
+- Revocation is immediate. The next protected request from user A's old session (one DB round-trip later) is rejected; there is no overlap window in which the old JWT remains valid.
+- No two-slot key list is required. There is no `current`/`prior` JSON shape, no global "key version identifier", and no `kid` claim — earlier drafts of this document referenced these concepts; they describe a design that was not implemented.
+
+What rotating `JWT_SIGNING_KEY` itself looks like:
+
+- Rotating the signing key (replacing its bytes in AWS Secrets Manager) DOES invalidate every active session because all in-flight JWTs were signed with the previous key and will fail signature verification under the new key. There is no zero-downtime path for signing-key rotation in this design — by intent, since rotation of the signing key is a rare operational event (annual cadence or post-incident) and forcing all users to re-authenticate is an acceptable cost in exchange for the simplicity of a single-key validator.
+- Per-user revocation (logout, forced sign-out) and operational signing-key rotation are two independent capabilities. The token-rotation invariant in AAP §0.7.4 is satisfied by the per-user mechanism; signing-key rotation is an additional, infrequent operation.
+
+The operational rotation procedure (when, who, verification, communication) is documented in [`docs/operations.md`](operations.md#4-secret-rotation) §4.
 
 ### Where enforced
 
@@ -395,7 +407,7 @@ The platform's secrets are catalogued, retrieved, redacted, and rotated accordin
 | `ANTHROPIC_API_KEY` | F-002 AI note generation; bearer key for `api.anthropic.com` | AWS Secrets Manager (`sales-connections/<env>/anthropic-api-key`) |
 | `GOOGLE_OAUTH_CLIENT_ID` | F-012 OAuth client identifier; treated as configuration but stored alongside the secret for cohesion | AWS Secrets Manager (`sales-connections/<env>/google-oauth-client-id`) |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | F-012 OAuth client secret; required for the Google token endpoint exchange | AWS Secrets Manager (`sales-connections/<env>/google-oauth-client-secret`) |
-| `JWT_SIGNING_KEY` | F-012 session token signing key; versioned `{ current, prior }` document | AWS Secrets Manager (`sales-connections/<env>/jwt-signing-key`) |
+| `JWT_SIGNING_KEY` | F-012 session token signing key; flat single-value secret (no two-slot list — see [Token rotation strategy](#token-rotation-strategy) for rationale and the per-user `users.token_version` revocation mechanism that replaces it) | AWS Secrets Manager (`sales-connections/<env>/jwt-signing-key`) |
 | `DB_PASSWORD` | RDS authentication for the application role | AWS Secrets Manager (managed by RDS rotation hooks; `sales-connections/<env>/db-password`) |
 | `DB_PASSWORD_MIGRATIONS` | RDS authentication for the migrations role | AWS Secrets Manager (`sales-connections/<env>/db-password-migrations`) |
 
@@ -537,21 +549,25 @@ If CORS is ever required in a future environment, allowed origins are explicitly
 
 ## 9. Frontend Security
 
-The SPA's security posture covers Content Security Policy, cookie attributes, the prohibition on `dangerouslySetInnerHTML`, and Subresource Integrity for third-party CDN resources.
+The SPA's security posture covers Content Security Policy, cookie attributes, and the prohibition on `dangerouslySetInnerHTML`.
 
 ### Content Security Policy
 
-The backend emits a Content-Security-Policy response header on every response. The policy is:
+Content-Security-Policy is intentionally NOT emitted by the backend in the MVP delivery, consistent with the rationale given in §8 ("Network Security"): the backend serves only JSON, and a CSP attached to JSON responses is irrelevant because the responses are never rendered as HTML by the browser. CSP for the SPA shell is the responsibility of the static-asset host that serves `index.html`.
+
+The current MVP runtime exposes the SPA from the Vite dev server (in local development) or from an nginx static-asset image (in production). Neither host emits a Content-Security-Policy header in the MVP delivery; the `frontend/nginx.conf` baseline is intentionally minimal and does not yet include a CSP block. The SPA therefore relies on its other defenses — React's automatic JSX escaping, the ESLint ban on `dangerouslySetInnerHTML`, the HttpOnly + Secure + SameSite=Lax cookie attributes, the `X-Frame-Options: DENY` header from the backend (and from nginx for the SPA shell), and the cross-origin restrictions of the deployment topology — to mitigate the XSS-and-clickjacking class of attack.
+
+A future `frontend/nginx.conf` change would add the following CSP for the SPA shell:
 
 - `default-src 'self'` — the implicit default; locks all unspecified categories to same-origin.
 - `script-src 'self'` — only same-origin scripts are allowed; no inline scripts; no `eval`. The Vite-built bundle is the only executable JavaScript.
-- `style-src 'self' 'unsafe-inline'` — Tailwind utility classes occasionally generate inline styles for dynamic computations; the `'unsafe-inline'` token is required for these to render. The risk is bounded because no untrusted content is ever templated into a `<style>` tag.
+- `style-src 'self' 'unsafe-inline'` — Tailwind's utility classes occasionally rely on inline styles for dynamic computations; the `'unsafe-inline'` token is required for these to render. The risk is bounded because no untrusted content is ever templated into a `<style>` tag.
 - `img-src 'self' data:` — same-origin images plus inline `data:` URIs (used by Lucide icons).
 - `connect-src 'self'` — same-origin XHR and `fetch`. The SPA never calls third-party APIs directly.
-- `frame-ancestors 'none'` — prevents the SPA from being embedded in an `<iframe>`, mitigating clickjacking.
+- `frame-ancestors 'none'` — prevents the SPA from being embedded in an `<iframe>`, mitigating clickjacking. Currently delivered by the backend's `X-Frame-Options: DENY` header instead.
 - `base-uri 'self'` — prevents `<base>` tag injection from redirecting all relative URLs.
 
-The reveal.js executive deck (`blitzy-deck/index.html`) loads from CDN with Subresource Integrity (see below) and is exempt from the SPA's CSP because it is a separate static asset served outside the application origin in operational settings.
+The reveal.js executive deck (`blitzy-deck/index.html`) loads from CDN; it is a separate static asset hosted outside the application origin in operational settings and is not in scope of the SPA's CSP discussion above.
 
 ### Cookie posture
 
@@ -570,13 +586,14 @@ The use of `dangerouslySetInnerHTML` is forbidden in feature components.
 
 ### Subresource Integrity (SRI)
 
-The reveal.js executive deck loads three third-party libraries from CDN. Each `<script>` and `<link>` carries an `integrity` attribute pinned to the documented version's SRI hash.
+Subresource Integrity is NOT applied to the reveal.js executive deck's CDN resources in the MVP delivery. The deck loads three third-party libraries (reveal.js 5.1.0, Mermaid 11.4.0, Lucide 0.460.0) from cdnjs.cloudflare.com via plain `<script>` and `<link>` tags without `integrity` attributes.
 
-- reveal.js 5.1.0
-- Mermaid 11.4.0
-- Lucide 0.460.0
+The compensating posture is:
 
-The SRI hashes are sha384 checksums computed from the published artifacts. Browsers verify the checksum before executing the resource; a tampered or substituted file fails verification and is not executed. The pinned hashes are documented in `blitzy-deck/index.html` next to the corresponding tags.
+- The deck is a separate static asset served outside the application origin and does not execute against the SPA's session cookie or backend API. A compromise of one of the CDN bundles cannot exfiltrate user data because the deck is not within the credentialed origin.
+- CDN versions are exact-pinned (no `latest`, no caret ranges) so there is no automatic version drift; a tampered bundle would be a deliberate supply-chain attack on cdnjs that affects every downstream consumer simultaneously, which is detectable out-of-band.
+
+Adding SRI to the deck is tracked as a future hardening task: compute `sha384` checksums for each pinned bundle, append `integrity="sha384-..." crossorigin="anonymous"` to each tag in `blitzy-deck/index.html`, and add a CI check that re-computes the hashes on every deck update. Earlier drafts of this document described SRI as already-applied; that description was incorrect and has been removed.
 
 ## 10. Compliance and Privacy
 
@@ -640,7 +657,7 @@ The security invariants documented above are verified by automated tests, static
 - `backend/tests/services/test_audit.py` — Atomic emission test: a record-create raises mid-transaction and asserts neither the record nor the audit row is persisted. Append-only enforcement test: direct SQL `UPDATE` and `DELETE` against `audit_events` from the application role both raise `psycopg.errors.InsufficientPrivilege`.
 - `backend/tests/api/test_auth.py` — OAuth happy path; invalid `state` returns 400; expired ID token rejected; tampered ID token rejected; email/password happy path; incorrect password returns 401; expired session JWT returns 401; logout invalidates the session.
 - `backend/tests/api/test_connections.py` — Cross-org access returns 404 (the request hits a nonexistent record from the requester's org perspective); client-supplied `owner_user_id` rejected with 422; client-supplied `org_id` rejected with 422.
-- `backend/tests/observability/test_logging.py` — Secret redaction: log payloads with keys named `password`, `api_key`, `client_secret`, `authorization`, `id_token`, `access_token`, `refresh_token` all render with `***REDACTED***`.
+- `backend/tests/observability/test_logging_redaction.py` — Secret redaction: log payloads with keys named `password`, `api_key`, `client_secret`, `authorization`, `id_token`, `access_token`, `refresh_token` all render with `***REDACTED***`.
 - `backend/tests/services/test_duplicate_detection.py` — LinkedIn URL normalization: trailing-slash, query-string, fragment, www-vs-no-www, scheme-relative, and uppercase-host variants all collapse to the same normalized form.
 - `frontend/tests/auth/RoleGate.test.tsx` — UI hides admin buttons when the session role is not Admin.
 - `frontend/tests/api/client.test.ts` — Fetch wrapper sets `credentials: 'include'`, attaches correlation ID, and redirects to `/login` on HTTP 401.

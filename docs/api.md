@@ -44,7 +44,7 @@ The `/auth/*` endpoints are anonymous because their purpose is to issue or inval
 
 All requests with bodies use `Content-Type: application/json`. All responses are `application/json` except the metrics endpoint, which returns `text/plain; version=0.0.4` per the Prometheus exposition format.
 
-Requests that omit `Content-Type: application/json` on a body-bearing endpoint are rejected with HTTP 400 `bad_request`. Requests that send a malformed JSON body are also rejected with HTTP 400 `bad_request`. Requests that send a JSON body that fails pydantic validation are rejected with HTTP 422 `validation_error`; the `error.fields` array enumerates per-field errors.
+Requests that omit `Content-Type: application/json` on a body-bearing endpoint or send a malformed JSON body are rejected with HTTP 400 (Werkzeug emits a generic `http_error` envelope for these — the backend has no dedicated `bad_request` code). Requests that send a JSON body that fails pydantic validation are rejected with HTTP 422 `validation_failed`; the `error.fields` array enumerates per-field errors.
 
 ### Correlation IDs
 
@@ -54,12 +54,13 @@ The frontend fetch wrapper at `frontend/src/api/client.ts` generates a per-reque
 
 ### Pagination
 
-List endpoints return a uniform envelope:
+List endpoints return a uniform offset-based envelope:
 
 ```json
 {
   "items": [],
-  "next_cursor": null,
+  "limit": 25,
+  "offset": 0,
   "total": 0
 }
 ```
@@ -67,11 +68,16 @@ List endpoints return a uniform envelope:
 The pagination contract is:
 
 - `items` — the page of records, in the requested sort order.
-- `next_cursor` — opaque cursor string for the next page; `null` when no further pages exist. Pass `?cursor=<value>` on the next request to fetch the subsequent page.
-- `total` — the total record count matching the filter set; computed once per cursor traversal and may be cached across page requests.
-- `?limit=<n>` — page size; default 50, maximum 200. Values above 200 are clamped to 200.
+- `limit` — the page size echoed back from the request (subject to clamping).
+- `offset` — the page offset echoed back from the request.
+- `total` — the total record count matching the filter set, computed alongside the page query so callers can render aggregate counts without a second request.
 
-The cursor is opaque and clients MUST NOT parse or modify it. The cursor format is server-implementation-private.
+Query parameters:
+
+- `?limit=<n>` — page size; defaults are documented per-endpoint (typically 25 or 50) and the maximum is 200; values above the max are silently clamped.
+- `?offset=<n>` — zero-based offset into the filtered result set; default `0`. Clients pre-compute `next_offset = current_offset + limit` and request the next page when `offset + len(items) < total`.
+
+Cursor pagination is intentionally NOT implemented in MVP; the offset model satisfies the 10K-record scale ceiling per AAP §0.7.3. Some endpoints additionally accept a singular `?limit=...` query parameter without `?offset=...`; the response shape is unchanged.
 
 ### Filtering and sorting
 
@@ -97,30 +103,32 @@ Every non-2xx response uses the same envelope shape, regardless of which handler
 - `error.code` — stable machine-readable identifier; clients SHOULD branch on this value.
 - `error.message` — human-readable summary; intended for log lines and developer tools, not for end-user display.
 - `error.correlation_id` — the per-request correlation ID, identical to the value bound in structured logs and traces.
-- `error.fields` — array of per-field validation errors; populated only for `validation_error` (422). Each entry has the shape `{ "field": "...", "message": "...", "code": "..." }`.
+- `error.fields` — array of per-field validation errors; populated only for `validation_failed` (422). Each entry has the canonical shape `{ "field": "<dotted path>", "code": "<pydantic error type>", "message": "<human readable>" }`. The `field` value joins the pydantic `loc` segments with dots (for example `tags.0.name` for the first tag's name); the `code` is pydantic's stable error type string (for example `missing`, `value_error.url`); the `message` is the human-readable error message produced by pydantic. The frontend `ApiErrorField` interface in `frontend/src/api/client.ts` consumes this shape verbatim; backend conversion lives in `backend/app/middleware/error_handlers.py::_serialize_pydantic_errors`.
 
 ### Standard error codes
 
-The following table enumerates every `error.code` that may appear in the envelope. Endpoint-specific subsections add no new codes; they reuse the codes listed here.
+The following table enumerates every `error.code` that may appear in the envelope. Codes are emitted by `backend/app/middleware/error_handlers.py` and the blueprint handlers; clients should treat any code not listed here as opaque and fall back to surfacing `error.message`.
 
 | HTTP | error.code | When |
 |------|------------|------|
-| 400 | `bad_request` | Malformed JSON body, missing required header, or invalid `Content-Type` |
-| 401 | `unauthorized` | Missing session cookie, expired JWT, or signature verification failure |
-| 401 | `invalid_credentials` | Email/password login failed verification |
-| 401 | `invalid_id_token` | Google ID token signature verification failed during OAuth callback |
-| 400 | `invalid_state` | OAuth `state` mismatch during callback |
+| 400 | `http_error` | Werkzeug-level rejection: malformed JSON body, missing required header, invalid `Content-Type`, route not found at the framework layer |
+| 401 | `unauthorized` | Missing session cookie, expired JWT, signature verification failure, OR invalid email/password credentials. Email/password failures intentionally use the same code as missing-cookie failures so the response does not distinguish unknown email from wrong password (per AAP §0.7.4 anti-enumeration invariant). |
 | 403 | `forbidden` | RBAC denied; cross-org access attempted; owner-scope check failed |
 | 404 | `not_found` | Resource does not exist, has been soft-deleted (for non-admin callers), or is in a different organization |
 | 409 | `conflict` | Resource state conflict (for example, tag name already exists in the org) |
-| 422 | `validation_error` | pydantic validation failed; `error.fields` enumerates per-field errors |
+| 422 | `validation_failed` | pydantic validation failed; `error.fields` enumerates per-field errors |
+| 422 | `confirmation_required` | Admin destructive action (for example, hard delete of a record) requires an explicit `confirm=true` query parameter; the handler emits this BEFORE any service work. |
 | 429 | `rate_limited` | Reserved; rate limiting is not implemented in MVP per AAP §0.6.2 |
 | 500 | `internal_error` | Unexpected server error; correlation ID present in CloudWatch logs |
-| 502 | `ai_upstream_error` | Anthropic Claude API returned a non-2xx response |
-| 503 | `not_ready` | Readiness probe detected database connectivity failure |
+| 502 | `ai_unavailable` | The Anthropic Claude API was reached but returned an error or invalid response. Surfaces upstream rate-limits, transient backend failures, suspended accounts, and timeout-class failures. The SPA renders a non-blocking "AI unavailable; you can still submit" affordance. |
+| 503 | `oauth_unconfigured` | A `/auth/google/*` endpoint was called but `GOOGLE_OAUTH_CLIENT_ID` or `GOOGLE_OAUTH_CLIENT_SECRET` is missing in configuration. Returned as 503 because OAuth is a server-side capability the operator has not provisioned; clients should fall back to the email/password form. |
+| 503 | `ai_not_configured` | `POST /api/notes/generate` was called but `ANTHROPIC_API_KEY` is missing. Treated identically to `ai_unavailable` from the SPA's perspective: the contributor may still submit the form. |
+| 503 | `service_unavailable` | Backend reports a generic upstream-dependency failure (for example, `/readyz` returns this when the readiness probe's DB ping fails). |
 | 504 | `ai_timeout` | AI request exceeded the 5-second budget enforced by the timeout watchdog |
 
 The 429 `rate_limited` code is reserved so that future addition of rate limiting does not require a breaking client-side change; in MVP no endpoint emits this code.
+
+Note: The OAuth-specific codes that earlier drafts of this catalog referenced (`invalid_credentials`, `invalid_id_token`, `invalid_state`) are NOT emitted by the current backend. Email/password failures map to `unauthorized`; OAuth callback failures map to `unauthorized` (signature/issuer/audience rejection) or `validation_failed` (missing `code` or `state` query parameter); CSRF state mismatches are mapped to `unauthorized` so they do not leak the existence of the in-flight `state` cookie. Callers that branched on the older codes should switch to branching on the HTTP status code in combination with `error.code`.
 
 ## Authentication (`/auth/*`, `/api/me`)
 
@@ -142,7 +150,7 @@ Request body — pydantic class `LoginRequest`:
 }
 ```
 
-Success response — HTTP 200, pydantic class `UserRead` wrapped under `user`. The response also sets the session cookie via `Set-Cookie: session=<jwt>; HttpOnly; Secure; SameSite=Lax; Path=/`.
+Success response — HTTP 200, pydantic class `UserRead` wrapped under `user`. The response also sets the session cookie via `Set-Cookie: session=<jwt>; HttpOnly; Secure; SameSite=Lax; Path=/`. The `UserRead` schema in `backend/app/schemas/admin.py` deliberately excludes `org_id` because the SPA is single-organization at runtime and the org boundary is enforced server-side; the field is present in the JWT claims but not surfaced to the SPA.
 
 ```json
 {
@@ -151,7 +159,6 @@ Success response — HTTP 200, pydantic class `UserRead` wrapped under `user`. T
     "email": "user@example.com",
     "display_name": "Pat User",
     "role": "Contributor",
-    "org_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
     "created_at": "2026-04-23T18:00:00Z"
   }
 }
@@ -161,8 +168,8 @@ Errors:
 
 | HTTP | error.code | Cause |
 |------|------------|-------|
-| 401 | `invalid_credentials` | Email not found or bcrypt verification failed |
-| 422 | `validation_error` | Malformed email, missing field, or empty password |
+| 401 | `unauthorized` | Email not found, password is wrong, OAuth-only user attempted password login, or empty/missing credential — all return the same generic message per the anti-enumeration invariant |
+| 422 | `validation_failed` | Malformed email, missing field, or schema-level violation |
 
 Audit emission: `event_type = authentication`, `actor_user_id = user.id`, `target_record_id = null`, `before_payload = null`, `after_payload = { "method": "password" }`. The audit row is INSERTed in the same transaction as the session cookie issuance.
 
@@ -227,9 +234,9 @@ Errors:
 
 | HTTP | error.code | Cause |
 |------|------------|-------|
-| 400 | `invalid_state` | The `state` query parameter does not match the value persisted in the signed cookie |
-| 401 | `invalid_id_token` | The Google ID token signature failed verification against Google's JWKS |
-| 422 | `validation_error` | `code` or `state` query parameter is missing |
+| 401 | `unauthorized` | The `state` query parameter does not match the value persisted in the signed cookie, OR the Google ID token signature/issuer/audience verification failed against Google's JWKS, OR the ID token's `email_verified` claim is false |
+| 422 | `validation_failed` | `code` or `state` query parameter is missing |
+| 503 | `oauth_unconfigured` | `GOOGLE_OAUTH_CLIENT_ID` or `GOOGLE_OAUTH_CLIENT_SECRET` is not set in configuration |
 
 Audit emission: `event_type = authentication`, `actor_user_id = user.id` (the upserted user), `target_record_id = null`, `before_payload = null`, `after_payload = { "method": "google" }`. The audit row is INSERTed in the same transaction as the user upsert and session cookie issuance.
 
@@ -241,16 +248,16 @@ Hydrate the SPA's session context on page load. The frontend `AuthProvider` (`fr
 
 Request: no body, no query parameters.
 
-Success response — HTTP 200, pydantic class `UserRead` wrapped under `user`. Mirrors the success body of `POST /auth/login`.
+Success response — HTTP 200. The body wraps `UserRead` under `user` plus a top-level `authenticated: true` boolean so the SPA's `AuthProvider` can branch with a single property check rather than reading the user object. The `UserRead` schema deliberately excludes `org_id` (see `POST /auth/login`).
 
 ```json
 {
+  "authenticated": true,
   "user": {
     "id": "11111111-2222-3333-4444-555555555555",
     "email": "user@example.com",
     "display_name": "Pat User",
     "role": "Contributor",
-    "org_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
     "created_at": "2026-04-23T18:00:00Z"
   }
 }
@@ -305,9 +312,9 @@ Field notes:
 - `involvement` — required; must be one of the three enum values `"Warm Intro"`, `"Soft Reference"`, `"Target Only"`.
 - `tag_ids` — optional; array of UUIDs referencing tags belonging to the same organization.
 - `submission_date` — optional; defaulted server-side to the current UTC date if absent.
-- Forbidden fields: any payload containing `owner_user_id`, `owner_display_name`, `org_id`, `id`, `outreach_status`, `created_at`, or `deleted_at` is rejected with HTTP 422 `validation_error`. The owner is always derived from the session.
+- Forbidden fields: any payload containing `owner_user_id`, `owner_display_name`, `org_id`, `id`, `outreach_status`, `created_at`, or `deleted_at` is rejected with HTTP 422 `validation_failed`. The owner is always derived from the session.
 
-Success response — HTTP 201, pydantic class `ConnectionRead`. Per QA Issue 8 the response intentionally does NOT include the server-internal `deleted_at` field (the admin moderation surface uses `ConnectionAdminRead` instead, which retains it):
+Success response — HTTP 201, pydantic class `ConnectionRead`. The response includes the server-internal `deleted_at` field (always `null` for newly-created records and for non-deleted records returned by the public list endpoint); the admin moderation surface returns the same shape with `deleted_at` populated for soft-deleted rows. The SPA must therefore tolerate `deleted_at` on the public `ConnectionRead` and ignore it for non-deleted records.
 
 ```json
 {
@@ -337,7 +344,8 @@ Success response — HTTP 201, pydantic class `ConnectionRead`. Per QA Issue 8 t
   ],
   "submission_date": "2026-04-23T18:00:00Z",
   "created_at": "2026-04-23T18:00:00Z",
-  "updated_at": "2026-04-23T18:00:00Z"
+  "updated_at": "2026-04-23T18:00:00Z",
+  "deleted_at": null
 }
 ```
 
@@ -347,7 +355,7 @@ Errors:
 |------|------------|-------|
 | 401 | `unauthorized` | Missing or invalid session cookie |
 | 403 | `forbidden` | Caller is a Viewer (Sales Rep) — Viewers cannot create records |
-| 422 | `validation_error` | LinkedIn URL malformed; required field missing; client supplied a forbidden field; tag UUID does not belong to the organization |
+| 422 | `validation_failed` | LinkedIn URL malformed; required field missing; client supplied a forbidden field; tag UUID does not belong to the organization |
 
 Audit emission: `event_type = create`, `actor_user_id = session.user_id`, `target_record_id = new record id`, `before_payload = null`, `after_payload = full record snapshot`. The audit row is INSERTed in the same transaction as the record INSERT; either both succeed or both roll back.
 
@@ -402,7 +410,8 @@ Success response — HTTP 200, pydantic class `PaginatedConnections` carrying a 
       ],
       "submission_date": "2026-04-23T18:00:00Z",
       "created_at": "2026-04-23T18:00:00Z",
-      "updated_at": "2026-04-23T18:00:00Z"
+      "updated_at": "2026-04-23T18:00:00Z",
+      "deleted_at": null
     }
   ],
   "total": 1247,
@@ -411,14 +420,14 @@ Success response — HTTP 200, pydantic class `PaginatedConnections` carrying a 
 }
 ```
 
-Per QA Issue 8 the public `ConnectionRead` shape does NOT expose the server-internal `deleted_at` soft-delete timestamp; the admin moderation surface (`GET /api/admin/records`) uses `ConnectionAdminRead` which extends `ConnectionRead` with `deleted_at`.
+The public `ConnectionRead` shape exposes the `deleted_at` field (always `null` for entries returned by the default list query because the query injects `WHERE deleted_at IS NULL`). The admin moderation surface (`GET /api/admin/records?include_deleted=true`) returns soft-deleted entries with `deleted_at` populated to the timestamp at which the record was soft-deleted.
 
 Errors:
 
 | HTTP | error.code | Cause |
 |------|------------|-------|
 | 401 | `unauthorized` | Missing or invalid session cookie |
-| 422 | `validation_error` | Query parameter type or enum mismatch; invalid date format |
+| 422 | `validation_failed` | Query parameter type or enum mismatch; invalid date format |
 
 Audit emission: none (read).
 
@@ -461,8 +470,8 @@ Query parameters:
 
 | Parameter | Type | Notes |
 |-----------|------|-------|
-| `cursor` | string | Opaque pagination cursor; absent on first page |
 | `limit` | integer | Page size; default 50, maximum 200 |
+| `offset` | integer | Zero-based offset; default 0 |
 
 Success response — HTTP 200:
 
@@ -500,7 +509,8 @@ Success response — HTTP 200:
       }
     }
   ],
-  "next_cursor": null,
+  "limit": 50,
+  "offset": 0,
   "total": 2
 }
 ```
@@ -551,7 +561,7 @@ Errors:
 | 401 | `unauthorized` | Missing or invalid session cookie |
 | 403 | `forbidden` | Contributor attempted to edit a record owned by another user; Viewer attempted to edit any record |
 | 404 | `not_found` | Record does not exist, has been soft-deleted, or belongs to a different organization |
-| 422 | `validation_error` | LinkedIn URL malformed; client supplied a forbidden field; empty body |
+| 422 | `validation_failed` | LinkedIn URL malformed; client supplied a forbidden field; empty body |
 
 Audit emission: `event_type = edit`, `actor_user_id = session.user_id`, `target_record_id = id`, `before_payload = { changed fields' old values }`, `after_payload = { changed fields' new values }`. Only fields that actually changed are included in the payloads.
 
@@ -586,7 +596,7 @@ Errors:
 | 401 | `unauthorized` | Missing or invalid session cookie |
 | 403 | `forbidden` | Caller is a Contributor (regardless of record ownership) |
 | 404 | `not_found` | Record does not exist, has been soft-deleted, or belongs to a different organization |
-| 422 | `validation_error` | `outreach_status` value is not in the four-value enum |
+| 422 | `validation_failed` | `outreach_status` value is not in the four-value enum |
 
 Audit emission: `event_type = status_change`, `actor_user_id = session.user_id`, `target_record_id = id`, `before_payload = { "outreach_status": "<old value>" }`, `after_payload = { "outreach_status": "<new value>" }`.
 
@@ -669,7 +679,7 @@ Errors:
 |------|------------|-------|
 | 401 | `unauthorized` | Missing or invalid session cookie |
 | 403 | `forbidden` | Caller is a Viewer (Sales Rep) |
-| 422 | `validation_error` | LinkedIn URL malformed |
+| 422 | `validation_failed` | LinkedIn URL malformed |
 
 Audit emission: none (read; warning only). The duplicate check never blocks submission; the eventual `POST /api/connections` is what records the duplicate (if any) against the audit trail.
 
@@ -724,8 +734,8 @@ Errors:
 |------|------------|-------|
 | 401 | `unauthorized` | Missing or invalid session cookie |
 | 403 | `forbidden` | Caller is a Viewer (Sales Rep) — Viewers cannot generate AI notes |
-| 422 | `validation_error` | Required field missing; `relationship_context` exceeds maximum length after sanitization |
-| 502 | `ai_upstream_error` | Anthropic Claude API returned a non-2xx response (rate-limit, transient error, account suspended) |
+| 422 | `validation_failed` | Required field missing; `relationship_context` exceeds maximum length after sanitization |
+| 502 | `ai_unavailable` | Anthropic Claude API returned a non-2xx response (rate-limit, transient error, account suspended) |
 | 504 | `ai_timeout` | Anthropic call exceeded the 5-second budget enforced by the timeout watchdog |
 
 Non-blocking by design: a 502 or 504 response is non-fatal. The SPA must allow the contributor to submit the form with empty `ai_notes` even when AI generation fails. The frontend `AddEditConnectionForm.tsx` component renders a "AI unavailable; you can still submit" affordance on a 502 or 504, and the contributor proceeds to `POST /api/connections` with the (possibly empty) `ai_notes` field. This is the behavior required by AAP §0.1.2: AI failure must not block form submission.
@@ -742,35 +752,23 @@ List the tags belonging to the caller's organization. Implements feature F-008 (
 
 - RBAC: Admin, Contributor, or Viewer (org-scoped).
 
-Query parameters:
+Query parameters: none in MVP. Pagination is intentionally absent (typical org tag counts are 10-100; the underlying handler returns the full set sorted by name ascending). The handler signature documents the post-MVP transition path to a paginated response if a tenant ever exceeds ~1000 tags.
 
-| Parameter | Type | Notes |
-|-----------|------|-------|
-| `search` | string | Substring match (case-insensitive) on `name`; absent returns all tags |
-| `cursor` | string | Opaque pagination cursor; absent on first page |
-| `limit` | integer | Page size; default 50, maximum 200 |
-
-Success response — HTTP 200:
+Success response — HTTP 200, a bare JSON array of `TagRead` objects (no pagination envelope; the response is the array itself). The schema matches the AAP §0.5.2 Layer 5 definition: `id`, `name`, `created_at`. The `org_id` is intentionally not surfaced because the response is always implicitly scoped to the caller's organization.
 
 ```json
-{
-  "items": [
-    {
-      "id": "11111111-1111-1111-1111-111111111111",
-      "name": "Logistics",
-      "org_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-      "created_at": "2026-04-23T18:00:00Z"
-    },
-    {
-      "id": "22222222-2222-2222-2222-222222222222",
-      "name": "EMEA",
-      "org_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-      "created_at": "2026-04-23T18:00:00Z"
-    }
-  ],
-  "next_cursor": null,
-  "total": 2
-}
+[
+  {
+    "id": "11111111-1111-1111-1111-111111111111",
+    "name": "Logistics",
+    "created_at": "2026-04-23T18:00:00Z"
+  },
+  {
+    "id": "22222222-2222-2222-2222-222222222222",
+    "name": "EMEA",
+    "created_at": "2026-04-23T18:00:00Z"
+  }
+]
 ```
 
 Errors:
@@ -778,7 +776,6 @@ Errors:
 | HTTP | error.code | Cause |
 |------|------------|-------|
 | 401 | `unauthorized` | Missing or invalid session cookie |
-| 422 | `validation_error` | `limit` out of range; malformed `cursor` |
 
 Audit emission: none (read).
 
@@ -801,13 +798,12 @@ Field notes:
 - `name` is required, trimmed of leading and trailing whitespace, and validated against a length cap (1 to 64 characters).
 - Tag names are case-sensitive at the database level; the unique index treats `Logistics` and `logistics` as distinct.
 
-Success response — HTTP 201, pydantic class `TagRead`:
+Success response — HTTP 201, pydantic class `TagRead` (no `org_id` field; the response is implicitly scoped to the caller's organization):
 
 ```json
 {
   "id": "44444444-4444-4444-4444-444444444444",
   "name": "Series B",
-  "org_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
   "created_at": "2026-04-23T18:00:00Z"
 }
 ```
@@ -819,7 +815,7 @@ Errors:
 | 401 | `unauthorized` | Missing or invalid session cookie |
 | 403 | `forbidden` | Caller is a Viewer (Sales Rep) |
 | 409 | `conflict` | A tag with the same `name` already exists in the caller's organization |
-| 422 | `validation_error` | `name` is empty after trimming, or exceeds the length cap |
+| 422 | `validation_failed` | `name` is empty after trimming, or exceeds the length cap |
 
 Audit emission: none. Tag creation is a low-stakes operation that is implicitly visible via the `record_tags` association on subsequent record edits; the audit trail therefore does not record tag creation independently. This convention is documented in `docs/decision-log.md`.
 
@@ -837,36 +833,27 @@ Query parameters:
 
 | Parameter | Type | Notes |
 |-----------|------|-------|
-| `role` | enum | Filter by `Admin`, `Contributor`, or `Viewer` |
-| `search` | string | Substring match (case-insensitive) on `email` or `display_name` |
-| `cursor` | string | Opaque pagination cursor |
-| `limit` | integer | Page size; default 50, maximum 200 |
+| (none in MVP) | | The handler returns the full org user list capped at 500 entries; pagination is post-MVP |
 
-Success response — HTTP 200:
+Success response — HTTP 200, a bare JSON array of `UserRead` objects (no pagination envelope). The `UserRead` schema deliberately omits both `password_hash` and `org_id`; org scoping is implicit because the response is always scoped to the caller's organization.
 
 ```json
-{
-  "items": [
-    {
-      "id": "11111111-2222-3333-4444-555555555555",
-      "email": "user@example.com",
-      "display_name": "Pat User",
-      "role": "Contributor",
-      "org_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-      "created_at": "2026-04-23T18:00:00Z"
-    },
-    {
-      "id": "66666666-6666-6666-6666-666666666666",
-      "email": "sam@example.com",
-      "display_name": "Sam Sales",
-      "role": "Viewer",
-      "org_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-      "created_at": "2026-04-23T18:00:00Z"
-    }
-  ],
-  "next_cursor": null,
-  "total": 2
-}
+[
+  {
+    "id": "11111111-2222-3333-4444-555555555555",
+    "email": "user@example.com",
+    "display_name": "Pat User",
+    "role": "Contributor",
+    "created_at": "2026-04-23T18:00:00Z"
+  },
+  {
+    "id": "66666666-6666-6666-6666-666666666666",
+    "email": "sam@example.com",
+    "display_name": "Sam Sales",
+    "role": "Viewer",
+    "created_at": "2026-04-23T18:00:00Z"
+  }
+]
 ```
 
 Errors:
@@ -900,7 +887,7 @@ Request body — pydantic class `UserRoleUpdate`:
 
 The `role` field is required and must be one of the three enum values `"Admin"`, `"Contributor"`, `"Viewer"`.
 
-Success response — HTTP 200, pydantic class `UserRead`:
+Success response — HTTP 200, pydantic class `UserRead` (no `org_id` field; org scoping is implicit):
 
 ```json
 {
@@ -908,7 +895,6 @@ Success response — HTTP 200, pydantic class `UserRead`:
   "email": "user@example.com",
   "display_name": "Pat User",
   "role": "Viewer",
-  "org_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
   "created_at": "2026-04-23T18:00:00Z"
 }
 ```
@@ -920,7 +906,7 @@ Errors:
 | 401 | `unauthorized` | Missing or invalid session cookie |
 | 403 | `forbidden` | Caller is not an Admin; or the request would demote the last Admin in the organization |
 | 404 | `not_found` | User does not exist or belongs to a different organization |
-| 422 | `validation_error` | `role` value is not in the three-value enum |
+| 422 | `validation_failed` | `role` value is not in the three-value enum |
 
 Audit emission: `event_type = role_change`, `actor_user_id = session.user_id`, `target_record_id = null` (the audit row records the user id as part of the payload rather than via `target_record_id`, which is reserved for the `records` table), `before_payload = { "user_id": "...", "role": "<old role>" }`, `after_payload = { "user_id": "...", "role": "<new role>" }`.
 
@@ -930,7 +916,7 @@ List all records in the caller's organization, optionally including soft-deleted
 
 - RBAC: Admin only.
 
-Query parameters: same set as `GET /api/connections` (`company`, `involvement`, `owner_user_id`, `submission_date_from`, `submission_date_to`, `outreach_status`, `tag_ids`, `sort`, `cursor`, `limit`) plus:
+Query parameters: same set as `GET /api/connections` (`company`, `involvement`, `owner_user_id`/`owner_user_ids`, `submission_date_from`, `submission_date_to`, `outreach_status`, `tag_ids`, `sort`, `sort_dir`, `limit`, `offset`) plus:
 
 | Parameter | Type | Notes |
 |-----------|------|-------|
@@ -944,7 +930,7 @@ Errors:
 |------|------------|-------|
 | 401 | `unauthorized` | Missing or invalid session cookie |
 | 403 | `forbidden` | Caller is not an Admin |
-| 422 | `validation_error` | Query parameter type mismatch |
+| 422 | `validation_failed` | Query parameter type mismatch |
 
 Audit emission: none (read).
 
@@ -1175,7 +1161,7 @@ Defined in `backend/app/schemas/connection.py`. Used by `PATCH /api/connections/
 
 ### ConnectionRead
 
-Defined in `backend/app/schemas/connection.py`. Used by all read paths returning a single record (`GET /api/connections/:id`, the `items` element of `GET /api/connections` and `GET /api/admin/records`, and the response of `POST /api/connections`, `PATCH /api/connections/:id`, `PATCH /api/connections/:id/status`).
+Defined in `backend/app/schemas/connection.py`. Used by all read paths returning a single record (`GET /api/connections/:id`, the `items` element of `GET /api/connections` and `GET /api/admin/records`, and the response of `POST /api/connections`, `PATCH /api/connections/:id`, `PATCH /api/connections/:id/status`). The schema does NOT include `org_id`; org scoping is implicit because every API response is scoped server-side.
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -1191,11 +1177,11 @@ Defined in `backend/app/schemas/connection.py`. Used by all read paths returning
 | `outreach_status` | `enum` | Default `"Not Started"` on create; mutated only via `PATCH /api/connections/:id/status` |
 | `owner_user_id` | `UUID` | Server-derived from `g.session.user_id` at create time; immutable |
 | `owner_display_name` | `str` | Denormalized from `users.display_name` for fast feed rendering |
-| `org_id` | `UUID` | Server-derived from `g.session.org_id`; immutable |
-| `tag_ids` | `list[UUID]` | UUIDs of tags currently associated with the record |
-| `submission_date` | `date` | As submitted or defaulted server-side |
+| `tags` | `list[TagRead]` | Tag objects (not just UUIDs) currently associated with the record |
+| `submission_date` | `datetime` | ISO-8601 UTC timestamp of the submission instant |
 | `created_at` | `datetime` | Server-generated UTC timestamp |
-| `deleted_at` | `datetime \| None` | `null` on read by default; non-null only on soft-deleted records visible via the admin endpoint |
+| `updated_at` | `datetime` | Server-updated UTC timestamp; advances on every edit |
+| `deleted_at` | `datetime \| None` | `null` for active records; non-null timestamp on soft-deleted records visible via the admin endpoint |
 
 ### NoteGenerationRequest
 
@@ -1215,6 +1201,8 @@ Defined in `backend/app/schemas/note_generation.py`. Used by `POST /api/notes/ge
 | Field | Type | Notes |
 |-------|------|-------|
 | `ai_notes` | `str` | The AI-generated outreach text; non-empty on success |
+| `model` | `str` | Identifier of the Claude model that produced the response (informational; SPA does not branch on this value) |
+| `generated_at` | `datetime` | ISO-8601 UTC timestamp of when the AI response was received |
 
 ### TagCreate
 

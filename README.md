@@ -1,6 +1,6 @@
 # Sales-Connections
 
-Sales-Connections is a connection intelligence platform that lets contributors log curated "Connection Idea" records about real people in their professional networks, automatically generate AI-assisted outreach talking points via Anthropic Claude, and surface those records to a sales team for prioritized follow-up. The system is engineered as a three-tier web application (React 19 SPA + Flask 3.1.3 REST API + PostgreSQL 17.7) deployed on AWS ECS Fargate.
+Sales-Connections is a connection intelligence platform that lets contributors log curated "Connection Idea" records about real people in their professional networks, automatically generate AI-assisted outreach talking points via Anthropic Claude, and surface those records to a sales team for prioritized follow-up. The system is engineered as a three-tier web application (React 19 SPA + Flask 3.1.3 REST API + PostgreSQL 17.x) deployed on AWS ECS Fargate.
 
 MVP scope: 14 bound features (F-001 through F-014) covering connection intake, AI note generation, outreach status tracking, role-based access control, audit trail, and an admin panel.
 
@@ -57,7 +57,9 @@ This brings up three services from `docker-compose.yml`: `postgres` (Postgres 17
 
 ### First-time database setup
 
-After the stack is running, apply migrations against the local Postgres:
+Migrations are applied automatically on backend startup: `docker-compose.yml` sets `RUN_MIGRATIONS=true` on the backend service so the entrypoint runs `alembic upgrade head` before launching Gunicorn. The schema is therefore ready by the time the backend health check passes; no manual migration step is required for the local stack.
+
+If you need to verify the migration state explicitly (for example, after authoring a new migration locally), the following command is safe to run and will report `INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.` followed by `Will assume transactional DDL.` and a no-op when the schema is already current:
 
 ```bash
 docker compose exec backend alembic upgrade head
@@ -84,13 +86,13 @@ The `-v` flag removes the Postgres data volume; omit it to retain database state
 
 ## Architecture
 
-The system uses a stateless Flask 3.1.3 backend serving a single React 19 SPA via REST/JSON, persisting all data in a PostgreSQL 17.7 RDS Multi-AZ database, with Anthropic Claude accessed only from the backend through a Langchain abstraction layer. All inter-service communication is synchronous; there are no message queues, event buses, or async drivers.
+The system uses a stateless Flask 3.1.3 backend serving a single React 19 SPA via REST/JSON, persisting all data in a PostgreSQL 17.x RDS Multi-AZ database, with Anthropic Claude accessed only from the backend through a Langchain abstraction layer. All inter-service communication is synchronous; there are no message queues, event buses, or async drivers.
 
 ```mermaid
 graph LR
     A[User Browser<br/>React 19 SPA] -->|HTTPS REST/JSON| B[AWS ALB]
     B --> C[ECS Fargate<br/>Flask 3.1.3 + Gunicorn]
-    C --> D[(RDS PostgreSQL 17.7<br/>Multi-AZ)]
+    C --> D[(RDS PostgreSQL 17.x<br/>Multi-AZ)]
     C -->|HTTPS via Langchain| E[Anthropic Claude API]
     C -->|OAuth 2.0| F[Google Identity]
     C -->|Read at startup| G[AWS Secrets Manager]
@@ -150,7 +152,7 @@ Each tier owns its own dependency manifests (`backend/requirements.txt`, `backen
 | Frontend State | TanStack Query | 5.x | Server-state cache |
 | Frontend Routing | react-router-dom | 6.x | Client-side routing |
 | Frontend Validation | Zod | latest 3.x | Client-side schema validation |
-| Database | PostgreSQL | 17.7 LTS | Multi-AZ RDS |
+| Database | PostgreSQL | 17.x LTS | Multi-AZ RDS (production targets the 17.x major series; `postgres:17-alpine` is used locally) |
 | Container Runtime | Docker Engine | 24.x or newer | Local and ECS runtime |
 | IaC | Terraform | 1.7.x or newer | AWS provisioning |
 | CI/CD | GitHub Actions | latest | Build, test, deploy pipeline |

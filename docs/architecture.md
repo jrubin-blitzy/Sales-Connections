@@ -188,23 +188,23 @@ erDiagram
     records ||--o{ audit_events : "targeted by"
 
     organizations {
-        bigint id PK
+        uuid id PK
         text name
         timestamptz created_at
     }
     users {
-        bigint id PK
-        bigint org_id FK
-        citext email
+        uuid id PK
+        uuid org_id FK
+        text email
         text display_name
         text password_hash "nullable for OAuth users"
         user_role role
         timestamptz created_at
     }
     records {
-        bigint id PK
-        bigint org_id FK
-        bigint owner_user_id FK
+        uuid id PK
+        uuid org_id FK
+        uuid owner_user_id FK
         text full_name
         text linkedin_url
         text normalized_linkedin_url "indexed unique partial"
@@ -215,29 +215,29 @@ erDiagram
         involvement_type involvement
         outreach_status outreach_status "default Not Started"
         text owner_display_name "denormalized"
-        timestamptz submission_date
+        date submission_date
         timestamptz deleted_at "nullable; soft delete"
     }
     tags {
-        bigint id PK
-        bigint org_id FK
+        uuid id PK
+        uuid org_id FK
         text name "org-scoped unique"
         timestamptz created_at
     }
     record_tags {
-        bigint record_id PK
-        bigint tag_id PK
+        uuid record_id PK
+        uuid tag_id PK
     }
     audit_events {
-        bigint id PK
-        bigint actor_user_id FK
-        bigint target_record_id FK "nullable"
+        uuid id PK
+        uuid actor_user_id FK
+        uuid target_record_id FK "nullable"
         audit_event_type event_type
         timestamptz event_timestamp
         jsonb before_payload
         jsonb after_payload
     }
-%% Diagram: Entity-Relationship Diagram. Legend: Lines with double-pipe ends (||) denote one-side cardinality; lines with crow-foot ends (o{) denote many-side cardinality; PK = primary key; FK = foreign key. The audit_events.target_record_id is nullable for events that do not target a single record (such as authentication and role_change).
+%% Diagram: Entity-Relationship Diagram. Legend: Lines with double-pipe ends (||) denote one-side cardinality; lines with crow-foot ends (o{) denote many-side cardinality; PK = primary key; FK = foreign key. Primary keys, organization scoping foreign keys, and association keys are PostgreSQL `uuid` columns; emails are `text` (320-char column-level cap mirrored from RFC 3696). The audit_events.target_record_id is nullable for events that do not target a single record (such as authentication and role_change).
 ```
 
 ## 4. Request Lifecycle
@@ -303,17 +303,17 @@ Every non-2xx response from the backend uses the same JSON envelope. The fronten
 ```json
 {
   "error": {
-    "code": "validation_error",
-    "message": "Request body failed validation.",
+    "code": "validation_failed",
+    "message": "The request payload failed validation.",
     "correlation_id": "8b21d4f2-1e72-4fbe-9f66-8a10cb1e1d6a",
     "fields": [
-      { "name": "linkedin_url", "message": "Invalid LinkedIn URL format." }
+      { "field": "linkedin_url", "code": "value_error.url", "message": "Invalid LinkedIn URL format." }
     ]
   }
 }
 ```
 
-The `error.code` is a stable machine-readable identifier; the `error.message` is a human-readable string suitable for surfacing as a toast; the `error.correlation_id` is the same value that appears in all log entries for the request and in the OpenTelemetry trace; the `error.fields` array is populated only for validation errors and lists per-field errors keyed by JSON Pointer.
+The `error.code` is a stable machine-readable identifier (`validation_failed`, `unauthorized`, `forbidden`, `not_found`, `conflict`, `internal_error`, `service_unavailable`, `http_error`, plus blueprint-specific codes documented in `docs/api.md`); the `error.message` is a human-readable string suitable for surfacing as a toast; the `error.correlation_id` is the same value that appears in all log entries for the request and in the OpenTelemetry trace; the `error.fields` array is populated only for validation errors and lists per-field errors as `{ field, code, message }` triples where `field` is a dotted path into the offending payload, `code` is pydantic's stable error type (e.g., `missing`, `value_error.url`), and `message` is a human-readable description.
 
 ## 5. Integration Surfaces
 
@@ -347,6 +347,7 @@ The endpoint catalog reproduced verbatim from AAP §0.4.3:
 | `POST` | `/auth/logout` | F-012 | `backend/app/api/auth.py` |
 | `GET` | `/auth/google/start` | F-012 | `backend/app/api/auth.py` |
 | `GET` | `/auth/google/callback` | F-012 | `backend/app/api/auth.py` |
+| `GET` | `/api/me` | F-012 (session hydration) | `backend/app/api/auth.py` |
 | `GET` | `/healthz` | Observability | `backend/app/api/health.py` |
 | `GET` | `/readyz` | Observability | `backend/app/api/health.py` |
 | `GET` | `/metrics` | Observability | `backend/app/observability/metrics.py` |
@@ -413,23 +414,23 @@ erDiagram
     records ||--o{ audit_events : "targeted by"
 
     organizations {
-        bigint id PK
+        uuid id PK
         text name
         timestamptz created_at
     }
     users {
-        bigint id PK
-        bigint org_id FK
-        citext email
+        uuid id PK
+        uuid org_id FK
+        text email
         text display_name
         text password_hash
         user_role role
         timestamptz created_at
     }
     records {
-        bigint id PK
-        bigint org_id FK
-        bigint owner_user_id FK
+        uuid id PK
+        uuid org_id FK
+        uuid owner_user_id FK
         text full_name
         text linkedin_url
         text normalized_linkedin_url
@@ -440,29 +441,29 @@ erDiagram
         involvement_type involvement
         outreach_status outreach_status
         text owner_display_name
-        timestamptz submission_date
+        date submission_date
         timestamptz deleted_at
     }
     tags {
-        bigint id PK
-        bigint org_id FK
+        uuid id PK
+        uuid org_id FK
         text name
         timestamptz created_at
     }
     record_tags {
-        bigint record_id PK
-        bigint tag_id PK
+        uuid record_id PK
+        uuid tag_id PK
     }
     audit_events {
-        bigint id PK
-        bigint actor_user_id FK
-        bigint target_record_id FK
+        uuid id PK
+        uuid actor_user_id FK
+        uuid target_record_id FK
         audit_event_type event_type
         timestamptz event_timestamp
         jsonb before_payload
         jsonb after_payload
     }
-%% Diagram: Entity-Relationship Diagram (full attributes). Legend: Lines with double-pipe ends (||) denote one-side cardinality; lines with crow-foot ends (o{) denote many-side cardinality; PK = primary key; FK = foreign key. The audit_events.target_record_id is nullable for events that do not target a single record (authentication, role_change, admin_op).
+%% Diagram: Entity-Relationship Diagram (full attributes). Legend: Lines with double-pipe ends (||) denote one-side cardinality; lines with crow-foot ends (o{) denote many-side cardinality; PK = primary key; FK = foreign key. Primary keys and organization-scoping foreign keys are PostgreSQL `uuid` columns; emails are stored as `text` with a 320-character schema-level cap. The audit_events.target_record_id is nullable for events that do not target a single record (authentication, role_change, admin_op).
 ```
 
 ### Entity inventory

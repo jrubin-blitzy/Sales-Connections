@@ -518,9 +518,10 @@ class TestNoteGenerationValidation:
         # The field-level detail MUST identify the missing field so
         # the SPA can highlight it. Search across all fields rather
         # than assert a specific index because pydantic's error order
-        # is not guaranteed across versions.
+        # is not guaranteed across versions. The canonical envelope-
+        # field shape is ``{field, code, message}`` per docs/api.md.
         fields = body["error"].get("fields", [])
-        assert any("relationship_context" in str(field.get("loc", [])) for field in fields), (
+        assert any("relationship_context" in str(field.get("field", "")) for field in fields), (
             f"Expected 'relationship_context' in fields, got: {fields}"
         )
 

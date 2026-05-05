@@ -150,7 +150,7 @@ When production is broken and the right fix is small and obvious, the hotfix pat
 
 ## 4. Secret Rotation
 
-All secrets live in AWS Secrets Manager and are referenced from the ECS task definition via secret-arn injection. The application reads each secret at process startup via `boto3.client('secretsmanager')` and caches it for the worker lifetime. Rotation requires a rolling restart of the ECS service so workers re-read the rotated value. The JWT signing key has a special two-version rotation procedure to avoid invalidating live user sessions.
+All secrets live in AWS Secrets Manager and are referenced from the ECS task definition via secret-arn injection. The application reads each secret at process startup via `boto3.client('secretsmanager')` and caches it for the worker lifetime. Rotation requires a rolling restart of the ECS service so workers re-read the rotated value. The JWT signing key is a flat single-value secret in the MVP delivery — there is no zero-downtime rotation path; rotating the signing key forces all users to re-authenticate. Per-user session revocation (logout, forced sign-out) is a separate mechanism that uses the `users.token_version` counter and is not affected by signing-key rotation.
 
 ### Secret catalog
 
@@ -158,7 +158,7 @@ All secrets live in AWS Secrets Manager and are referenced from the ECS task def
 |--------|---------|------------------|-----------|
 | `ANTHROPIC_API_KEY` | AWS Secrets Manager (`sales-connections/{env}/anthropic-api-key`) | Annual or on suspected leak | Generate new key in Anthropic Console; update Secrets Manager; rolling restart of ECS tasks; revoke old key |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | AWS Secrets Manager (`sales-connections/{env}/google-oauth-client-secret`) | Annual or on suspected leak | Rotate in Google Cloud Console; update Secrets Manager; rolling restart |
-| `JWT_SIGNING_KEY` | AWS Secrets Manager (`sales-connections/{env}/jwt-signing-key`) | Quarterly | Generate new 32-byte random; update Secrets Manager with versioned key list (current plus prior); backend accepts both during overlap window; remove prior key after one TTL window (8 hours) |
+| `JWT_SIGNING_KEY` | AWS Secrets Manager (`sales-connections/{env}/jwt-signing-key`) | Annual or on suspected leak | Generate new 32-byte random; update Secrets Manager with the new key (single string value, no versioned list); rolling restart; all live sessions invalidated — operators must broadcast the re-authentication requirement before rotation |
 | `DB_PASSWORD` | AWS Secrets Manager (`sales-connections/{env}/db-password`) | Annual or on suspected leak | Rotate via RDS console with secret rotation enabled; ECS task role re-reads on next request |
 
 ### Step-by-step secret rotation (Anthropic API key as example)
@@ -198,18 +198,23 @@ All secrets live in AWS Secrets Manager and are referenced from the ECS task def
 
 ### JWT signing key rotation (special case)
 
-The JWT signing key uses a two-slot versioned key list to keep live sessions valid across rotation; rationale lives in [`decision-log.md`](decision-log.md). The application supports a versioned key list with two slots, `current` and `prior`. New tokens are signed with `current`; incoming tokens are validated against `current` first and `prior` second. The overlap window is one JWT TTL (8 hours), the maximum age of any token issued before the rotation.
+The JWT signing key (`JWT_SIGNING_KEY` in AWS Secrets Manager) is a flat single-value secret in the MVP delivery. There is NO zero-downtime rotation path — rotating the signing key forces every active session to be re-authenticated because all in-flight JWTs were signed with the previous key and will fail signature verification under the new key. Earlier drafts of this runbook described a `current`/`prior` two-slot key list; that mechanism was not implemented (rationale in [`decision-log.md`](decision-log.md) DL-0043 — the platform uses a per-user `users.token_version` counter for session revocation, NOT a global key version, so the two-slot list is not needed for the per-user invalidation use case).
 
-1. Generate a new 32-byte random key (`openssl rand -base64 32`).
-2. Update Secrets Manager with both keys.
+Per-user session revocation (logout, forced sign-out, password change) is a separate mechanism that uses the `users.token_version` counter and does NOT require signing-key rotation. See [`docs/security.md`](../docs/security.md#token-rotation-strategy) §2 for details. Operators should rotate the signing key only for an annual cadence or in response to a suspected key compromise, NOT as a routine "log everyone out" operation.
+
+When rotating the signing key, all users must be informed in advance that their sessions will be terminated.
+
+1. Generate a new 32-byte random key (`openssl rand -base64 32`); copy the value to a secure scratch location.
+2. Broadcast the upcoming forced-re-authentication to users (status page, in-product banner, email — operator's choice consistent with the deployment's communication policy). Observe a documented quiet period if required.
+3. Update Secrets Manager with the new key as a single string value.
 
    ```bash
    aws secretsmanager update-secret \
      --secret-id sales-connections/prod/jwt-signing-key \
-     --secret-string '{"current":"<new-key>","prior":"<old-key>"}'
+     --secret-string '<new-key>'
    ```
 
-3. Rolling restart the backend ECS service. New sessions are signed with `current`; existing tokens validate against `current` first, then `prior`.
+4. Rolling restart the backend ECS service so workers re-read the rotated secret.
 
    ```bash
    aws ecs update-service \
@@ -218,16 +223,26 @@ The JWT signing key uses a two-slot versioned key list to keep live sessions val
      --force-new-deployment
    ```
 
-4. Wait at least 8 hours so any token issued before the rotation has expired.
-5. Update Secrets Manager to drop the prior key.
+5. Verify the rotation took effect: log in as a test account, capture the resulting `session` cookie, and confirm `GET /api/me` succeeds. Optionally take a JWT minted before the rotation (from a prior `curl -i POST /auth/login`) and confirm `GET /api/me` with that pre-rotation cookie returns HTTP 401 `unauthorized`.
 
    ```bash
-   aws secretsmanager update-secret \
-     --secret-id sales-connections/prod/jwt-signing-key \
-     --secret-string '{"current":"<new-key>","prior":null}'
+   # Confirm a fresh login works under the new key
+   curl -sS -c /tmp/post-rotation-session.txt \
+     -H 'Content-Type: application/json' \
+     -d '{"email":"<test-account>","password":"<test-password>"}' \
+     https://sales-connections.example.com/auth/login | jq .
+   curl -sS -b /tmp/post-rotation-session.txt \
+     https://sales-connections.example.com/api/me | jq .
+
+   # Confirm a pre-rotation cookie is rejected
+   curl -sS -b /tmp/pre-rotation-session.txt \
+     -o /dev/null -w '%{http_code}\n' \
+     https://sales-connections.example.com/api/me
    ```
 
-6. Rolling restart again to drop the prior key from the workers.
+6. Add a row to [`decision-log.md`](decision-log.md) documenting the rotation event, the rotation date, and the operator responsible.
+
+If a future hardening task introduces a two-slot key list (the AAP §0.7.4 "Tokens rotated on logout" invariant is already satisfied without it), this section should be re-written to describe the overlap window. Until then, plan for the user-visible re-authentication requirement on every signing-key rotation.
 
 ## 5. Observability
 

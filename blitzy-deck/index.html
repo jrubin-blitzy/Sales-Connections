@@ -890,7 +890,13 @@ flowchart LR
       // text-width measurement is slightly narrower than the actual rendered
       // text. Setting overflow:visible lets the label render fully; the parent
       // node <rect> is sized with padding so there is visual room for it.
-      themeCSS: '\n        foreignObject { overflow: visible !important; }\n        .nodeLabel, .edgeLabel, .label { white-space: nowrap !important; }\n      '
+      // Label color is forced to a dark slate (#1f2937) to ensure high
+      // contrast against the deck's pale Mermaid node fills (which sit on
+      // top of the deck's dark background). Without this override, Mermaid's
+      // default theme renders text in a low-contrast tone that is barely
+      // visible on the slide. The same color is applied to .label and
+      // .edgeLabel so edge text on flowcharts matches.
+      themeCSS: '\n        foreignObject { overflow: visible !important; }\n        .nodeLabel, .edgeLabel, .label { white-space: nowrap !important; color: #1f2937 !important; fill: #1f2937 !important; }\n        .nodeLabel p, .edgeLabel p, .label p { color: #1f2937 !important; }\n        .messageText, .actor, text.actor > tspan { fill: #1f2937 !important; }\n        .er.entityLabel, .er.attributeBoxOdd, .er.attributeBoxEven { fill: #1f2937 !important; }\n        .er.relationshipLabelBox { fill: #ffffff !important; }\n      '
     });
 
     // Reveal.js initialization with the AAP-mandated configuration.

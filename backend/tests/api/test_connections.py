@@ -354,12 +354,13 @@ class TestConnectionCreate:
         assert response.status_code == 422
         body = response.get_json()
         assert body["error"]["code"] == "validation_failed"
-        # Field-scoped error references the linkedin_url field.
-        loc_strings = [
-            ".".join(str(seg) for seg in field.get("loc", ()))
-            for field in body["error"].get("fields", [])
-        ]
-        assert any("linkedin_url" in loc for loc in loc_strings)
+        # Field-scoped error references the linkedin_url field. The canonical
+        # envelope-field shape (per docs/api.md and ApiErrorField in
+        # frontend/src/api/client.ts) is {field, code, message}; ``field`` is
+        # already a dotted path string with the leading ``"body"`` prefix
+        # stripped by ``_serialize_pydantic_errors``.
+        field_paths = [str(field.get("field", "")) for field in body["error"].get("fields", [])]
+        assert any("linkedin_url" in path for path in field_paths)
 
     def test_linkedin_url_normalized_server_side(
         self,

@@ -51,7 +51,6 @@ erDiagram
         timestamptz event_timestamp
         jsonb before_payload
         jsonb after_payload
-        text correlation_id "ties to request-lifecycle correlation"
     }
 
     organizations ||--o{ users : "has"
@@ -99,9 +98,13 @@ erDiagram
 %%   client-supplied owner_user_id or owner_display_name. records.owner_display_name is
 %%   denormalized for fast feed rendering at the 10K-record scale ceiling, avoiding a
 %%   JOIN on every feed query.
-%% - Correlation linkage: audit_events.correlation_id ties an audit row back to the
-%%   request-lifecycle correlation chain documented in docs/diagrams/request-lifecycle.mmd,
-%%   enabling end-to-end tracing of state-changing operations across logs, traces, and audit.
+%% - Correlation propagation: audit_events does NOT carry a correlation_id column in the
+%%   MVP schema. End-to-end tracing of a state-changing request across logs, traces, and
+%%   the audit row is performed externally by joining on event_timestamp + actor_user_id
+%%   against the structured-log stream (which DOES carry correlation_id on every line per
+%%   backend/app/middleware/correlation.py). Adding a denormalized correlation_id column
+%%   to audit_events is tracked as a future hardening task; until then, the request-
+%%   lifecycle diagram and the audit row connect through the structured-log substrate.
 %% - target_record_id nullability: NULL is allowed because authentication events
 %%   (event_type = authentication) and some admin_op events do not target a record.
 %% - Seven indexes (AAP Section 0.4.7) -- not visualized as nodes; documented here:

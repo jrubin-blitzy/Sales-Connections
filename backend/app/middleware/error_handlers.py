@@ -227,8 +227,13 @@ class AppError(Exception):
             (e.g., ``"unauthorized"``).
         message: User-facing message included in the envelope.
         fields: Optional list of field-level error dicts. Each dict
-            SHOULD contain at minimum ``loc`` (string or list) and
-            ``msg`` (string).
+            SHOULD contain at minimum ``field`` (string, dot-notated
+            payload path, or ``"_root"`` for body-level errors) and
+            ``code`` (machine-readable error type), and SHOULD include
+            ``message`` (human-readable text). This shape mirrors the
+            ``ApiErrorField`` interface in
+            ``frontend/src/api/client.ts`` and the canonical envelope
+            documented in ``docs/api.md``.
     """
 
     # Default status/code; subclasses override. These are immutable
@@ -493,12 +498,30 @@ def build_error_response(
 def _serialize_pydantic_errors(exc: ValidationError) -> list[dict[str, Any]]:
     """Convert a pydantic ``ValidationError`` to envelope ``fields``.
 
-    Each entry contains:
-        * ``loc``  -- list of path segments (strings/ints) into the
-                      payload, e.g., ``["body", "linkedin_url"]``.
-        * ``msg``  -- pydantic's human-readable error message.
-        * ``type`` -- pydantic's stable error code, e.g.,
-                      ``"value_error.url"``.
+    Emits the canonical envelope-field shape documented in
+    ``docs/api.md`` and consumed by ``ApiErrorField`` in
+    ``frontend/src/api/client.ts``. Each entry is a dict with three
+    keys:
+
+        * ``field``    -- dot-notated path into the payload (e.g.,
+                          ``"linkedin_url"`` or ``"tags.0.name"``).
+                          The leading ``"body"`` segment that pydantic
+                          inserts when validating request bodies via
+                          Flask is stripped so the SPA can match the
+                          path against its own form-field names. List
+                          indices are joined with ``.`` (e.g.,
+                          ``"tags.2"``). When the entire body fails
+                          (e.g., not a JSON object), the field is
+                          ``"_root"``.
+        * ``code``     -- pydantic's stable error type (e.g.,
+                          ``"missing"``, ``"value_error"``,
+                          ``"string_too_long"``). Surfaced verbatim so
+                          the SPA can branch on the machine-readable
+                          code without parsing English text.
+        * ``message``  -- pydantic's human-readable message (e.g.,
+                          "Field required" or "String too long").
+                          The SPA uses this as the user-visible error
+                          text on the corresponding form input.
 
     Notes:
         * pydantic's ``errors()`` method may include an ``input``
@@ -510,13 +533,18 @@ def _serialize_pydantic_errors(exc: ValidationError) -> list[dict[str, Any]]:
           should not leak.
         * ``url`` (link to pydantic docs) is also dropped because the
           SPA does not need it and it adds payload weight.
+        * The ``"body"`` prefix that Flask adds to ``loc`` for
+          request-body validation is stripped so the SPA's form field
+          names (e.g., ``"email"`` rather than ``"body.email"``)
+          match directly.
 
     Args:
         exc: The pydantic ``ValidationError`` whose ``errors()`` are
             being normalized.
 
     Returns:
-        A list of dicts with the safe-to-echo subset of fields.
+        A list of dicts with the safe-to-echo subset of fields, each
+        carrying ``field``, ``code``, and ``message`` keys.
     """
     output: list[dict[str, Any]] = []
     for err in exc.errors():
@@ -524,12 +552,24 @@ def _serialize_pydantic_errors(exc: ValidationError) -> list[dict[str, Any]]:
         # Convert every loc segment to str for JSON safety while
         # preserving structure. pydantic 2.x sometimes uses tuples
         # of mixed types (str + int for list indices).
-        loc_list = [str(seg) for seg in loc]
+        loc_segments = [str(seg) for seg in loc]
+        # Strip a leading "body" segment so the SPA's form field path
+        # (e.g., "email") matches directly against the envelope's
+        # "field" rather than being prefixed with "body.email". The
+        # leading segment is added by Flask's pydantic integration
+        # when validating the request body via parse_obj_as on the
+        # JSON payload; it is uninformative to the SPA which already
+        # knows the payload origin.
+        if loc_segments and loc_segments[0] == "body":
+            loc_segments = loc_segments[1:]
+        # Join with ``.`` for dot-notation; collapse to "_root" when
+        # the entire body fails (e.g., body is not a JSON object).
+        field_path = ".".join(loc_segments) if loc_segments else "_root"
         output.append(
             {
-                "loc": loc_list,
-                "msg": str(err.get("msg", "Invalid value.")),
-                "type": str(err.get("type", "value_error")),
+                "field": field_path,
+                "code": str(err.get("type", "value_error")),
+                "message": str(err.get("msg", "Invalid value.")),
             }
         )
     return output
