@@ -97,7 +97,6 @@ import { RecordModeration } from "@/features/admin/RecordModeration";
 import { UserManagement } from "@/features/admin/UserManagement";
 
 import { LoginScreen } from "@/features/auth/LoginScreen";
-import { RegisterScreen } from "@/features/auth/RegisterScreen";
 
 import { AddEditConnectionForm } from "@/features/connections/AddEditConnectionForm";
 import { ConnectionDetail } from "@/features/connections/ConnectionDetail";
@@ -139,10 +138,6 @@ export const router = createBrowserRouter([
   {
     path: "/login",
     element: <LoginScreen />,
-  },
-  {
-    path: "/register",
-    element: <RegisterScreen />,
   },
 
   // =========================================================================
