@@ -79,7 +79,7 @@ mediated by :func:`app.api.register_blueprints`.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
 from flask import (
@@ -310,8 +310,6 @@ def _safe_next_path(candidate: str | None) -> str:
     """
     default = "/feed"
     if not candidate:
-        return default
-    if not isinstance(candidate, str):
         return default
     if "://" in candidate or candidate.startswith("//"):
         return default
@@ -710,8 +708,9 @@ def google_start() -> Response:
     # ``Location`` header set to Google's authorization endpoint;
     # Authlib persists the state and PKCE code_verifier in the
     # framework's session storage so the callback handler can validate
-    # and exchange them.
-    return oauth.google.authorize_redirect(redirect_uri)
+    # and exchange them. Authlib's typing returns ``Any``; we narrow
+    # to ``Response`` here so callers get the precise Flask type.
+    return cast("Response", oauth.google.authorize_redirect(redirect_uri))
 
 
 # ---------------------------------------------------------------------------
