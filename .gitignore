@@ -1,0 +1,194 @@
+# .gitignore for Sales-Connections — polyglot Python + TypeScript + Terraform + Docker repository
+# Patterns are organized by category. Add new patterns to the matching category.
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+# Anchor `lib/` and `lib64/` to the repo root so they only match Python
+# distutils build artifacts at the top level, not TypeScript source folders
+# such as frontend/src/lib/.
+/lib/
+/lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+cython_debug/
+htmlcov/
+# Virtualenvs
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+
+# --- Node / Frontend ---
+node_modules/
+.npm
+.eslintcache
+.parcel-cache
+.next
+.nuxt
+.cache
+.vite/
+dist/
+dist-ssr/
+build/
+coverage/
+.nyc_output
+*.tgz
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+.pnpm-store/
+# Vitest temporary files
+.vitest_cache/
+
+# --- Environment and Secrets ---
+.env
+.env.local
+.env.*.local
+.env.development
+.env.development.local
+.env.test
+.env.test.local
+.env.production
+.env.production.local
+*.pem
+*.key
+*.crt
+secrets/
+# IMPORTANT: .env.example IS tracked. Do not exclude it.
+!**/.env.example
+# IMPORTANT: The Terraform Secrets Manager module under infra/terraform/modules/secrets/
+# is legitimate IaC source code, NOT credential storage. Negate the secrets/ rule
+# above for this specific path (and everything beneath it) so its .tf files are tracked.
+!infra/terraform/modules/secrets/
+!infra/terraform/modules/secrets/**
+
+# --- Terraform / Infrastructure ---
+.terraform/
+# .terraform.lock.hcl IS tracked (provider lockfile). Do not add it.
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+# *.tfvars excluded by default; commit specific files explicitly with !pattern overrides
+*.tfvars
+*.tfvars.json
+# Allow committed tfvars where needed
+!variables.tfvars.example
+
+# --- Docker ---
+# Docker Compose state files
+.docker-compose.override.yml
+docker-compose.override.yml
+
+# --- IDE and OS ---
+# JetBrains
+.idea/
+*.iml
+*.iws
+# VS Code — use .vscode/* so the negations below can resurrect team-shared editor config files.
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+# Sublime
+*.sublime-project
+*.sublime-workspace
+# Vim / Emacs
+*.swp
+*.swo
+*~
+.\#*
+\#*\#
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon\r\r
+._*
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+# Linux
+.directory
+.Trash-*
+.nfs*
+
+# --- Logs and Temporary ---
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+*.bak
+*.swp
+
+# --- Sales-Connections Specific ---
+# Local Postgres data persisted by docker-compose volume
+postgres_data/
+# Local secrets directory used by some Authlib examples
+instance/
+# Local AWS profile cache (only if developer copies these into the repo by accident)
+.aws/
+# Local pre-commit hook caches
+.pre-commit-cache/
+# Frontend lockfile NOT excluded — package-lock.json IS tracked
+# Backend lockfile NOT excluded — requirements.txt IS tracked
+# Decision log artefacts are tracked; no exclusion
+
+# END OF .gitignore
+# If you need to add a new pattern, add it under the matching category above.
+# Always test new patterns with: git check-ignore -v <path>

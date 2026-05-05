@@ -1,0 +1,77 @@
+==========================================================================
+Sales-Connections - Alembic Database Migrations
+==========================================================================
+
+This folder contains all Alembic 1.x migration scripts that bring a
+fresh PostgreSQL 17.7 database to the schema required by the
+Sales-Connections backend (per AAP Sec 0.4.7).
+
+For the canonical migration runbook (deploy procedure, rollback,
+secret rotation, dual-role separation), see:
+
+    docs/operations.md - "Migrations" section
+    docs/architecture.md - "Data Tier" section
+
+
+Quick Reference (run from the backend/ directory)
+--------------------------------------------------------------------------
+
+1. Generate a new migration via autogenerate (compares app.models with
+   the live database schema):
+
+       alembic revision --autogenerate -m "short_slug_describing_change"
+
+2. Apply all pending migrations:
+
+       alembic upgrade head
+
+3. Roll back the most recent migration:
+
+       alembic downgrade -1
+
+4. Show the current head and history:
+
+       alembic current
+       alembic history --verbose
+
+5. Stamp the database to a specific revision without running migrations
+   (only use when recovering from a broken migration state):
+
+       alembic stamp <revision_id>
+
+
+Coordination Points
+--------------------------------------------------------------------------
+
+  - Models registered on db.metadata are imported by env.py from
+    app.models (via the package __init__.py re-exports).
+
+  - Database URL is read from the current Flask config (created by
+    app.create_app()), which itself sources DATABASE_URL from the
+    environment or AWS Secrets Manager.
+
+  - The Dockerfile invokes 'alembic upgrade head' at container startup
+    when the RUN_MIGRATIONS environment variable is set to 'true'.
+
+  - The application role used at runtime has INSERT-only privileges on
+    the audit_events table; a separate elevated migrations role retains
+    full DDL/DML privileges. See the GRANT/REVOKE block in the initial
+    schema migration.
+
+
+File Naming Convention
+--------------------------------------------------------------------------
+
+Migrations are numbered sequentially with a zero-padded prefix:
+
+    0001_initial_schema.py
+    0002_add_<feature>.py
+    0003_add_<feature>.py
+
+Each migration has a descriptive slug after the number. Down-revision
+chains are linear (no branching) for MVP simplicity.
+
+
+==========================================================================
+End of README. See docs/operations.md for the full runbook.
+==========================================================================

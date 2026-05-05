@@ -1,0 +1,631 @@
+/*!
+ * Blitzy Reveal.js Theme
+ * Canonical theme for blitzy-deck/index.html
+ * Defines brand identity, typography, and slide layouts.
+ * No external assets; system fonts only; under 20 KB.
+ */
+
+/* ================================================================== */
+/* 1. Design tokens (CSS custom properties)                           */
+/* ================================================================== */
+:root {
+  /* Surface tokens */
+  --blitzy-bg: #0e1117;
+  --blitzy-surface: #161b22;
+  --blitzy-surface-elev: #1c2128;
+
+  /* Foreground tokens */
+  --blitzy-fg: #e6edf3;
+  --blitzy-fg-muted: #8b949e;
+  --blitzy-fg-subtle: #6e7681;
+
+  /* Accent tokens (Blitzy brand blue) */
+  --blitzy-accent: #4f8ef7;
+  --blitzy-accent-soft: #1f6feb;
+  --blitzy-accent-glow: rgba(79, 142, 247, 0.15);
+
+  /* Border tokens */
+  --blitzy-border: #30363d;
+  --blitzy-border-strong: #484f58;
+
+  /* Status tokens */
+  --blitzy-success: #2ea043;
+  --blitzy-warning: #d29922;
+  --blitzy-danger: #f85149;
+
+  /* Geometry tokens */
+  --blitzy-radius: 0.5rem;
+  --blitzy-radius-lg: 0.75rem;
+  --blitzy-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --blitzy-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+
+  /* Typography tokens */
+  --blitzy-font-sans: 'Inter', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
+  --blitzy-font-mono: ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, 'Courier New', monospace;
+}
+
+/* ================================================================== */
+/* 2. Reveal.js base overrides                                        */
+/* ================================================================== */
+.reveal {
+  font-family: var(--blitzy-font-sans);
+  color: var(--blitzy-fg);
+  background: var(--blitzy-bg);
+  font-weight: 400;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.reveal .slides {
+  text-align: left;
+}
+
+.reveal .slides section,
+.reveal .slides section > section {
+  background: var(--blitzy-bg);
+  color: var(--blitzy-fg);
+  padding: 0;
+  box-shadow: none;
+}
+
+/* Reveal.js renders its viewport background on this wrapper too. */
+.reveal-viewport {
+  background: var(--blitzy-bg);
+}
+
+/* ================================================================== */
+/* 3. Heading hierarchy                                                */
+/* ================================================================== */
+.reveal h1,
+.reveal h2,
+.reveal h3,
+.reveal h4,
+.reveal h5,
+.reveal h6 {
+  font-family: var(--blitzy-font-sans);
+  color: var(--blitzy-fg);
+  text-transform: none;
+  letter-spacing: -0.02em;
+  margin: 0 0 0.6em 0;
+  line-height: 1.2;
+  text-shadow: none;
+}
+
+.reveal h1 { font-size: 4.5rem; font-weight: 800; line-height: 1.05; }
+.reveal h2 { font-size: 2.75rem; font-weight: 700; }
+.reveal h3 { font-size: 1.75rem; font-weight: 600; color: var(--blitzy-fg-muted); }
+.reveal h4 { font-size: 1.35rem; font-weight: 600; }
+.reveal h5 { font-size: 1.15rem; font-weight: 600; }
+.reveal h6 { font-size: 1rem;    font-weight: 600; }
+
+/* ================================================================== */
+/* 4. Body text, lists, inline elements, links                        */
+/* ================================================================== */
+.reveal p {
+  font-size: 1.4rem;
+  line-height: 1.55;
+  color: var(--blitzy-fg);
+  margin: 0 0 0.8em 0;
+}
+
+.reveal ul,
+.reveal ol {
+  margin: 0 0 1em 1.5em;
+}
+
+.reveal li {
+  font-size: 1.3rem;
+  line-height: 1.55;
+  margin-bottom: 0.4em;
+}
+
+.reveal strong,
+.reveal b {
+  color: var(--blitzy-accent);
+  font-weight: 700;
+}
+
+.reveal em,
+.reveal i {
+  font-style: italic;
+  color: var(--blitzy-fg-muted);
+}
+
+/* Lucide icons embed <i> as the host element; ensure they are NOT italicized. */
+.reveal i[data-lucide],
+.reveal i[class*="lucide"],
+.reveal i.blitzy-icon-large,
+.reveal i.blitzy-icon-huge {
+  font-style: normal;
+  color: var(--blitzy-accent);
+}
+
+.reveal a {
+  color: var(--blitzy-accent);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.reveal a:hover {
+  color: var(--blitzy-accent-soft);
+  border-bottom-color: var(--blitzy-accent);
+}
+
+.reveal a:focus-visible {
+  outline: 2px solid var(--blitzy-accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ================================================================== */
+/* 5. Reveal.js navigation controls, progress, slide-number           */
+/* ================================================================== */
+.reveal .controls {
+  color: var(--blitzy-accent);
+}
+
+.reveal .progress {
+  color: var(--blitzy-accent);
+  background: var(--blitzy-accent-glow);
+  height: 4px;
+}
+
+.reveal .progress span {
+  background: var(--blitzy-accent);
+}
+
+.reveal .slide-number {
+  background: var(--blitzy-surface);
+  color: var(--blitzy-fg-muted);
+  font-family: var(--blitzy-font-sans);
+  font-size: 0.85rem;
+  font-weight: 500;
+  padding: 0.3em 0.7em;
+  border-radius: var(--blitzy-radius);
+  border: 1px solid var(--blitzy-border);
+}
+
+/* ================================================================== */
+/* 6. Custom slide types                                              */
+/* ================================================================== */
+
+/* 6.1 Title slide (.title-slide.blitzy-title)                        */
+.title-slide.blitzy-title {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}
+
+.title-slide.blitzy-title .blitzy-brand {
+  font-size: 5.5rem;
+  font-weight: 800;
+  background: linear-gradient(135deg, var(--blitzy-accent), var(--blitzy-accent-soft));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  margin: 0 0 0.3em 0;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+
+.title-slide.blitzy-title .blitzy-tagline {
+  font-size: 2rem;
+  font-weight: 400;
+  color: var(--blitzy-fg-muted);
+  margin: 0 0 1.5em 0;
+  border: none;
+}
+
+.title-slide.blitzy-title .blitzy-icon-large {
+  color: var(--blitzy-accent);
+  margin-bottom: 1.5rem;
+}
+
+.title-slide.blitzy-title .blitzy-subtitle {
+  font-size: 1.5rem;
+  color: var(--blitzy-fg);
+  margin: 0 0 0.5em 0;
+}
+
+/* 6.2 Section divider (.section-divider.blitzy-section)              */
+.section-divider.blitzy-section {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}
+
+.section-divider.blitzy-section .blitzy-icon-huge {
+  color: var(--blitzy-accent);
+  margin: 0 0 2rem 0;
+}
+
+.section-divider.blitzy-section h2 {
+  font-size: 4rem;
+  background: linear-gradient(135deg, var(--blitzy-accent), var(--blitzy-accent-soft));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  margin: 0;
+  border: none;
+  padding: 0;
+}
+
+.section-divider.blitzy-section .blitzy-section-sub {
+  font-size: 1.5rem;
+  color: var(--blitzy-fg-muted);
+  margin-top: 1em;
+  max-width: 60ch;
+  line-height: 1.4;
+}
+
+/* 6.3 Content slide (.content-slide)                                 */
+.content-slide {
+  padding: 2rem 3rem;
+  height: 100%;
+}
+
+.content-slide h2 {
+  border-bottom: 2px solid var(--blitzy-border);
+  padding-bottom: 0.4em;
+  margin-bottom: 0.8em;
+  position: relative;
+}
+
+.content-slide h2::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: -2px;
+  width: 4rem;
+  height: 2px;
+  background: var(--blitzy-accent);
+}
+
+/* 6.4 Diagram slide (.diagram-slide)                                 */
+.diagram-slide {
+  padding: 2rem 3rem;
+}
+
+.diagram-slide .mermaid {
+  background: var(--blitzy-surface);
+  border: 1px solid var(--blitzy-border);
+  border-radius: var(--blitzy-radius-lg);
+  padding: 1.5rem;
+  max-width: 100%;
+  margin: 1rem auto;
+  overflow: hidden;
+}
+
+.diagram-slide .mermaid svg {
+  max-width: 100%;
+  max-height: 70vh;
+  height: auto;
+  background: transparent;
+  display: block;
+  margin: 0 auto;
+}
+
+/* 6.5 Closing slide (.closing-slide.blitzy-closing)                  */
+.closing-slide.blitzy-closing {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}
+
+.closing-slide.blitzy-closing h2 {
+  font-size: 3.5rem;
+  background: linear-gradient(135deg, var(--blitzy-accent), var(--blitzy-accent-soft));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  margin: 0 0 1.2em 0;
+  border: none;
+}
+
+/* ================================================================== */
+/* 7. Layout helpers                                                  */
+/* ================================================================== */
+
+/* 7.1 Icon size containers                                           */
+.blitzy-icon-large {
+  width: 80px;
+  height: 80px;
+  display: inline-block;
+  color: var(--blitzy-accent);
+}
+
+.blitzy-icon-huge {
+  width: 120px;
+  height: 120px;
+  display: inline-block;
+  color: var(--blitzy-accent);
+}
+
+.blitzy-icon-large svg,
+.blitzy-icon-huge svg {
+  width: 100%;
+  height: 100%;
+  stroke-width: 1.5;
+}
+
+/* 7.2 Feature grid (4-column for the 14 MVP features on slide 3)     */
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 2rem;
+}
+
+.feature-grid .feature-cell {
+  background: var(--blitzy-surface);
+  border: 1px solid var(--blitzy-border);
+  border-radius: var(--blitzy-radius);
+  padding: 1.25rem 1rem;
+  text-align: center;
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.feature-grid .feature-cell:hover {
+  border-color: var(--blitzy-accent);
+  background: var(--blitzy-surface-elev);
+  transform: translateY(-2px);
+}
+
+.feature-grid .feature-cell svg {
+  width: 40px;
+  height: 40px;
+  color: var(--blitzy-accent);
+  stroke-width: 1.5;
+}
+
+.feature-grid .feature-cell .feature-id {
+  font-family: var(--blitzy-font-mono);
+  font-size: 0.85rem;
+  color: var(--blitzy-fg-subtle);
+  display: block;
+}
+
+.feature-grid .feature-cell .feature-name {
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--blitzy-fg);
+  display: block;
+  line-height: 1.3;
+}
+
+/* 7.3 Decision / risk / next-tasks grids                             */
+.decision-grid,
+.risk-grid,
+.next-tasks {
+  display: grid;
+  gap: 1.5rem;
+  margin-top: 1.5rem;
+  list-style: none;
+  padding: 0;
+}
+
+.decision-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.risk-grid {
+  grid-template-columns: 1fr 1fr;
+}
+
+.next-tasks {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* 7.4 Generic surface containers (.card, .cell)                      */
+.card,
+.cell {
+  background: var(--blitzy-surface);
+  border: 1px solid var(--blitzy-border);
+  border-radius: var(--blitzy-radius);
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.card:hover,
+.cell:hover {
+  border-color: var(--blitzy-accent);
+  background: var(--blitzy-surface-elev);
+}
+
+.card svg,
+.cell svg {
+  width: 32px;
+  height: 32px;
+  color: var(--blitzy-accent);
+  flex-shrink: 0;
+  stroke-width: 1.5;
+}
+
+.card h3,
+.cell h3 {
+  font-size: 1.25rem;
+  margin: 0;
+  color: var(--blitzy-fg);
+  border: none;
+  padding: 0;
+}
+
+.card p,
+.cell p {
+  font-size: 1rem;
+  line-height: 1.5;
+  color: var(--blitzy-fg-muted);
+  margin: 0;
+}
+
+/* Brand-level coloring for inline span "heading"/"body" pairs used    */
+/* across .card, .cell, and .next-tasks .item containers.             */
+.card .heading,
+.cell .heading,
+.next-tasks .item .heading {
+  color: var(--blitzy-fg);
+  font-weight: 600;
+}
+
+.card .body,
+.cell .body,
+.next-tasks .item .body {
+  color: var(--blitzy-fg-muted);
+}
+
+/* 7.5 Risk severity variants (border supplements icon + text;        */
+/*     never the only differentiator per accessibility guideline)     */
+.cell.risk-high   { border-left: 4px solid var(--blitzy-danger); }
+.cell.risk-medium { border-left: 4px solid var(--blitzy-warning); }
+.cell.risk-low    { border-left: 4px solid var(--blitzy-success); }
+.cell.mitigation  { border-left: 4px solid var(--blitzy-success); }
+
+/* 7.6 Caption helper (small muted text below diagrams)               */
+.caption {
+  font-size: 1rem;
+  color: var(--blitzy-fg-muted);
+  font-style: italic;
+  text-align: center;
+  margin-top: 0.75rem;
+  line-height: 1.4;
+}
+
+/* 7.7 Brand credit text (title + closing slides)                     */
+.blitzy-credit {
+  font-size: 0.9rem;
+  color: var(--blitzy-fg-subtle);
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  margin-top: 1.5em;
+  font-weight: 500;
+}
+
+/* ================================================================== */
+/* 8. Mermaid diagram theming (outer container only)                  */
+/* ================================================================== */
+.reveal .mermaid {
+  text-align: center;
+  font-family: var(--blitzy-font-sans);
+  line-height: 1.4;
+}
+
+.reveal .mermaid svg {
+  background: transparent;
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+}
+
+/* Ensure Mermaid text inherits the Blitzy font where Mermaid does    */
+/* not enforce its own font-family on individual labels.              */
+.reveal .mermaid foreignObject div,
+.reveal .mermaid .label,
+.reveal .mermaid .nodeLabel,
+.reveal .mermaid .edgeLabel {
+  font-family: var(--blitzy-font-sans) !important;
+}
+
+/* ================================================================== */
+/* 9. Tables                                                          */
+/* ================================================================== */
+.reveal table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1em 0;
+  font-size: 1.1rem;
+  background: transparent;
+}
+
+.reveal table thead th {
+  background: var(--blitzy-surface);
+  color: var(--blitzy-accent);
+  border-bottom: 2px solid var(--blitzy-border);
+  text-align: left;
+  padding: 0.6em 0.8em;
+  font-weight: 600;
+  font-size: 1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.reveal table tbody td {
+  border-bottom: 1px solid var(--blitzy-border);
+  padding: 0.6em 0.8em;
+  color: var(--blitzy-fg);
+  vertical-align: top;
+}
+
+.reveal table tbody tr:hover td {
+  background: var(--blitzy-surface);
+}
+
+/* ================================================================== */
+/* 10. Inline code (e.g., feature IDs F-001)                          */
+/* ================================================================== */
+.reveal code {
+  font-family: var(--blitzy-font-mono);
+  font-size: 0.95em;
+  background: var(--blitzy-surface);
+  color: var(--blitzy-accent);
+  padding: 0.15em 0.4em;
+  border-radius: 0.25rem;
+  border: 1px solid var(--blitzy-border);
+}
+
+/* ================================================================== */
+/* 11. Accessibility and focus                                        */
+/* ================================================================== */
+.reveal button:focus-visible,
+.reveal a:focus-visible,
+.reveal [tabindex]:focus-visible {
+  outline: 2px solid var(--blitzy-accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal *,
+  .reveal *::before,
+  .reveal *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+/* ================================================================== */
+/* 12. Responsive resilience (smaller projector resolutions)          */
+/* ================================================================== */
+@media (max-width: 1280px) {
+  .feature-grid  { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .decision-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 900px) {
+  .feature-grid  { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .decision-grid { grid-template-columns: 1fr; }
+  .risk-grid     { grid-template-columns: 1fr; }
+  .next-tasks    { grid-template-columns: 1fr; }
+  .reveal h1     { font-size: 3.5rem; }
+  .reveal h2     { font-size: 2.25rem; }
+}

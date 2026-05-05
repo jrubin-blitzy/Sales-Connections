@@ -1,0 +1,382 @@
+# =============================================================================
+# Sales-Connections - Local Development Stack
+# =============================================================================
+# Brings up PostgreSQL 17 + Flask backend + Vite-built frontend on a shared
+# bridge network. Optional pgadmin profile is available for SQL inspection.
+#
+# This file enforces the user's "Onboarding & Continued Development" rule
+# (AAP 0.7.5): a new contributor goes from a clean machine to a running,
+# modifiable application without asking questions. It is also the verification
+# environment for the user's "Observability" rule (AAP 0.7.4): /healthz,
+# /readyz, /metrics, structured logs, and OpenTelemetry traces must all be
+# reachable through this stack.
+#
+# Usage
+# -----
+#   # Optional - pre-create env files (the stack runs without them):
+#   cp backend/.env.example  backend/.env
+#   cp frontend/.env.example frontend/.env
+#
+#   # Bring up the application stack (postgres + backend + frontend):
+#   docker compose up --build
+#
+#   # Include pgadmin (optional SQL UI on http://localhost:5050):
+#   docker compose --profile tools up --build
+#
+#   # Tear down everything including the database volume:
+#   docker compose down -v
+#
+# Service map
+# -----------
+#   postgres   container 5432 -> host 5432    Postgres 17 dev database
+#   backend    container 8000 -> host 5000    Flask + Gunicorn API
+#   frontend   container 80   -> host 5173    Vite-built SPA served by nginx
+#   pgadmin    container 80   -> host 5050    Optional SQL UI (profile=tools)
+#
+# Networking
+# ----------
+# All services share the user-defined bridge network "sales-connections-net".
+# Inter-service DNS resolves on service names: the backend reaches Postgres at
+# host "postgres", and pgadmin reaches it the same way. Host-side debugging
+# tools (psql, DBeaver, browsers) reach the published ports on localhost.
+#
+# Secrets
+# -------
+# All credentials in this file are CLEARLY DEV-ONLY. Production credentials
+# come from AWS Secrets Manager via the ECS task role (AAP 0.4.6) and never
+# appear in any docker-compose.yml or shell history. The ${VAR:-} pattern on
+# Anthropic and Google variables silently passes empty strings when the host
+# does not export them - F-002 AI failure is non-blocking (AAP 0.4.4) and the
+# Google OAuth flow is exercised against a developer-owned sandbox client.
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # postgres - relational data store (AAP 0.3.1, 0.5.2)
+  # ---------------------------------------------------------------------------
+  # Pinned to the 17 major series to match the production target (PostgreSQL
+  # 17.7 LTS on RDS Multi-AZ - AAP 0.4.6). The Alpine variant keeps the local
+  # image small. Data is persisted in a named volume so "docker compose up"
+  # and "down" cycles do not destroy database state; "down -v" wipes it.
+  postgres:
+    image: postgres:17-alpine
+    container_name: sales-connections-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sales_connections
+      POSTGRES_USER: sales_connections
+      # Dev-only password. Production uses AWS Secrets Manager (AAP 0.4.6).
+      POSTGRES_PASSWORD: sales_connections_dev
+      # PGDATA subdirectory keeps the volume root clean and avoids the
+      # "directory not empty" error if a non-empty mount is attached later.
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      # Exposed to the host for psql / DBeaver / pgAdmin. Safe in dev only.
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # pg_isready returns success only when Postgres is accepting connections
+      # for the named user/db. The backend's depends_on condition gates on
+      # this, so Alembic migrations never race against a still-starting db.
+      test: ["CMD-SHELL", "pg_isready -U sales_connections -d sales_connections"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - sales-connections-net
+
+  # ---------------------------------------------------------------------------
+  # backend - Flask 3.1.3 + Gunicorn application server (AAP 0.5.2)
+  # ---------------------------------------------------------------------------
+  # Built from ./backend/Dockerfile (multi-stage Python 3.12-slim image).
+  # The image's entrypoint conditionally runs Alembic migrations when the
+  # RUN_MIGRATIONS env var is "true"; otherwise it execs Gunicorn against
+  # wsgi:app. We set RUN_MIGRATIONS="true" here so the schema is brought to
+  # head automatically on first run - this is the user's "5-minute first-run"
+  # ergonomic.
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: sales-connections-backend:dev
+    container_name: sales-connections-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        # service_healthy gates startup on pg_isready (see above) so Alembic
+        # never races. Per AAP 0.5.2 this is the prescribed ordering.
+        condition: service_healthy
+    environment:
+      # ---- Flask runtime ----
+      FLASK_ENV: development
+      LOG_LEVEL: DEBUG
+      # Two Gunicorn workers in dev: enough for parallel requests during
+      # manual testing without saturating a developer laptop.
+      WEB_CONCURRENCY: "2"
+
+      # ---- Database connections (service-name DNS, NOT localhost) ----
+      # The host "postgres" resolves via the user-defined bridge network.
+      # Production overrides these with the RDS endpoint from Terraform.
+      #
+      # CRITICAL (per AAP Section 0.7.4 / 0.4.6 -- "Audit table writes
+      # restricted to backend service identity at the database privilege
+      # layer. The application role can INSERT only; UPDATE and DELETE
+      # are revoked"):
+      #
+      #   * DATABASE_URL points to ``sales_connections_app`` -- the
+      #     RESTRICTED role provisioned by migration
+      #     ``0002_token_version_and_app_role``. This role has
+      #     ``GRANT SELECT, INSERT`` on ``audit_events`` and explicit
+      #     ``REVOKE UPDATE, DELETE`` per migration 0001 PHASE D
+      #     (re-applied in 0002 PHASE 3). Using this role at runtime
+      #     means the database layer is the LAST LINE OF DEFENSE for
+      #     the append-only audit invariant: even if application code
+      #     erroneously attempts to UPDATE or DELETE an audit row,
+      #     PostgreSQL refuses with "permission denied for table
+      #     audit_events". This closes the QA Checkpoint 4 finding
+      #     "Issue 10: Application connects to PostgreSQL as superuser,
+      #     bypassing audit immutability".
+      #
+      #   * MIGRATIONS_DATABASE_URL points to the schema OWNER role
+      #     ``sales_connections`` so Alembic has full DDL/DML
+      #     privileges (CREATE TABLE, CREATE INDEX, GRANT/REVOKE, and
+      #     CREATE ROLE for the app-role provisioning in migration
+      #     0002). The migration env (backend/migrations/env.py)
+      #     prefers MIGRATIONS_DATABASE_URL over DATABASE_URL when
+      #     both are set, so the same container can run migrations
+      #     (elevated) and serve requests (restricted).
+      #
+      # The dev-only password for the app role is hardcoded in
+      # migration 0002 PHASE 2 ("APP_DB_PASSWORD" default value
+      # ``sales_connections_app_dev``). Production sets these from
+      # AWS Secrets Manager via the ECS task role (AAP 0.4.6).
+      DATABASE_URL: postgresql+psycopg://sales_connections_app:sales_connections_app_dev@postgres:5432/sales_connections
+      MIGRATIONS_DATABASE_URL: postgresql+psycopg://sales_connections:sales_connections_dev@postgres:5432/sales_connections
+
+      # ---- First-run migrations ----
+      # The backend Dockerfile's CMD inspects RUN_MIGRATIONS and either runs
+      # "alembic upgrade head" or starts Gunicorn. We set "true" so a fresh
+      # docker compose up brings the schema to head once and then exits;
+      # subsequent runs of the same container exec gunicorn normally. See
+      # AAP 0.5.2 backend Dockerfile spec.
+      #
+      # Migrations use MIGRATIONS_DATABASE_URL (above) which has the
+      # elevated privileges needed to CREATE the ``sales_connections_app``
+      # role on first run. Subsequent runs are idempotent.
+      RUN_MIGRATIONS: "true"
+
+      # ---- JWT signing (F-012) ----
+      # DEV-ONLY value. Production reads this from AWS Secrets Manager.
+      # Rotating this value invalidates every active session (intentional).
+      JWT_SIGNING_KEY: dev-only-jwt-signing-key-do-not-use-in-production
+
+      # ---- Anthropic Claude API (F-002) ----
+      # Pass through from the host environment. When unset, the backend's
+      # AI orchestration layer surfaces a non-blocking failure (AAP 0.4.4)
+      # and form submission still succeeds with empty AI notes.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+
+      # ---- Google OAuth 2.0 (F-012) ----
+      # Pass through from the host. When unset, only the email/password
+      # auth path works locally.
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+
+      # ---- Observability ----
+      # Empty endpoint disables OTLP export locally (no otel-collector in
+      # the dev stack). Override in backend/.env or via host env if running
+      # a local collector. Structured JSON logs and /metrics still work
+      # without OTLP export - they reach stdout and the prometheus_client
+      # registry respectively.
+      OTLP_EXPORTER_ENDPOINT: ""
+
+      # ---- CORS ----
+      # The Flask app whitelists this origin for cookie-bearing requests.
+      FRONTEND_ORIGIN: http://localhost:5173
+    env_file:
+      # Optional override: a contributor may place a backend/.env file with
+      # a personal Anthropic key, OAuth client credentials, etc. Marked
+      # required: false so the stack runs cleanly on a fresh checkout that
+      # has no .env file at all.
+      - path: ./backend/.env
+        required: false
+    ports:
+      # Host 5000 -> container 8000 (Gunicorn bind). The frontend's
+      # FRONTEND_API_BASE_URL and the README quick-start both refer to
+      # http://localhost:5000.
+      - "5000:8000"
+    volumes:
+      # Bind-mount the backend source for hot iteration. The default CMD
+      # runs Gunicorn (production-like); contributors who want auto-reload
+      # can override the command via "docker compose run" or a developer-
+      # local docker-compose.override.yml that adds "--reload" to gunicorn.
+      # The :cached flag is a macOS Docker Desktop hint (no-op on Linux).
+      - ./backend:/app:cached
+    healthcheck:
+      # Ping the Flask /healthz liveness endpoint from inside the container
+      # using the stdlib only - the slim image has no curl in the runtime
+      # stage by default. urlopen raises on non-2xx, which exits non-zero
+      # via Python's automatic exception propagation.
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz').read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      # The first run also executes Alembic migrations (RUN_MIGRATIONS),
+      # so we give the container a generous start_period before considering
+      # health failures fatal.
+      start_period: 20s
+    networks:
+      - sales-connections-net
+
+  # ---------------------------------------------------------------------------
+  # frontend - React 19 SPA built by Vite, served by nginx (AAP 0.5.2)
+  # ---------------------------------------------------------------------------
+  # Built from ./frontend/Dockerfile (multi-stage: node:20 builder ->
+  # nginx:1.27-alpine runtime). VITE_* variables are read at BUILD time by
+  # Vite, never at runtime by nginx - so they are passed via build args, not
+  # the runtime environment. Changing VITE_* values requires --build, not
+  # just --restart.
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Default to absolute backend URL so the SPA's fetch() calls reach
+        # the published backend port. A contributor running `npm run dev`
+        # outside compose can leave VITE_API_BASE_URL empty and rely on
+        # the Vite dev-server proxy instead.
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:5000}
+    image: sales-connections-frontend:dev
+    container_name: sales-connections-frontend
+    restart: unless-stopped
+    depends_on:
+      # Backend is not strictly required for the SPA shell to render, but
+      # ordering helps the docker compose UX so logs appear in the same
+      # order developers reason about the topology.
+      - backend
+    env_file:
+      # Optional - contributors may place feature flags or alternate API
+      # base URLs in frontend/.env. Note: VITE_* vars in this file are NOT
+      # picked up by the running nginx container; they would only take
+      # effect on the NEXT image build.
+      - path: ./frontend/.env
+        required: false
+    ports:
+      # Host 5173 mirrors the Vite dev-server default port so the URL is
+      # familiar; container 80 is the nginx default for the production-
+      # static image. Per AAP 0.5.2: "Pick 5173:80 to match the Vite-default
+      # mental model on the host while keeping the nginx-based image inside
+      # the container."
+      - "5173:80"
+    networks:
+      - sales-connections-net
+
+  # ---------------------------------------------------------------------------
+  # pgadmin - optional SQL UI under the "tools" profile (AAP 0.5.2)
+  # ---------------------------------------------------------------------------
+  # Behind a profile so a default `docker compose up` does NOT pay the cost
+  # of launching it. Activate with: `docker compose --profile tools up`.
+  # Single-user mode (PGADMIN_CONFIG_SERVER_MODE=False) avoids the master-
+  # password prompt for local development.
+  pgadmin:
+    # AAP Sec 0.7.7 mandates pinned versions everywhere — no `latest`,
+    # `^`, or `~` ranges. pgAdmin is an optional `tools` profile
+    # container off the critical local-dev path, but the pin keeps the
+    # local environment reproducible. Update only with a corresponding
+    # decision-log entry per the Explainability rule (AAP Sec 0.7.5).
+    image: dpage/pgadmin4:8.13
+    container_name: sales-connections-pgadmin
+    restart: unless-stopped
+    profiles:
+      - tools
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@sales-connections.local
+      PGADMIN_DEFAULT_PASSWORD: admin
+      # Single-user (desktop) mode - skips the master-password ceremony.
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+    volumes:
+      # Persist saved server connections, query history, and preferences
+      # across container restarts.
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - sales-connections-net
+
+  # ---------------------------------------------------------------------------
+  # jaeger - optional distributed-tracing collector + UI (AAP 0.7.5)
+  # ---------------------------------------------------------------------------
+  # Behind the "tracing" profile so a default `docker compose up` does NOT
+  # pay the cost of launching it. Activate with:
+  #   docker compose --profile tracing up
+  #
+  # Jaeger all-in-one bundles the OTLP collector, an in-memory span store,
+  # and the query/UI service into one container. The :OTLP HTTP endpoint
+  # is exposed on host port 4318 so the backend's ``OTLP_EXPORTER_ENDPOINT``
+  # config can point at ``http://jaeger:4318/v1/traces`` (intra-network)
+  # or ``http://localhost:4318/v1/traces`` (host-side curl). The query UI
+  # lives at http://localhost:16686 (verifies trace propagation per the
+  # AAP §0.7.5 Observability rule).
+  #
+  # Per QA Checkpoint 10 Issue 10: the onboarding doc's "docker compose
+  # --profile tracing up" instruction now resolves to this service rather
+  # than failing with "no such profile".
+  #
+  # Pinned image per AAP §0.7.7. Update only via a decision-log entry.
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    container_name: sales-connections-jaeger
+    restart: unless-stopped
+    profiles:
+      - tracing
+    environment:
+      # Enable the OTLP receiver alongside the legacy Jaeger collectors.
+      # The backend's OTLP HTTP exporter targets port 4318 by default.
+      COLLECTOR_OTLP_ENABLED: "true"
+      # Keep span retention modest in local dev; the in-memory store is
+      # bounded by max-traces, not time. 50K traces is plenty for
+      # interactive debugging without consuming excessive memory.
+      MEMORY_MAX_TRACES: "50000"
+    ports:
+      # Jaeger UI (browse traces).
+      - "16686:16686"
+      # OTLP HTTP receiver (the backend posts spans here when
+      # OTLP_EXPORTER_ENDPOINT is set to http://localhost:4318/v1/traces).
+      - "4318:4318"
+      # OTLP gRPC receiver (alternative transport; not used by default
+      # because the backend's exporter is HTTP/protobuf per DL-0049).
+      - "4317:4317"
+    networks:
+      - sales-connections-net
+
+
+# =============================================================================
+# Networks
+# =============================================================================
+# A single user-defined bridge network shared by every service. This gives
+# us deterministic DNS (service name -> container IP) without polluting the
+# default docker network. The explicit "name:" key fixes the on-disk network
+# name regardless of the project name docker derives from the directory.
+networks:
+  sales-connections-net:
+    driver: bridge
+    name: sales-connections-net
+
+
+# =============================================================================
+# Volumes
+# =============================================================================
+# Named volumes (rather than bind mounts) for stateful container data. The
+# explicit "name:" key fixes the on-disk volume name regardless of the
+# compose project name and matches the deterministic naming convention used
+# by the production Terraform modules under infra/terraform/modules/database.
+volumes:
+  postgres_data:
+    name: sales-connections-postgres-data
+  pgadmin_data:
+    name: sales-connections-pgadmin-data

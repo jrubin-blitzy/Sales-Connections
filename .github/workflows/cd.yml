@@ -1,0 +1,936 @@
+# =====================================================================
+# Sales-Connections Continuous Deployment
+# =====================================================================
+# Purpose: Build, push, and deploy the Sales-Connections stack on every
+#   push to main, with explicit approval gates for staging and prod.
+#
+# Pipeline shape:
+#   1. build-and-push      - Build backend + frontend images, push to ECR
+#                            via OIDC. Runs unconditionally on push to main.
+#   2. deploy-dev          - Auto-apply terraform against dev workspace
+#                            (no approval gate; dev is fast-iteration).
+#   3. plan-staging        - Generate a plan artifact for staging review.
+#   4. deploy-staging      - Auto-apply against staging using the plan
+#                            artifact (staging environment in GitHub
+#                            Environments may add reviewer requirements).
+#   5. plan-prod           - Generate a plan artifact for prod review
+#                            (gated behind workflow_dispatch).
+#   6. deploy-prod         - Manual approval via the `prod` GitHub
+#                            Environment. Applies the prod plan artifact.
+#
+# Secrets required (set per repository or per environment):
+#   AWS_DEPLOY_ROLE_ARN_DEV        - OIDC role for dev workspace
+#   AWS_DEPLOY_ROLE_ARN_STAGING    - OIDC role for staging workspace
+#   AWS_DEPLOY_ROLE_ARN_PROD       - OIDC role for prod workspace
+#   AWS_REGION                     - AWS region (e.g., us-east-1)
+#   ECR_REGISTRY                   - ECR registry hostname (e.g.,
+#                                    123456789012.dkr.ecr.us-east-1.amazonaws.com)
+#
+# Per-environment variables in GitHub Environments:
+#   TF_BACKEND_BUCKET              - S3 bucket for terraform state
+#   TF_BACKEND_KEY_PREFIX          - S3 key prefix for state files
+#   TF_BACKEND_DYNAMODB_TABLE      - DynamoDB table for state locking
+# =====================================================================
+
+name: CD - Build, Push, Deploy
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "blitzy-deck/**"
+      - "**.md"
+      - ".github/CODEOWNERS"
+      - ".github/pull_request_template.md"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment (used only when triggered manually for prod redeploy)."
+        required: true
+        default: "prod"
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      backend_image_tag:
+        description: "Backend image tag to deploy (defaults to current git SHA)."
+        required: false
+        default: ""
+        type: string
+      frontend_image_tag:
+        description: "Frontend image tag to deploy (defaults to current git SHA)."
+        required: false
+        default: ""
+        type: string
+
+# Cancel any superseded CD run on the same branch to avoid races.
+# Note: do NOT cancel apply-in-progress jobs (Terraform locking handles those);
+# only the build-and-push and plan jobs are cancellable.
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: false
+
+# Minimum-privilege default permissions per AAP Sec 0.7.4 security posture.
+# Individual jobs that need OIDC tokens elevate id-token to write at job scope.
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write     # Required for aws-actions/configure-aws-credentials@v4 OIDC
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "20"
+  TERRAFORM_VERSION: "1.7.5"
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+  IMAGE_NAME_BACKEND: "sales-connections-backend"
+  IMAGE_NAME_FRONTEND: "sales-connections-frontend"
+
+jobs:
+  # =====================================================================
+  # Job 1: build-and-push
+  # =====================================================================
+  # Builds backend (Flask 3.1.3) and frontend (React 19.2.5) container
+  # images, pushes them to ECR tagged with the commit SHA, the short SHA,
+  # and `latest`. Authentication to AWS uses OIDC via configure-aws-credentials
+  # so no long-lived AWS access keys are stored in GitHub Secrets per
+  # AAP Sec 0.4.6.
+  # =====================================================================
+  build-and-push:
+    name: Build and Push Images
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+
+    outputs:
+      backend_image_uri: ${{ steps.metadata-backend.outputs.tags }}
+      frontend_image_uri: ${{ steps.metadata-frontend.outputs.tags }}
+      backend_image_digest: ${{ steps.docker-build-backend.outputs.digest }}
+      frontend_image_digest: ${{ steps.docker-build-frontend.outputs.digest }}
+      git_sha_short: ${{ steps.compute-tags.outputs.git_sha_short }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Compute image tags
+        id: compute-tags
+        run: |
+          git_sha_short="$(echo "${GITHUB_SHA}" | cut -c1-7)"
+          echo "git_sha_short=${git_sha_short}" >> "${GITHUB_OUTPUT}"
+          echo "Computed short SHA: ${git_sha_short}"
+
+      - name: Configure AWS credentials (OIDC, dev role for ECR push)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN_DEV }}
+          role-session-name: gha-cd-build-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          install: true
+          driver-opts: |
+            image=moby/buildkit:v0.16.0
+
+      - name: Generate backend image metadata
+        id: metadata-backend
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME_BACKEND }}
+          tags: |
+            type=sha,format=long,prefix=
+            type=sha,format=short,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ inputs.backend_image_tag }},enable=${{ inputs.backend_image_tag != '' }}
+          labels: |
+            org.opencontainers.image.title=sales-connections-backend
+            org.opencontainers.image.description=Sales-Connections Flask 3.1.3 REST API
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=Proprietary
+
+      - name: Build and push backend image
+        id: docker-build-backend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          provenance: false
+          sbom: false
+          tags: ${{ steps.metadata-backend.outputs.tags }}
+          labels: ${{ steps.metadata-backend.outputs.labels }}
+          cache-from: type=registry,ref=${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME_BACKEND }}:cache
+          cache-to: type=registry,ref=${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME_BACKEND }}:cache,mode=max
+          platforms: linux/amd64
+
+      - name: Generate frontend image metadata
+        id: metadata-frontend
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME_FRONTEND }}
+          tags: |
+            type=sha,format=long,prefix=
+            type=sha,format=short,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ inputs.frontend_image_tag }},enable=${{ inputs.frontend_image_tag != '' }}
+          labels: |
+            org.opencontainers.image.title=sales-connections-frontend
+            org.opencontainers.image.description=Sales-Connections React 19.2.5 SPA served by nginx
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=Proprietary
+
+      - name: Build and push frontend image
+        id: docker-build-frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          provenance: false
+          sbom: false
+          tags: ${{ steps.metadata-frontend.outputs.tags }}
+          labels: ${{ steps.metadata-frontend.outputs.labels }}
+          cache-from: type=registry,ref=${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME_FRONTEND }}:cache
+          cache-to: type=registry,ref=${{ env.ECR_REGISTRY }}/${{ env.IMAGE_NAME_FRONTEND }}:cache,mode=max
+          platforms: linux/amd64
+          build-args: |
+            VITE_API_BASE_URL=/api
+
+      - name: Print image digests
+        run: |
+          echo "Backend digest:  ${{ steps.docker-build-backend.outputs.digest }}"
+          echo "Frontend digest: ${{ steps.docker-build-frontend.outputs.digest }}"
+          echo "Backend tags:    ${{ steps.metadata-backend.outputs.tags }}"
+          echo "Frontend tags:   ${{ steps.metadata-frontend.outputs.tags }}"
+
+  # =====================================================================
+  # Job 2: deploy-dev
+  # =====================================================================
+  # Auto-applies the Terraform plan against the `dev` workspace immediately
+  # after build-and-push succeeds. Dev is fast-iteration with no approval
+  # gate. The GitHub Environment `dev` may still require reviewers if the
+  # team chooses; configure those rules in repository Settings.
+  # =====================================================================
+  deploy-dev:
+    name: Deploy to Dev (auto)
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'dev')
+    timeout-minutes: 30
+    environment:
+      name: dev
+      url: ${{ steps.tf-output.outputs.application_url }}
+    permissions:
+      contents: read
+      id-token: write
+
+    defaults:
+      run:
+        working-directory: infra/terraform
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC, dev role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN_DEV }}
+          role-session-name: gha-cd-deploy-dev-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform fmt check
+        run: terraform fmt -check -recursive
+
+      - name: Terraform init (dev backend)
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ vars.TF_BACKEND_BUCKET }}" \
+            -backend-config="key=${{ vars.TF_BACKEND_KEY_PREFIX }}/dev/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ vars.TF_BACKEND_DYNAMODB_TABLE }}" \
+            -backend-config="encrypt=true"
+
+      - name: Terraform validate
+        run: terraform validate
+
+      - name: Terraform plan (dev)
+        env:
+          TF_VAR_environment: dev
+          TF_VAR_aws_region: ${{ env.AWS_REGION }}
+          TF_VAR_github_actions_deploy_role_arn: ${{ secrets.AWS_DEPLOY_ROLE_ARN_DEV }}
+          TF_VAR_backend_image_tag: ${{ needs.build-and-push.outputs.git_sha_short && format('sha-{0}', needs.build-and-push.outputs.git_sha_short) || 'latest' }}
+          TF_VAR_frontend_image_tag: ${{ needs.build-and-push.outputs.git_sha_short && format('sha-{0}', needs.build-and-push.outputs.git_sha_short) || 'latest' }}
+        run: |
+          terraform plan \
+            -var-file=envs/dev/dev.tfvars \
+            -out=tfplan-dev.binary
+
+      - name: Terraform apply (dev)
+        env:
+          TF_VAR_environment: dev
+          TF_VAR_aws_region: ${{ env.AWS_REGION }}
+          TF_VAR_github_actions_deploy_role_arn: ${{ secrets.AWS_DEPLOY_ROLE_ARN_DEV }}
+          TF_VAR_backend_image_tag: ${{ needs.build-and-push.outputs.git_sha_short && format('sha-{0}', needs.build-and-push.outputs.git_sha_short) || 'latest' }}
+          TF_VAR_frontend_image_tag: ${{ needs.build-and-push.outputs.git_sha_short && format('sha-{0}', needs.build-and-push.outputs.git_sha_short) || 'latest' }}
+        run: terraform apply -auto-approve tfplan-dev.binary
+
+      - name: Capture Terraform outputs
+        id: tf-output
+        run: |
+          application_url="$(terraform output -raw application_url 2>/dev/null || echo '')"
+          alb_dns_name="$(terraform output -raw alb_dns_name 2>/dev/null || echo '')"
+          ecs_cluster_name="$(terraform output -raw ecs_cluster_name 2>/dev/null || echo '')"
+          ecs_migration_task_definition_family="$(terraform output -raw ecs_migration_task_definition_family 2>/dev/null || echo '')"
+          ecs_security_group_id="$(terraform output -raw ecs_security_group_id 2>/dev/null || echo '')"
+          private_subnet_ids="$(terraform output -json private_subnet_ids 2>/dev/null || echo '[]')"
+          echo "application_url=${application_url}" >> "${GITHUB_OUTPUT}"
+          echo "alb_dns_name=${alb_dns_name}" >> "${GITHUB_OUTPUT}"
+          echo "ecs_cluster_name=${ecs_cluster_name}" >> "${GITHUB_OUTPUT}"
+          echo "ecs_migration_task_definition_family=${ecs_migration_task_definition_family}" >> "${GITHUB_OUTPUT}"
+          echo "ecs_security_group_id=${ecs_security_group_id}" >> "${GITHUB_OUTPUT}"
+          echo "private_subnet_ids=${private_subnet_ids}" >> "${GITHUB_OUTPUT}"
+          echo "Application URL: ${application_url}"
+          echo "ALB DNS:         ${alb_dns_name}"
+          echo "ECS cluster:     ${ecs_cluster_name}"
+          echo "Migration task:  ${ecs_migration_task_definition_family}"
+
+      # =====================================================================
+      # Run Alembic schema migrations BEFORE rolling out new application code
+      # =====================================================================
+      # Per docs/operations.md "Database migrations" and AAP Sec 0.5.2 Layer 0,
+      # the production deployment workflow runs schema migrations as a
+      # one-shot ECS RunTask invocation BEFORE the long-running backend tasks
+      # roll over to the new image. The Alembic migration task definition is
+      # provisioned by Terraform as `<name_prefix>-migration` (see
+      # infra/terraform/modules/ecs/migration.tf); the `terraform apply` step
+      # above registers a new revision of that task definition with the
+      # current TF_VAR_backend_image_tag so the migration runs against the
+      # SAME image SHA that the long-running tasks will eventually run.
+      #
+      # The `aws ecs run-task --task-definition <family>` invocation
+      # automatically targets the latest ACTIVE revision (which is the
+      # revision Terraform just produced with the new image SHA).
+      #
+      # `aws ecs wait tasks-stopped` polls until the migration task exits
+      # (success or failure). The subsequent `describe-tasks` call inspects
+      # the container exit code; non-zero exits fail the deployment, leaving
+      # the long-running service on its previous (working) task definition
+      # because the backend ECS service has lifecycle.ignore_changes =
+      # [task_definition] and was therefore never asked to roll over.
+      #
+      # Migration idempotency (per Alembic semantics + DL-0043): re-running
+      # `alembic upgrade head` against an already-migrated database is a
+      # no-op that exits 0 in milliseconds. This makes the step safe to
+      # retry on transient infrastructure errors.
+      # =====================================================================
+      - name: Run database migrations (one-shot ECS task)
+        if: steps.tf-output.outputs.ecs_migration_task_definition_family != ''
+        env:
+          ECS_CLUSTER: ${{ steps.tf-output.outputs.ecs_cluster_name }}
+          MIGRATION_FAMILY: ${{ steps.tf-output.outputs.ecs_migration_task_definition_family }}
+          ECS_SG: ${{ steps.tf-output.outputs.ecs_security_group_id }}
+          SUBNETS: ${{ steps.tf-output.outputs.private_subnet_ids }}
+        run: |
+          set -euo pipefail
+          # Convert the JSON array of subnet IDs into the comma-separated
+          # form `aws ecs run-task --network-configuration` expects.
+          subnet_csv="$(echo "${SUBNETS}" | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)))')"
+          if [ -z "${subnet_csv}" ]; then
+            echo "::error::No private subnet IDs available from Terraform outputs; cannot launch migration task."
+            exit 1
+          fi
+
+          echo "Launching one-shot migration task..."
+          echo "  Cluster: ${ECS_CLUSTER}"
+          echo "  Family:  ${MIGRATION_FAMILY}"
+          echo "  Subnets: ${subnet_csv}"
+          echo "  SG:      ${ECS_SG}"
+
+          # `aws ecs run-task --task-definition <family>` targets the latest
+          # ACTIVE revision automatically. propagateTags=TASK_DEFINITION
+          # copies the migration task definition's tags onto the running
+          # task for cost-explorer drill-down.
+          run_task_output="$(
+            aws ecs run-task \
+              --cluster "${ECS_CLUSTER}" \
+              --task-definition "${MIGRATION_FAMILY}" \
+              --launch-type FARGATE \
+              --network-configuration "awsvpcConfiguration={subnets=[${subnet_csv}],securityGroups=[${ECS_SG}],assignPublicIp=DISABLED}" \
+              --propagate-tags TASK_DEFINITION \
+              --started-by "gha-cd-deploy-dev-${GITHUB_RUN_ID}"
+          )"
+          echo "${run_task_output}"
+
+          # Extract the ARN of the launched task; bail if no task ARN was
+          # returned (failure to launch is itself a deployment failure).
+          task_arn="$(echo "${run_task_output}" | python3 -c 'import json,sys; data=json.load(sys.stdin); print(data["tasks"][0]["taskArn"]) if data.get("tasks") else sys.exit(1)')"
+          if [ -z "${task_arn}" ]; then
+            echo "::error::run-task did not return a taskArn; migration failed to launch."
+            exit 1
+          fi
+          echo "Launched migration task: ${task_arn}"
+
+          # Wait for the task to reach the STOPPED state (success or failure).
+          # `aws ecs wait tasks-stopped` polls every 6 seconds and times out
+          # after 100 polls (10 minutes) — well above the typical
+          # additive-migration runtime of 5-30 seconds.
+          echo "Waiting for migration task to stop..."
+          aws ecs wait tasks-stopped \
+            --cluster "${ECS_CLUSTER}" \
+            --tasks "${task_arn}"
+
+          # Inspect the task's container exit code. Non-zero exits fail
+          # the deployment.
+          describe_output="$(aws ecs describe-tasks --cluster "${ECS_CLUSTER}" --tasks "${task_arn}")"
+          echo "${describe_output}"
+
+          exit_code="$(echo "${describe_output}" | python3 -c 'import json,sys; data=json.load(sys.stdin); c=data["tasks"][0]["containers"][0]; print(c.get("exitCode", -1))')"
+          stopped_reason="$(echo "${describe_output}" | python3 -c 'import json,sys; data=json.load(sys.stdin); print(data["tasks"][0].get("stoppedReason", "unknown"))')"
+
+          if [ "${exit_code}" != "0" ]; then
+            echo "::error::Migration task ${task_arn} exited with code ${exit_code}: ${stopped_reason}"
+            echo "::error::See CloudWatch Logs (awslogs-stream-prefix=migration) for the failure details."
+            exit 1
+          fi
+          echo "Migration task succeeded (exit_code=0)."
+
+      - name: Verify dev deployment
+        if: steps.tf-output.outputs.alb_dns_name != ''
+        run: |
+          # Allow up to 5 minutes for the ALB target group to mark the new
+          # task healthy after deployment. Poll /healthz until 200 OK.
+          target_url="https://${{ steps.tf-output.outputs.alb_dns_name }}/healthz"
+          for attempt in $(seq 1 30); do
+            status="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 5 -k "${target_url}" || echo 000)"
+            echo "Attempt ${attempt}: ${target_url} -> HTTP ${status}"
+            if [ "${status}" = "200" ]; then
+              echo "Dev deployment is healthy."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Dev deployment did not become healthy within 5 minutes."
+          exit 1
+
+  # =====================================================================
+  # Job 3: plan-staging
+  # =====================================================================
+  # Generates the Terraform plan for the staging environment and uploads
+  # it as a GitHub Actions artifact for the staging-apply job to consume.
+  # Splitting plan and apply into separate jobs:
+  #   - Lets reviewers inspect the plan in the Actions UI before apply.
+  #   - Documents the plan as a tracked artifact for audit.
+  #   - Enables the prod path to reuse the same pattern with a manual
+  #     approval gate between plan and apply.
+  # =====================================================================
+  plan-staging:
+    name: Terraform Plan (staging)
+    runs-on: ubuntu-latest
+    needs: [build-and-push, deploy-dev]
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.environment == 'staging' || inputs.environment == 'prod'))
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+
+    defaults:
+      run:
+        working-directory: infra/terraform
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC, staging role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN_STAGING }}
+          role-session-name: gha-cd-plan-staging-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform init (staging backend)
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ vars.TF_BACKEND_BUCKET }}" \
+            -backend-config="key=${{ vars.TF_BACKEND_KEY_PREFIX }}/staging/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ vars.TF_BACKEND_DYNAMODB_TABLE }}" \
+            -backend-config="encrypt=true"
+
+      - name: Terraform validate
+        run: terraform validate
+
+      - name: Terraform plan (staging)
+        env:
+          TF_VAR_environment: staging
+          TF_VAR_aws_region: ${{ env.AWS_REGION }}
+          TF_VAR_github_actions_deploy_role_arn: ${{ secrets.AWS_DEPLOY_ROLE_ARN_STAGING }}
+          TF_VAR_backend_image_tag: sha-${{ needs.build-and-push.outputs.git_sha_short }}
+          TF_VAR_frontend_image_tag: sha-${{ needs.build-and-push.outputs.git_sha_short }}
+        run: |
+          terraform plan \
+            -var-file=envs/staging/staging.tfvars \
+            -out=tfplan-staging.binary
+          terraform show -no-color tfplan-staging.binary > tfplan-staging.txt
+
+      - name: Upload staging plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-staging-${{ github.run_id }}
+          path: |
+            infra/terraform/tfplan-staging.binary
+            infra/terraform/tfplan-staging.txt
+          retention-days: 14
+          if-no-files-found: error
+
+  # =====================================================================
+  # Job 4: deploy-staging
+  # =====================================================================
+  # Auto-applies the staging plan generated by plan-staging. The GitHub
+  # Environment `staging` SHOULD be configured with a required reviewer in
+  # repository Settings if additional approval is desired beyond CI green.
+  # =====================================================================
+  deploy-staging:
+    name: Deploy to Staging (auto-apply plan)
+    runs-on: ubuntu-latest
+    needs: [build-and-push, plan-staging]
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.environment == 'staging' || inputs.environment == 'prod'))
+    timeout-minutes: 30
+    environment:
+      name: staging
+      url: ${{ steps.tf-output.outputs.application_url }}
+    permissions:
+      contents: read
+      id-token: write
+
+    defaults:
+      run:
+        working-directory: infra/terraform
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC, staging role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN_STAGING }}
+          role-session-name: gha-cd-apply-staging-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform init (staging backend)
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ vars.TF_BACKEND_BUCKET }}" \
+            -backend-config="key=${{ vars.TF_BACKEND_KEY_PREFIX }}/staging/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ vars.TF_BACKEND_DYNAMODB_TABLE }}" \
+            -backend-config="encrypt=true"
+
+      - name: Download staging plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-staging-${{ github.run_id }}
+          path: infra/terraform/
+
+      - name: Terraform apply (staging)
+        env:
+          TF_VAR_environment: staging
+          TF_VAR_aws_region: ${{ env.AWS_REGION }}
+          TF_VAR_github_actions_deploy_role_arn: ${{ secrets.AWS_DEPLOY_ROLE_ARN_STAGING }}
+          TF_VAR_backend_image_tag: sha-${{ needs.build-and-push.outputs.git_sha_short }}
+          TF_VAR_frontend_image_tag: sha-${{ needs.build-and-push.outputs.git_sha_short }}
+        run: terraform apply -auto-approve tfplan-staging.binary
+
+      - name: Capture Terraform outputs
+        id: tf-output
+        run: |
+          application_url="$(terraform output -raw application_url 2>/dev/null || echo '')"
+          alb_dns_name="$(terraform output -raw alb_dns_name 2>/dev/null || echo '')"
+          ecs_cluster_name="$(terraform output -raw ecs_cluster_name 2>/dev/null || echo '')"
+          ecs_migration_task_definition_family="$(terraform output -raw ecs_migration_task_definition_family 2>/dev/null || echo '')"
+          ecs_security_group_id="$(terraform output -raw ecs_security_group_id 2>/dev/null || echo '')"
+          private_subnet_ids="$(terraform output -json private_subnet_ids 2>/dev/null || echo '[]')"
+          echo "application_url=${application_url}" >> "${GITHUB_OUTPUT}"
+          echo "alb_dns_name=${alb_dns_name}" >> "${GITHUB_OUTPUT}"
+          echo "ecs_cluster_name=${ecs_cluster_name}" >> "${GITHUB_OUTPUT}"
+          echo "ecs_migration_task_definition_family=${ecs_migration_task_definition_family}" >> "${GITHUB_OUTPUT}"
+          echo "ecs_security_group_id=${ecs_security_group_id}" >> "${GITHUB_OUTPUT}"
+          echo "private_subnet_ids=${private_subnet_ids}" >> "${GITHUB_OUTPUT}"
+
+      # =====================================================================
+      # Run Alembic schema migrations BEFORE rolling out new application code
+      # =====================================================================
+      # Per docs/operations.md "Database migrations" - the production
+      # deployment workflow runs schema migrations as a one-shot ECS RunTask
+      # invocation BEFORE the long-running backend tasks roll over to the
+      # new image. See the equivalent step in deploy-dev for the full
+      # rationale (idempotency, exit-code handling, CloudWatch log routing).
+      # =====================================================================
+      - name: Run database migrations (one-shot ECS task)
+        if: steps.tf-output.outputs.ecs_migration_task_definition_family != ''
+        env:
+          ECS_CLUSTER: ${{ steps.tf-output.outputs.ecs_cluster_name }}
+          MIGRATION_FAMILY: ${{ steps.tf-output.outputs.ecs_migration_task_definition_family }}
+          ECS_SG: ${{ steps.tf-output.outputs.ecs_security_group_id }}
+          SUBNETS: ${{ steps.tf-output.outputs.private_subnet_ids }}
+        run: |
+          set -euo pipefail
+          subnet_csv="$(echo "${SUBNETS}" | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)))')"
+          if [ -z "${subnet_csv}" ]; then
+            echo "::error::No private subnet IDs available from Terraform outputs; cannot launch migration task."
+            exit 1
+          fi
+          echo "Launching one-shot migration task in staging..."
+          echo "  Cluster: ${ECS_CLUSTER}"
+          echo "  Family:  ${MIGRATION_FAMILY}"
+
+          run_task_output="$(
+            aws ecs run-task \
+              --cluster "${ECS_CLUSTER}" \
+              --task-definition "${MIGRATION_FAMILY}" \
+              --launch-type FARGATE \
+              --network-configuration "awsvpcConfiguration={subnets=[${subnet_csv}],securityGroups=[${ECS_SG}],assignPublicIp=DISABLED}" \
+              --propagate-tags TASK_DEFINITION \
+              --started-by "gha-cd-deploy-staging-${GITHUB_RUN_ID}"
+          )"
+          echo "${run_task_output}"
+
+          task_arn="$(echo "${run_task_output}" | python3 -c 'import json,sys; data=json.load(sys.stdin); print(data["tasks"][0]["taskArn"]) if data.get("tasks") else sys.exit(1)')"
+          if [ -z "${task_arn}" ]; then
+            echo "::error::run-task did not return a taskArn; migration failed to launch."
+            exit 1
+          fi
+          echo "Launched migration task: ${task_arn}"
+
+          echo "Waiting for migration task to stop..."
+          aws ecs wait tasks-stopped \
+            --cluster "${ECS_CLUSTER}" \
+            --tasks "${task_arn}"
+
+          describe_output="$(aws ecs describe-tasks --cluster "${ECS_CLUSTER}" --tasks "${task_arn}")"
+          echo "${describe_output}"
+
+          exit_code="$(echo "${describe_output}" | python3 -c 'import json,sys; data=json.load(sys.stdin); c=data["tasks"][0]["containers"][0]; print(c.get("exitCode", -1))')"
+          stopped_reason="$(echo "${describe_output}" | python3 -c 'import json,sys; data=json.load(sys.stdin); print(data["tasks"][0].get("stoppedReason", "unknown"))')"
+
+          if [ "${exit_code}" != "0" ]; then
+            echo "::error::Migration task ${task_arn} exited with code ${exit_code}: ${stopped_reason}"
+            echo "::error::See CloudWatch Logs (awslogs-stream-prefix=migration) for the failure details."
+            exit 1
+          fi
+          echo "Migration task succeeded (exit_code=0)."
+
+      - name: Verify staging deployment
+        if: steps.tf-output.outputs.alb_dns_name != ''
+        run: |
+          target_url="https://${{ steps.tf-output.outputs.alb_dns_name }}/healthz"
+          for attempt in $(seq 1 30); do
+            status="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 5 -k "${target_url}" || echo 000)"
+            echo "Attempt ${attempt}: ${target_url} -> HTTP ${status}"
+            if [ "${status}" = "200" ]; then
+              echo "Staging deployment is healthy."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Staging deployment did not become healthy within 5 minutes."
+          exit 1
+
+  # =====================================================================
+  # Job 5: plan-prod
+  # =====================================================================
+  # Generates the Terraform plan for the production environment. This
+  # plan is uploaded as an artifact for the prod-apply job to consume
+  # AFTER manual approval through the prod GitHub Environment.
+  # =====================================================================
+  plan-prod:
+    name: Terraform Plan (prod)
+    runs-on: ubuntu-latest
+    needs: [build-and-push, deploy-staging]
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'prod')
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+
+    defaults:
+      run:
+        working-directory: infra/terraform
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC, prod role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN_PROD }}
+          role-session-name: gha-cd-plan-prod-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform init (prod backend)
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ vars.TF_BACKEND_BUCKET }}" \
+            -backend-config="key=${{ vars.TF_BACKEND_KEY_PREFIX }}/prod/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ vars.TF_BACKEND_DYNAMODB_TABLE }}" \
+            -backend-config="encrypt=true"
+
+      - name: Terraform validate
+        run: terraform validate
+
+      - name: Terraform plan (prod)
+        env:
+          TF_VAR_environment: prod
+          TF_VAR_aws_region: ${{ env.AWS_REGION }}
+          TF_VAR_github_actions_deploy_role_arn: ${{ secrets.AWS_DEPLOY_ROLE_ARN_PROD }}
+          TF_VAR_backend_image_tag: sha-${{ needs.build-and-push.outputs.git_sha_short }}
+          TF_VAR_frontend_image_tag: sha-${{ needs.build-and-push.outputs.git_sha_short }}
+        run: |
+          terraform plan \
+            -var-file=envs/prod/prod.tfvars \
+            -out=tfplan-prod.binary
+          terraform show -no-color tfplan-prod.binary > tfplan-prod.txt
+
+      - name: Upload prod plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-prod-${{ github.run_id }}
+          path: |
+            infra/terraform/tfplan-prod.binary
+            infra/terraform/tfplan-prod.txt
+          retention-days: 14
+          if-no-files-found: error
+
+  # =====================================================================
+  # Job 6: deploy-prod
+  # =====================================================================
+  # Applies the prod plan AFTER manual approval through the `prod` GitHub
+  # Environment (configure required reviewers in repository Settings ->
+  # Environments -> prod). Per AAP Sec 0.6.1, prod is gated on manual
+  # approval; staging and dev are automatic.
+  # =====================================================================
+  deploy-prod:
+    name: Deploy to Prod (manual approval)
+    runs-on: ubuntu-latest
+    needs: [build-and-push, plan-prod]
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'prod')
+    timeout-minutes: 45
+    environment:
+      name: prod
+      url: ${{ steps.tf-output.outputs.application_url }}
+    permissions:
+      contents: read
+      id-token: write
+
+    defaults:
+      run:
+        working-directory: infra/terraform
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC, prod role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN_PROD }}
+          role-session-name: gha-cd-apply-prod-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform init (prod backend)
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ vars.TF_BACKEND_BUCKET }}" \
+            -backend-config="key=${{ vars.TF_BACKEND_KEY_PREFIX }}/prod/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ vars.TF_BACKEND_DYNAMODB_TABLE }}" \
+            -backend-config="encrypt=true"
+
+      - name: Download prod plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-prod-${{ github.run_id }}
+          path: infra/terraform/
+
+      - name: Terraform apply (prod)
+        env:
+          TF_VAR_environment: prod
+          TF_VAR_aws_region: ${{ env.AWS_REGION }}
+          TF_VAR_github_actions_deploy_role_arn: ${{ secrets.AWS_DEPLOY_ROLE_ARN_PROD }}
+          TF_VAR_backend_image_tag: sha-${{ needs.build-and-push.outputs.git_sha_short }}
+          TF_VAR_frontend_image_tag: sha-${{ needs.build-and-push.outputs.git_sha_short }}
+        run: terraform apply -auto-approve tfplan-prod.binary
+
+      - name: Capture Terraform outputs
+        id: tf-output
+        run: |
+          application_url="$(terraform output -raw application_url 2>/dev/null || echo '')"
+          alb_dns_name="$(terraform output -raw alb_dns_name 2>/dev/null || echo '')"
+          ecs_cluster_name="$(terraform output -raw ecs_cluster_name 2>/dev/null || echo '')"
+          ecs_migration_task_definition_family="$(terraform output -raw ecs_migration_task_definition_family 2>/dev/null || echo '')"
+          ecs_security_group_id="$(terraform output -raw ecs_security_group_id 2>/dev/null || echo '')"
+          private_subnet_ids="$(terraform output -json private_subnet_ids 2>/dev/null || echo '[]')"
+          echo "application_url=${application_url}" >> "${GITHUB_OUTPUT}"
+          echo "alb_dns_name=${alb_dns_name}" >> "${GITHUB_OUTPUT}"
+          echo "ecs_cluster_name=${ecs_cluster_name}" >> "${GITHUB_OUTPUT}"
+          echo "ecs_migration_task_definition_family=${ecs_migration_task_definition_family}" >> "${GITHUB_OUTPUT}"
+          echo "ecs_security_group_id=${ecs_security_group_id}" >> "${GITHUB_OUTPUT}"
+          echo "private_subnet_ids=${private_subnet_ids}" >> "${GITHUB_OUTPUT}"
+
+      # =====================================================================
+      # Run Alembic schema migrations BEFORE rolling out new application code
+      # =====================================================================
+      # Per docs/operations.md "Database migrations" - the production
+      # deployment workflow runs schema migrations as a one-shot ECS RunTask
+      # invocation BEFORE the long-running backend tasks roll over to the
+      # new image. The Alembic migration task definition is provisioned by
+      # Terraform as `<name_prefix>-migration` (sales-connections-prod-migration
+      # in this environment); the `terraform apply` step above registers a
+      # new revision of that task definition with the current
+      # TF_VAR_backend_image_tag so the migration runs against the SAME
+      # image SHA that the long-running tasks will eventually run.
+      #
+      # Migration failures fail the deploy-prod job, leaving the long-running
+      # service on its previous (working) task definition because the backend
+      # ECS service has lifecycle.ignore_changes = [task_definition] and was
+      # therefore never asked to roll over. Operators can re-run the workflow
+      # after fixing the migration without manual intervention.
+      # =====================================================================
+      - name: Run database migrations (one-shot ECS task)
+        if: steps.tf-output.outputs.ecs_migration_task_definition_family != ''
+        env:
+          ECS_CLUSTER: ${{ steps.tf-output.outputs.ecs_cluster_name }}
+          MIGRATION_FAMILY: ${{ steps.tf-output.outputs.ecs_migration_task_definition_family }}
+          ECS_SG: ${{ steps.tf-output.outputs.ecs_security_group_id }}
+          SUBNETS: ${{ steps.tf-output.outputs.private_subnet_ids }}
+        run: |
+          set -euo pipefail
+          subnet_csv="$(echo "${SUBNETS}" | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)))')"
+          if [ -z "${subnet_csv}" ]; then
+            echo "::error::No private subnet IDs available from Terraform outputs; cannot launch migration task."
+            exit 1
+          fi
+          echo "Launching one-shot migration task in production..."
+          echo "  Cluster: ${ECS_CLUSTER}"
+          echo "  Family:  ${MIGRATION_FAMILY}"
+
+          run_task_output="$(
+            aws ecs run-task \
+              --cluster "${ECS_CLUSTER}" \
+              --task-definition "${MIGRATION_FAMILY}" \
+              --launch-type FARGATE \
+              --network-configuration "awsvpcConfiguration={subnets=[${subnet_csv}],securityGroups=[${ECS_SG}],assignPublicIp=DISABLED}" \
+              --propagate-tags TASK_DEFINITION \
+              --started-by "gha-cd-deploy-prod-${GITHUB_RUN_ID}"
+          )"
+          echo "${run_task_output}"
+
+          task_arn="$(echo "${run_task_output}" | python3 -c 'import json,sys; data=json.load(sys.stdin); print(data["tasks"][0]["taskArn"]) if data.get("tasks") else sys.exit(1)')"
+          if [ -z "${task_arn}" ]; then
+            echo "::error::run-task did not return a taskArn; migration failed to launch."
+            exit 1
+          fi
+          echo "Launched migration task: ${task_arn}"
+
+          echo "Waiting for migration task to stop..."
+          aws ecs wait tasks-stopped \
+            --cluster "${ECS_CLUSTER}" \
+            --tasks "${task_arn}"
+
+          describe_output="$(aws ecs describe-tasks --cluster "${ECS_CLUSTER}" --tasks "${task_arn}")"
+          echo "${describe_output}"
+
+          exit_code="$(echo "${describe_output}" | python3 -c 'import json,sys; data=json.load(sys.stdin); c=data["tasks"][0]["containers"][0]; print(c.get("exitCode", -1))')"
+          stopped_reason="$(echo "${describe_output}" | python3 -c 'import json,sys; data=json.load(sys.stdin); print(data["tasks"][0].get("stoppedReason", "unknown"))')"
+
+          if [ "${exit_code}" != "0" ]; then
+            echo "::error::Migration task ${task_arn} exited with code ${exit_code}: ${stopped_reason}"
+            echo "::error::See CloudWatch Logs (awslogs-stream-prefix=migration) for the failure details."
+            exit 1
+          fi
+          echo "Migration task succeeded (exit_code=0)."
+
+      - name: Verify prod deployment
+        if: steps.tf-output.outputs.alb_dns_name != ''
+        run: |
+          # Wait up to 10 minutes for prod to stabilize (longer than dev/staging
+          # because prod typically has more tasks and Multi-AZ failover).
+          target_url="https://${{ steps.tf-output.outputs.alb_dns_name }}/healthz"
+          for attempt in $(seq 1 60); do
+            status="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 5 -k "${target_url}" || echo 000)"
+            echo "Attempt ${attempt}: ${target_url} -> HTTP ${status}"
+            if [ "${status}" = "200" ]; then
+              echo "Prod deployment is healthy."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Prod deployment did not become healthy within 10 minutes."
+          exit 1
+
+      - name: Post deployment summary
+        if: always()
+        run: |
+          {
+            echo "# Prod Deployment Summary"
+            echo ""
+            echo "- **Git SHA**: \`${GITHUB_SHA}\`"
+            echo "- **Backend image**: \`sha-${{ needs.build-and-push.outputs.git_sha_short }}\`"
+            echo "- **Frontend image**: \`sha-${{ needs.build-and-push.outputs.git_sha_short }}\`"
+            echo "- **Application URL**: ${{ steps.tf-output.outputs.application_url }}"
+            echo "- **Run ID**: \`${GITHUB_RUN_ID}\`"
+            echo "- **Triggered by**: \`${GITHUB_ACTOR}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"

@@ -1,0 +1,70 @@
+{
+  "name": "sales-connections-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Sales-Connections frontend SPA: React 19.2.5 + TypeScript 5.x + Vite + TailwindCSS 3.x + TanStack Query 5.x.",
+  "type": "module",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=20.20.2 <21.0.0",
+    "npm": ">=10.0.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "build:check": "tsc -b",
+    "preview": "vite preview",
+    "type-check": "tsc -b",
+    "typecheck": "tsc -b",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"src/**/*.{ts,tsx,css,json}\" \"tests/**/*.{ts,tsx}\" \"index.html\" \"*.{json,cjs,ts}\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx,css,json}\" \"tests/**/*.{ts,tsx}\" \"index.html\" \"*.{json,cjs,ts}\"",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "5.62.16",
+    "clsx": "2.1.1",
+    "lucide-react": "0.468.0",
+    "react": "19.2.5",
+    "react-dom": "19.2.5",
+    "react-router-dom": "6.30.3",
+    "zod": "3.24.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.4",
+    "@testing-library/jest-dom": "6.6.3",
+    "@testing-library/react": "16.1.0",
+    "@testing-library/user-event": "14.5.2",
+    "@types/node": "20.17.10",
+    "@types/react": "19.2.0",
+    "@types/react-dom": "19.2.0",
+    "@typescript-eslint/eslint-plugin": "8.18.2",
+    "@typescript-eslint/parser": "8.18.2",
+    "@vitejs/plugin-react": "4.3.4",
+    "@vitest/coverage-v8": "2.1.9",
+    "autoprefixer": "10.4.20",
+    "eslint": "9.39.4",
+    "eslint-plugin-react-hooks": "5.1.0",
+    "eslint-plugin-react-refresh": "0.4.16",
+    "globals": "15.14.0",
+    "jsdom": "25.0.1",
+    "msw": "2.7.0",
+    "postcss": "8.5.13",
+    "prettier": "3.4.2",
+    "tailwindcss": "3.4.17",
+    "typescript": "5.7.2",
+    "typescript-eslint": "8.18.2",
+    "vite": "5.4.21",
+    "vitest": "2.1.9"
+  },
+  "browserslist": [
+    "> 0.5%",
+    "last 2 versions",
+    "Firefox ESR",
+    "not dead",
+    "not IE 11"
+  ]
+}

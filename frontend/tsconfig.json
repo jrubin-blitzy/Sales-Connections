@@ -1,0 +1,71 @@
+{
+  // ============================================================
+  // TypeScript 5.x configuration for the Sales-Connections SPA.
+  // Per AAP Sec 0.2.3 ("targeting ES2022") and Sec 0.7.7 (strict typing).
+  // Mirrors the Vite alias `@/` declared in vite.config.ts so IDE
+  // resolution, `tsc --noEmit` (CI type-check), and the Vite build
+  // all agree on `@/` -> `./src/`.
+  // ============================================================
+  "compilerOptions": {
+    // ---- Target and module
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "useDefineForClassFields": true,
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "verbatimModuleSyntax": true,
+
+    // ---- JSX (React 17+ new transform; no `import React` needed at top of every JSX file)
+    "jsx": "react-jsx",
+
+    // ---- Lib (browser globals + modern JS APIs)
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+
+    // ---- Strict typing (per AAP Sec 0.7.7: `any` is forbidden)
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "strictFunctionTypes": true,
+    "strictBindCallApply": true,
+    "strictPropertyInitialization": true,
+    "noImplicitThis": true,
+    "alwaysStrict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noPropertyAccessFromIndexSignature": false,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "forceConsistentCasingInFileNames": true,
+
+    // ---- Linter-style checks
+    "noUnusedLocals": true,
+    "noUnusedParameters": false,
+    "exactOptionalPropertyTypes": false,
+
+    // ---- Output (Vite/esbuild handles transpilation; tsc only type-checks)
+    "noEmit": true,
+    "skipLibCheck": true,
+
+    // ---- Incremental build cache (gitignored via node_modules/)
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.tsbuildinfo",
+
+    // ---- Path aliases (mirror vite.config.ts; per AAP Sec 0.3.7)
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+
+    // ---- Type roots (ambient types available globally, no per-file imports)
+    "types": ["vite/client", "vitest/globals", "@testing-library/jest-dom"]
+  },
+
+  "include": ["src", "tests", "vite-env.d.ts"],
+
+  "exclude": ["node_modules", "dist", "coverage"],
+
+  "references": [{ "path": "./tsconfig.node.json" }]
+}

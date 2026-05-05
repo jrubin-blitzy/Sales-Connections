@@ -1,0 +1,85 @@
+%% Diagram: Record Lifecycle State Machine (Feature F-007)
+stateDiagram-v2
+    direction LR
+    Active : Active (deleted_at IS NULL)
+    SoftDeleted : Soft-Deleted (deleted_at IS NOT NULL)
+    [*] --> Active : POST /api/connections (audit: create)
+    Active --> SoftDeleted : DELETE /api/connections/:id (audit: soft_delete)
+    SoftDeleted --> Active : Admin restore (audit: admin_op)
+    SoftDeleted --> [*] : DELETE /api/admin/records/:id (audit: hard_delete)
+    note right of Active
+        Soft delete admitted:
+        Admin (any), Contributor (own), Viewer (own)
+    end note
+    note right of SoftDeleted
+        Restore and Hard delete:
+        Admin role only
+    end note
+
+%% Legend:
+%% - State semantics:
+%%     Active       - records.deleted_at IS NULL; the normal operating state.
+%%                    All default reads (GET /api/connections feed, GET /api/connections/:id
+%%                    detail, duplicate-check, admin analytics) inject WHERE deleted_at IS NULL
+%%                    and therefore see ONLY rows in this state.
+%%     Soft-Deleted - records.deleted_at IS NOT NULL; row physically present but invisible to
+%%                    default reads. Visible only to Admin via the moderation surface
+%%                    GET /api/admin/records?include_deleted=true (AAP Section 0.6.1, F-014).
+%%                    The audit trail still references the row by id.
+%%     [*]          - Implicit start (record never created) and implicit terminal (record
+%%                    physically removed by SQL DELETE). The terminal sink is reachable ONLY
+%%                    via the SoftDeleted -> [*] hard-delete edge.
+%% - Transitions (1 initial + 3 between-state):
+%%     [*] -> Active                POST /api/connections; pydantic validation; owner derived
+%%                                  from g.session (never client-supplied per AAP Section 0.7.4);
+%%                                  creates record and emits audit_events.event_type = create in
+%%                                  the same transaction (AAP Section 0.7.1 atomicity invariant).
+%%     Active -> SoftDeleted        DELETE /api/connections/:id; sets deleted_at = NOW(); emits
+%%                                  audit_events.event_type = soft_delete with the pre-image in
+%%                                  before_payload.
+%%     SoftDeleted -> Active        Admin restore via the record-moderation surface (PATCH
+%%                                  /api/admin/records/:id with deleted_at = null per AAP
+%%                                  Section 0.5.2 Layer 6); emits audit_events.event_type =
+%%                                  admin_op describing the restore action.
+%%     SoftDeleted -> [*]           DELETE /api/admin/records/:id (hard delete); emits
+%%                                  audit_events.event_type = hard_delete BEFORE the SQL DELETE
+%%                                  so the full pre-deletion record snapshot is preserved in
+%%                                  before_payload (the only post-deletion forensic record of
+%%                                  the row's contents).
+%% - Authorization (AAP Section 0.5.2 Layer 4 and Section 0.7.6):
+%%     Soft delete (Active -> SoftDeleted)   Admin (any record), Contributor (own only),
+%%                                           Viewer (own only). The per-role rule for Viewer
+%%                                           is intentional: a Sales Rep who submitted a record
+%%                                           can retract their own submission even though Viewer
+%%                                           is read-mostly elsewhere.
+%%     Restore (SoftDeleted -> Active)       Admin only.
+%%     Hard delete (SoftDeleted -> [*])      Admin only.
+%% - Default-read behavior (AAP Section 0.7.1 Principle 4): every read on the records table
+%%   injects WHERE deleted_at IS NULL by default. Only the Admin moderation view explicitly
+%%   opts out; all other paths (Connection Feed F-004, Connection Detail F-011, duplicate
+%%   detection F-010, admin analytics aggregations F-014) see only Active records.
+%% - Audit emission contract (AAP Section 0.7.1 atomicity invariant): every state-changing
+%%   transition writes exactly ONE audit_events row in the SAME transaction as the records
+%%   mutation. Failure of either rolls back both. The audit_events table is append-only at the
+%%   database privilege layer (no UPDATE or DELETE granted to the application role per
+%%   migration 0001_initial_schema; AAP Section 0.4.7).
+%% - Invariant (deliberate): there is NO direct Active -> [*] transition. Hard delete MUST
+%%   traverse Soft-Deleted first. This preserves the audit trail (a hard-delete event on an
+%%   Active record would lack a prior soft-delete event), enables admin moderation review
+%%   before any irreversible removal, and aligns with the user's instruction "No permanent
+%%   record deletion is permitted except by Admin" (AAP Section 0.1.2). Do not "simplify" by
+%%   adding a direct hard-delete edge from Active.
+%% - Out of scope for this state machine:
+%%     PATCH /api/connections/:id (record edits) does NOT change lifecycle state - it mutates
+%%     business fields while the record remains Active. Edits emit audit_events.event_type =
+%%     edit and are catalogued in docs/api.md and the audit catalog, not in this diagram.
+%%     Likewise, outreach status changes (PATCH /api/connections/:id/status) do not transition
+%%     lifecycle state and are documented in docs/diagrams/state-outreach.mmd.
+%% - Source feature: F-007 Record Editing & Soft Deletion (AAP Section 0.1.1, Section 0.5.2
+%%   Layer 4).
+%% - Referenced from: docs/architecture.md Section 7 (State Machines / Record lifecycle),
+%%                    docs/api.md (DELETE /api/connections/:id soft-delete, DELETE
+%%                    /api/admin/records/:id hard-delete, PATCH /api/admin/records/:id
+%%                    restore), docs/security.md (audit emission semantics for delete
+%%                    operations), docs/operations.md (incident response context for record
+%%                    disappearance), blitzy-deck/index.html.

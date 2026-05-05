@@ -1,0 +1,149 @@
+# =====================================================================
+# backend/requirements-dev.txt
+# Pinned development dependencies for the Sales-Connections backend.
+# =====================================================================
+#
+# Install with:
+#     pip install -r requirements.txt -r requirements-dev.txt
+#
+# Or, equivalently (the leading `-r requirements.txt` directive below
+# transitively pulls in production pins on a single command line):
+#     pip install -r requirements-dev.txt
+#
+# This file is INSTALLED IN DEVELOPMENT AND CI ONLY. It is NOT bundled
+# into the production Docker image (see backend/Dockerfile, stage 1
+# "builder", which installs only requirements.txt). Test runners,
+# linters, type-checkers, factories, and mocks live here so that the
+# production runtime image stays minimal.
+#
+# PINNING POLICY (per AAP Sec 0.7.7 "Coding and Quality Standards"):
+#   - Every dependency is pinned to an exact version with `==`.
+#   - No `latest`, no `^`, no `~`, no `>=` ranges.
+#   - Updates flow through Dependabot PRs accompanied by a decision-log
+#     entry in docs/decision-log.md (per AAP Sec 0.7.5 "Explainability
+#     rule"). Major-version bumps are gated on a green CI run.
+#
+# CRITICAL MAJOR VERSIONS (per AAP Sec 0.3.3 "Backend Development Packages"):
+#   - pytest      == 8.x   (test runner)
+#   - factory-boy == 3.x   (test data factories)
+#   - pip-tools   == 7.x   (requirements compilation, optional)
+# Patch versions reflect the latest stable releases verified at setup
+# time and known to be mutually compatible with the production pins in
+# backend/requirements.txt.
+# =====================================================================
+
+# ---------------------------------------------------------------------
+# Inherit production runtime pins. This guarantees that a single
+# `pip install -r requirements-dev.txt` against a fresh clone produces
+# a working environment. CI installs both files explicitly for clarity.
+# ---------------------------------------------------------------------
+-r requirements.txt
+
+# ---------------------------------------------------------------------
+# Test runner and Flask integration
+# ---------------------------------------------------------------------
+# pytest is the AAP-mandated test runner (Sec 0.3.3). pytest-flask
+# provides the `client` and `live_server` fixtures used throughout
+# backend/tests/api/. pytest-cov enforces the >=85% coverage gate
+# documented in AAP Sec 0.7.7. pytest-mock supplies the `mocker`
+# fixture for monkeypatching SDK clients in unit tests.
+pytest==8.4.2
+pytest-flask==1.3.0
+pytest-cov==6.0.0
+pytest-mock==3.15.1
+
+# ---------------------------------------------------------------------
+# Test data factories
+# ---------------------------------------------------------------------
+# factory-boy 3.x produces deterministic User, Record, Tag, and
+# AuditEvent fixtures (see backend/tests/factories.py). Faker is the
+# upstream data-generation engine factory-boy delegates to.
+factory-boy==3.3.3
+faker==33.1.0
+
+# ---------------------------------------------------------------------
+# Time and HTTP mocking
+# ---------------------------------------------------------------------
+# freezegun pins the wall clock for audit-event timestamp assertions
+# (F-013 atomic emission). responses mocks the requests/urllib3 stack
+# used by Authlib's Google OAuth flow and any classic HTTP client.
+# respx mocks the httpx stack used by Anthropic's SDK and Langchain;
+# both libraries are installed because the project's HTTP surface
+# spans both clients.
+freezegun==1.5.5
+responses==0.25.8
+respx==0.22.0
+
+# httpx is already a transitive of langchain/anthropic in
+# requirements.txt; pinning it here documents the testing intent and
+# guarantees it remains available even if upstream graphs shift.
+httpx==0.28.1
+
+# ---------------------------------------------------------------------
+# Coverage reporting
+# ---------------------------------------------------------------------
+# The [toml] extra enables pyproject.toml-based [tool.coverage.*]
+# configuration consumption (tomllib is stdlib on Python 3.12; the
+# extra is a no-op on 3.11+, included for forward compatibility).
+coverage[toml]==7.6.10
+
+# ---------------------------------------------------------------------
+# Test parallelization (CI speed)
+# ---------------------------------------------------------------------
+# pytest-xdist enables `-n auto` to run the test suite across worker
+# processes. Critical for keeping CI runtime bounded as backend/tests/
+# grows alongside feature delivery (F-001..F-014).
+pytest-xdist==3.6.1
+
+# ---------------------------------------------------------------------
+# Better assertion messages
+# ---------------------------------------------------------------------
+# pytest-clarity produces side-by-side diffs of complex pydantic and
+# SQLAlchemy objects when assertions fail, dramatically improving
+# debugging ergonomics for service-layer tests.
+pytest-clarity==1.0.1
+
+# ---------------------------------------------------------------------
+# Lint and format
+# ---------------------------------------------------------------------
+# ruff replaces black + isort + flake8. Configuration lives in
+# backend/pyproject.toml under [tool.ruff]: line-length=100,
+# target-version=py312. Per AAP Sec 0.7.7, lint must pass with
+# exit-code-zero on every PR; CI runs `ruff check backend/`.
+ruff==0.13.0
+
+# ---------------------------------------------------------------------
+# Static type checking
+# ---------------------------------------------------------------------
+# mypy runs in advisory mode in CI per AAP Sec 0.7.7
+# ("Type safety on the backend ... mypy runs in CI as advisory;
+#  pydantic provides the runtime guarantees"). Configuration in
+# backend/pyproject.toml under [tool.mypy].
+mypy==1.18.2
+
+# ---------------------------------------------------------------------
+# Type stubs (mypy-only; never imported at runtime)
+# ---------------------------------------------------------------------
+# types-PyYAML covers the langchain transitive PyYAML usage; mypy
+# silently ignores untyped imports without these stubs.
+# types-requests covers the legacy requests stack (used by Authlib
+# adapters and the responses test library).
+# boto3-stubs[essential] supplies typed signatures for boto3 clients;
+# the `essential` extra brings in stubs for S3, EC2, Lambda, IAM,
+# DynamoDB, and STS - a superset of what `services/auth.py` and the
+# Secrets Manager loader need. Patch version matches the boto3==1.35.99
+# pin in requirements.txt so signatures are aligned.
+types-PyYAML==6.0.12.20240917
+types-requests==2.32.0.20240914
+boto3-stubs[essential]==1.35.99
+
+# ---------------------------------------------------------------------
+# pip-tools and build (requirements compilation, packaging)
+# ---------------------------------------------------------------------
+# pip-tools is the contributor escape hatch for recompiling
+# requirements.txt from a requirements.in source if a contributor
+# prefers that workflow. The project ships hand-curated requirements
+# files as the primary manifests. `build` is the PEP 517 frontend used
+# by `python -m build` for packaging the backend wheel locally.
+pip-tools==7.5.1
+build==1.3.0

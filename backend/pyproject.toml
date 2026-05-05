@@ -1,0 +1,358 @@
+# =============================================================================
+# Sales-Connections Backend - PEP 621 Project Metadata + Tool Configuration
+# =============================================================================
+# This is the canonical Python project descriptor for the Sales-Connections
+# backend. It centralizes project metadata, ruff (lint + format), mypy
+# (static typing), pytest (test runner), and coverage configuration.
+#
+# AUTHORITATIVE PIN SOURCE: backend/requirements.txt and backend/requirements-dev.txt
+# are the source of truth for runtime and development pins. The
+# [project.optional-dependencies] block here is a coarse mirror for editor
+# tooling that reads pyproject.toml directly. Do not duplicate exact pins.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Phase 1 - Build System
+# -----------------------------------------------------------------------------
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# -----------------------------------------------------------------------------
+# Phase 2 - Project Metadata (PEP 621)
+# -----------------------------------------------------------------------------
+[project]
+name = "sales-connections-backend"
+version = "0.1.0"
+description = "Sales-Connections backend: Flask 3.1.3 REST API with PostgreSQL persistence and Anthropic Claude AI integration."
+readme = "../README.md"
+requires-python = ">=3.12,<3.13"
+license = { text = "Proprietary" }
+authors = [
+    { name = "Sales-Connections Engineering" },
+]
+keywords = ["sales", "connections", "crm", "ai", "outreach", "flask", "postgresql"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Framework :: Flask",
+    "License :: Other/Proprietary License",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Internet :: WWW/HTTP :: WSGI :: Application",
+    "Private :: Do Not Upload",
+]
+
+# -----------------------------------------------------------------------------
+# Phase 3 - Dependencies (Reference, Not Source of Truth)
+# -----------------------------------------------------------------------------
+# IMPORTANT: The authoritative pinned dependencies live in
+# backend/requirements.txt and backend/requirements-dev.txt. The list below is
+# intentionally coarse to avoid drift between two pin sources. CI installs from
+# the requirements files; this block is for editor tooling convenience only.
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<9",
+    "pytest-flask",
+    "pytest-cov",
+    "factory-boy>=3,<4",
+    "freezegun",
+    "responses",
+    "ruff",
+    "mypy",
+    "pip-tools>=7,<8",
+]
+
+[project.urls]
+Repository = "https://github.com/sales-connections/sales-connections"
+Documentation = "https://github.com/sales-connections/sales-connections/tree/main/docs"
+Issues = "https://github.com/sales-connections/sales-connections/issues"
+
+# -----------------------------------------------------------------------------
+# Phase 4 - Setuptools Package Discovery
+# -----------------------------------------------------------------------------
+# The backend is not deployed as a wheel; the Dockerfile copies app/ directly.
+# This block keeps `pip install -e .` and editor tooling functional.
+[tool.setuptools]
+packages = ["app"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+# PEP 561: app/py.typed advertises that the `app` package ships type
+# information so downstream mypy users (and our own tests) can see it.
+app = ["py.typed"]
+
+# -----------------------------------------------------------------------------
+# Phase 5 - Ruff Configuration (lint + format)
+# -----------------------------------------------------------------------------
+# Ruff replaces black + isort + flake8. Per AAP section 0.5.2:
+# "ruff (line length 100, target Python 3.12)".
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["app", "tests"]
+extend-exclude = [
+    "migrations/versions",
+    ".venv",
+    "venv",
+    "build",
+    "dist",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort (import sorting)
+    "N",      # pep8-naming
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "SIM",    # flake8-simplify
+    "S",      # flake8-bandit (security)
+    "RUF",    # Ruff-specific rules
+    "PT",     # pytest-style
+    "TCH",    # flake8-type-checking
+    "TID",    # flake8-tidy-imports
+    "PL",     # pylint (selective)
+    "ANN",    # flake8-annotations (type hints)
+]
+ignore = [
+    # ANN101 / ANN102 (annotations for self/cls) were removed in ruff 0.13.x;
+    # explicit listing is omitted to avoid the "removed rules" warning.
+    "ANN401",   # Allow `Any` in select cases (decorators, **kwargs forwarding)
+    "PLR0913",  # Allow >5 args (Flask handlers and pydantic models reasonably exceed)
+    "S101",     # `assert` is allowed in test files (overridden per-path below)
+    "S105",     # Hardcoded password suspicion (false positives in fixture data)
+    "S106",     # Hardcoded password argument (false positives in fixtures)
+    "B008",     # Allow function calls in default arguments (Flask/FastAPI idiom)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S101",     # asserts allowed in tests
+    "ANN001",   # missing type hints relaxed in tests
+    "ANN201",   # missing return type relaxed in tests
+    "ANN202",   # missing return type for private functions relaxed in tests
+    "PLR2004",  # magic numbers allowed in tests
+    "PLR0913",  # parametrized tests can have many fixtures
+    "S105",     # hardcoded password strings in fixtures
+    "S106",     # hardcoded password arguments in fixtures
+    "S311",     # Allow random for fixture generation
+    "PT011",    # broad pytest.raises is OK in tests
+]
+"migrations/**/*.py" = [
+    "ANN",      # migrations don't need annotations
+    "E501",     # long auto-generated lines OK
+    "I",        # import order can be broken by autogenerate
+    "N",        # naming relaxed in autogenerated migrations
+    "S",        # security checks relaxed (DDL strings are fine)
+    "UP",       # script.py.mako template uses Union[str, None] form
+                # emitted by alembic autogenerate; keep consistent so
+                # future autogenerated migrations don't fail lint.
+]
+"app/__init__.py" = [
+    "F401",     # re-exports may appear unused
+]
+"app/models/__init__.py" = [
+    "F401",     # re-exports for Alembic autogenerate
+]
+"app/schemas/__init__.py" = [
+    "F401",     # re-exports
+]
+"app/services/__init__.py" = [
+    "F401",     # re-exports
+]
+"app/api/__init__.py" = [
+    "F401",     # blueprint re-exports
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+combine-as-imports = true
+force-sort-within-sections = true
+
+[tool.ruff.lint.flake8-tidy-imports]
+# Enforce AAP section 0.3.7 convention: `from app.{models|schemas|...} import ...`
+# only; no `from ..models import ...`.
+ban-relative-imports = "all"
+
+[tool.ruff.lint.flake8-type-checking]
+strict = true
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+docstring-code-format = true
+docstring-code-line-length = 90
+
+# -----------------------------------------------------------------------------
+# Phase 6 - Mypy Configuration (advisory static typing)
+# -----------------------------------------------------------------------------
+# Per AAP section 0.5.2: "mypy (strict optional, ignore third-party stubs absent)".
+# Mypy runs in CI as advisory; pydantic provides the runtime guarantees.
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "."
+files = ["app", "tests"]
+# ``explicit_package_bases = true`` is REQUIRED because the ``app/``
+# package is a PEP 420 namespace package (no ``app/__init__.py``) and
+# contains multiple sibling files sharing the same basename across
+# different sub-packages (e.g., ``app/middleware/auth.py`` and
+# ``app/schemas/auth.py``; ``app/observability/logging.py`` shadowing
+# the stdlib). Without this flag mypy reports
+# ``Source file found twice under different module names`` because it
+# ambiguously resolves files via both their bare basename and their
+# fully-qualified ``app.*`` dotted path. The flag makes mypy treat
+# ``mypy_path`` (= ``.``) as the only valid package base, which
+# resolves all in-tree files to their single canonical
+# ``app.<sub>.<name>`` dotted module name. See:
+# https://mypy.readthedocs.io/en/stable/running_mypy.html#mapping-file-paths-to-modules
+explicit_package_bases = true
+namespace_packages = true
+exclude = [
+    "migrations/versions/.*",
+    "build",
+    "dist",
+    "\\.venv",
+]
+
+# Strict-ish settings per AAP requirement
+strict_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unreachable = true
+warn_no_return = true
+warn_return_any = true
+no_implicit_optional = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_decorators = false  # Flask decorators commonly drop annotations
+check_untyped_defs = true
+
+# Allow third-party stubs to be absent (per AAP)
+ignore_missing_imports = true
+follow_imports = "silent"
+
+# Pretty error output for human review
+pretty = true
+show_error_codes = true
+show_column_numbers = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+warn_return_any = false
+
+[[tool.mypy.overrides]]
+module = "migrations.*"
+ignore_errors = true
+
+# Specific third-party packages without bundled stubs - silence type-checker noise
+[[tool.mypy.overrides]]
+module = [
+    "factory.*",
+    "factory_boy.*",
+    "responses.*",
+    "respx.*",
+    "freezegun.*",
+    "anthropic.*",
+    "langchain.*",
+    "langchain_anthropic.*",
+    "langchain_core.*",
+    "langsmith.*",
+    "authlib.*",
+    "jose.*",
+    "prometheus_client.*",
+    "opentelemetry.*",
+    "structlog.*",
+    "alembic.*",
+    "flask_sqlalchemy.*",
+    "boto3.*",
+    "botocore.*",
+    "bcrypt.*",
+    "psycopg.*",
+    "psycopg_binary.*",
+]
+ignore_missing_imports = true
+
+# -----------------------------------------------------------------------------
+# Phase 7 - Pytest Configuration
+# -----------------------------------------------------------------------------
+# Per AAP section 0.5.2: "pytest (test paths, coverage threshold 85%)".
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-ra",                                       # show extra summary for all but pass
+    "--strict-markers",
+    "--strict-config",
+    "--tb=short",
+    "--cov=app",
+    "--cov-report=term-missing:skip-covered",
+    "--cov-report=xml:coverage.xml",
+    "--cov-report=html:htmlcov",
+    "--cov-fail-under=85",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: integration tests requiring a running Postgres",
+    "unit: pure unit tests with no external dependencies",
+    "rbac: tests for RBAC permission matrix",
+    "audit: tests for audit-trail behavior",
+]
+filterwarnings = [
+    "error",                                                   # Promote warnings to errors in tests
+    "ignore::DeprecationWarning:flask\\.",                     # Allow Flask transitional deprecations
+    "ignore::DeprecationWarning:sqlalchemy\\.",
+    "ignore::DeprecationWarning:passlib\\.",
+    "ignore::DeprecationWarning:google\\.",
+    "ignore::DeprecationWarning:pydantic\\.",
+    "ignore::PendingDeprecationWarning",
+    # Coverage warnings are operational (e.g., "No data was collected", "Couldn't
+    # parse file") and reported via the coverage tool itself. Promoting them to
+    # errors causes pluggy internal errors during teardown rather than letting
+    # pytest-cov's native non-zero exit and coverage report drive the failure.
+    "ignore::coverage.exceptions.CoverageWarning",
+    "ignore::pytest_cov.plugin.CovFailUnderWarning",
+]
+log_cli = false
+log_cli_level = "INFO"
+
+# -----------------------------------------------------------------------------
+# Phase 8 - Coverage Configuration
+# -----------------------------------------------------------------------------
+[tool.coverage.run]
+branch = true
+source = ["app"]
+omit = [
+    "app/__main__.py",
+    "tests/*",
+    "migrations/*",
+    "app/observability/tracing.py",  # OpenTelemetry instrumentation; tested via integration only
+]
+parallel = true
+
+[tool.coverage.report]
+fail_under = 85
+precision = 1
+show_missing = true
+skip_covered = true
+exclude_also = [
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+    "@(abc\\.)?abstractmethod",
+    "pragma: no cover",
+]
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+[tool.coverage.xml]
+output = "coverage.xml"

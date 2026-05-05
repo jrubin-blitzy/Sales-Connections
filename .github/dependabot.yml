@@ -1,0 +1,543 @@
+# =====================================================================
+# Sales-Connections Dependabot Configuration
+# =====================================================================
+# Purpose:
+#   Configures GitHub Dependabot to open weekly dependency-update pull
+#   requests for the backend (pip) and frontend (npm) ecosystems, and
+#   to immediately open security-fix PRs whenever vulnerabilities are
+#   announced for any pinned dependency.
+#
+# File location:
+#   This file is at .github/dependabot.yml — the CANONICAL configuration
+#   path that GitHub Dependabot reads. A previous draft lived under
+#   .github/workflows/dependabot.yml; that location is NOT supported by
+#   GitHub and was relocated here per the Layer-0 code review (Finding
+#   #4) and decision-log entry DL-0026. Do NOT move this file back.
+#
+# Pinning policy enforced (AAP Sec 0.7.7):
+#   - Every dependency in backend/requirements.txt, requirements-dev.txt,
+#     and frontend/package.json is pinned to an exact version.
+#   - Dependabot opens a PR when a newer version is available; the PR
+#     bumps the exact pin (no ranges, no "^", no "~", no "latest").
+#   - Each PR runs through CI (.github/workflows/ci.yml) before review.
+#   - Major version bumps are NEVER auto-PR'd (see ignore rules
+#     below) — they require an explicit decision-log entry per AAP
+#     Sec 0.7.5 because they may carry breaking changes incompatible
+#     with the pinned architecture (e.g., Flask 4.x, SQLAlchemy 3.x,
+#     pydantic 3.x, React 20.x).
+#
+# Reviewer routing (AAP Sec 0.6.1 + .github/CODEOWNERS):
+#   - All Dependabot PRs are auto-assigned to @sales-connections/security-team
+#     because dependency updates have supply-chain security implications.
+#   - CODEOWNERS rules apply on top of dependabot.yml's reviewers list,
+#     so additional teams (backend-team for pip changes, frontend-team
+#     for npm changes) are added automatically by GitHub.
+#
+# Schedule:
+#   - Routine updates: weekly, Mondays at 09:00 America/New_York.
+#   - Security updates: immediate (Dependabot does NOT wait for the
+#     weekly schedule when a security advisory is published).
+# =====================================================================
+
+version: 2
+
+updates:
+  # =====================================================================
+  # Ecosystem 1: Python (pip) for the Flask backend
+  # =====================================================================
+  # Tracks backend/requirements.txt and backend/requirements-dev.txt.
+  # All packages are pinned exactly per AAP Sec 0.3.2 / 0.3.3 / 0.7.7.
+  # Dependabot bumps the exact pin to the new latest within the allowed
+  # update-type set (patch + minor for most groups; patch only for
+  # authentication-critical packages).
+  # =====================================================================
+  - package-ecosystem: "pip"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 10
+    target-branch: "main"
+    versioning-strategy: "increase"
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "security"
+      - "backend"
+    reviewers:
+      - "sales-connections/security-team"
+    assignees:
+      - "sales-connections/backend-team"
+    allow:
+      - dependency-type: "direct"
+      - dependency-type: "indirect"
+    groups:
+      flask-ecosystem:
+        applies-to: version-updates
+        patterns:
+          - "Flask"
+          - "Werkzeug"
+          - "Jinja2"
+          - "click"
+          - "blinker"
+          - "itsdangerous"
+          - "MarkupSafe"
+        update-types:
+          - "minor"
+          - "patch"
+      sqlalchemy-stack:
+        applies-to: version-updates
+        patterns:
+          - "SQLAlchemy"
+          - "alembic"
+          - "psycopg*"
+          - "greenlet"
+        update-types:
+          - "minor"
+          - "patch"
+      pydantic-stack:
+        applies-to: version-updates
+        patterns:
+          - "pydantic*"
+          - "annotated-types"
+          - "typing-extensions"
+        update-types:
+          - "minor"
+          - "patch"
+      anthropic-langchain:
+        applies-to: version-updates
+        patterns:
+          - "anthropic"
+          - "langchain*"
+        update-types:
+          - "minor"
+          - "patch"
+      authentication:
+        applies-to: version-updates
+        patterns:
+          - "Authlib"
+          - "PyJWT"
+          - "bcrypt"
+          - "cryptography"
+        update-types:
+          - "patch"
+      observability:
+        applies-to: version-updates
+        patterns:
+          - "structlog"
+          - "prometheus-client"
+          - "opentelemetry-*"
+        update-types:
+          - "minor"
+          - "patch"
+      aws-sdk:
+        applies-to: version-updates
+        patterns:
+          - "boto3"
+          - "botocore"
+          - "s3transfer"
+          - "boto3-stubs*"
+        update-types:
+          - "minor"
+          - "patch"
+      test-tools:
+        applies-to: version-updates
+        patterns:
+          - "pytest*"
+          - "factory-boy"
+          - "freezegun"
+          - "responses"
+          - "coverage*"
+        update-types:
+          - "minor"
+          - "patch"
+      lint-and-types:
+        applies-to: version-updates
+        patterns:
+          - "ruff"
+          - "mypy"
+          - "pip-tools"
+          - "types-*"
+        update-types:
+          - "minor"
+          - "patch"
+      security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
+    ignore:
+      # Major version bumps are NEVER auto-PR'd. They require explicit
+      # decision-log entries per AAP Sec 0.7.5 because they may carry
+      # breaking changes incompatible with the pinned architecture
+      # (e.g., Flask 4.x, SQLAlchemy 3.x, pydantic 3.x).
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
+
+  # =====================================================================
+  # Ecosystem 2: npm for the React frontend
+  # =====================================================================
+  # Tracks frontend/package.json and frontend/package-lock.json.
+  # React 19.2.5 and react-dom 19.2.5 are double-pinned: exact in
+  # package.json AND minor/major bumps blocked here (per AAP Sec 0.3.4).
+  # Only patch bumps for the React core flow through automatically.
+  # =====================================================================
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 10
+    target-branch: "main"
+    versioning-strategy: "increase"
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "security"
+      - "frontend"
+    reviewers:
+      - "sales-connections/security-team"
+    assignees:
+      - "sales-connections/frontend-team"
+    allow:
+      - dependency-type: "direct"
+      - dependency-type: "indirect"
+    groups:
+      react-stack:
+        applies-to: version-updates
+        patterns:
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
+        update-types:
+          - "patch"
+      router:
+        applies-to: version-updates
+        patterns:
+          - "react-router-dom"
+          - "@types/react-router-dom"
+        update-types:
+          - "minor"
+          - "patch"
+      tanstack:
+        applies-to: version-updates
+        patterns:
+          - "@tanstack/*"
+        update-types:
+          - "minor"
+          - "patch"
+      tailwind-ecosystem:
+        applies-to: version-updates
+        patterns:
+          - "tailwindcss"
+          - "postcss"
+          - "autoprefixer"
+        update-types:
+          - "minor"
+          - "patch"
+      vite-ecosystem:
+        applies-to: version-updates
+        patterns:
+          - "vite"
+          - "@vitejs/*"
+          - "vitest"
+          - "@vitest/*"
+        update-types:
+          - "minor"
+          - "patch"
+      testing-library:
+        applies-to: version-updates
+        patterns:
+          - "@testing-library/*"
+          - "jsdom"
+          - "msw"
+        update-types:
+          - "minor"
+          - "patch"
+      typescript:
+        applies-to: version-updates
+        patterns:
+          - "typescript"
+          - "@types/node"
+        update-types:
+          - "minor"
+          - "patch"
+      eslint-ecosystem:
+        applies-to: version-updates
+        patterns:
+          - "eslint"
+          - "@eslint/*"
+          - "@typescript-eslint/*"
+          - "typescript-eslint"
+          - "eslint-plugin-*"
+          - "prettier"
+        update-types:
+          - "minor"
+          - "patch"
+      validation:
+        applies-to: version-updates
+        patterns:
+          - "zod"
+        update-types:
+          - "minor"
+          - "patch"
+      ui-helpers:
+        applies-to: version-updates
+        patterns:
+          - "clsx"
+          - "lucide-react"
+        update-types:
+          - "minor"
+          - "patch"
+      security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
+    ignore:
+      # Per AAP Sec 0.3.4, react and react-dom are pinned to EXACTLY
+      # 19.2.5. Only patch bumps flow through; minor and major bumps
+      # require an explicit decision-log entry.
+      - dependency-name: "react"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+      - dependency-name: "react-dom"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+      - dependency-name: "@types/react"
+        update-types:
+          - "version-update:semver-major"
+      - dependency-name: "@types/react-dom"
+        update-types:
+          - "version-update:semver-major"
+      # pgAdmin Docker tag pinning is enforced at the docker-compose
+      # level (docker-compose.yml pins dpage/pgadmin4:8.13). pgadmin
+      # is a "tools" profile container off the critical local-dev
+      # path; major upgrades require a decision-log entry.
+      # Major version bumps for ALL other deps require an explicit
+      # decision-log entry per AAP Sec 0.7.5.
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
+
+  # =====================================================================
+  # Ecosystem 3: GitHub Actions
+  # =====================================================================
+  # Keeps actions/* and other third-party action pins current. This
+  # complements AAP Sec 0.7.7's "Pinned versions everywhere" rule for
+  # the actions used in ci.yml and cd.yml. The directory is "/" because
+  # GitHub Actions workflow files live at .github/workflows/ relative
+  # to the repository root.
+  # =====================================================================
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 5
+    target-branch: "main"
+    commit-message:
+      prefix: "chore(actions)"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    reviewers:
+      - "sales-connections/platform-team"
+    assignees:
+      - "sales-connections/platform-team"
+    allow:
+      - dependency-type: "direct"
+    groups:
+      actions-core:
+        applies-to: version-updates
+        patterns:
+          - "actions/*"
+        update-types:
+          - "minor"
+          - "patch"
+      docker-actions:
+        applies-to: version-updates
+        patterns:
+          - "docker/*"
+        update-types:
+          - "minor"
+          - "patch"
+      aws-actions:
+        applies-to: version-updates
+        patterns:
+          - "aws-actions/*"
+        update-types:
+          - "minor"
+          - "patch"
+      hashicorp-actions:
+        applies-to: version-updates
+        patterns:
+          - "hashicorp/*"
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      # Major version bumps for actions require a decision-log entry
+      # because they often introduce breaking parameter changes
+      # (e.g., actions/checkout@v3 -> @v4 changed default fetch-depth).
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
+
+  # =====================================================================
+  # Ecosystem 4a: Docker base image -- backend Dockerfile
+  # =====================================================================
+  # Tracks the python:3.12-slim-bookworm base image used by
+  # backend/Dockerfile. Dependabot opens a PR when a newer patch
+  # release is available (e.g., new Python 3.12.x with security fixes
+  # or rebuilt slim layer with Debian security patches).
+  # =====================================================================
+  - package-ecosystem: "docker"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 3
+    target-branch: "main"
+    commit-message:
+      prefix: "chore(docker)"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "docker"
+      - "backend"
+    reviewers:
+      - "sales-connections/platform-team"
+    assignees:
+      - "sales-connections/backend-team"
+    allow:
+      - dependency-type: "direct"
+    ignore:
+      # Major or minor bumps (e.g., python:3.13, python:4.x) require a
+      # decision-log entry; AAP Sec 0.3.1 pins to Python 3.12. Patch
+      # bumps (3.12.x -> 3.12.x+1) flow through automatically.
+      - dependency-name: "python"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
+
+  # =====================================================================
+  # Ecosystem 4b: Docker base image -- frontend Dockerfile
+  # =====================================================================
+  # Tracks the node:20-alpine and nginx:1.27-alpine base images used by
+  # frontend/Dockerfile. AAP Sec 0.3.1 pins Node 20 LTS and nginx 1.27.x;
+  # only patch bumps flow through automatically.
+  # =====================================================================
+  - package-ecosystem: "docker"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 3
+    target-branch: "main"
+    commit-message:
+      prefix: "chore(docker)"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "docker"
+      - "frontend"
+    reviewers:
+      - "sales-connections/platform-team"
+    assignees:
+      - "sales-connections/frontend-team"
+    allow:
+      - dependency-type: "direct"
+    ignore:
+      # AAP Sec 0.3.1 pins Node 20 LTS and nginx 1.27.x. Major and minor
+      # bumps (Node 22, nginx 1.28+) require a decision-log entry. Patch
+      # bumps (Node 20.20.x -> 20.20.x+1, nginx 1.27.x -> 1.27.x+1) flow
+      # through automatically because they typically contain only
+      # security and bug fixes within the LTS line.
+      - dependency-name: "node"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "nginx"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
+
+  # =====================================================================
+  # Ecosystem 5: Terraform providers
+  # =====================================================================
+  # Tracks Terraform provider version constraints declared in
+  # infra/terraform/versions.tf (AWS provider ~> 5.70, random ~> 3.6,
+  # null ~> 3.2). Dependabot opens a PR when a newer provider release is
+  # available, bumping the version constraint within the configured
+  # update-type set (patch + minor only; major bumps require an explicit
+  # decision-log entry per AAP Sec 0.7.5 / DL-0022 because AWS provider
+  # major bumps - e.g., 5.x -> 6.x - typically introduce breaking
+  # attribute deprecations such as the data.aws_region.current.name -> .region
+  # change deferred per DL-0059 to a future coordinated provider upgrade).
+  #
+  # Per AAP Sec 0.7.7 "Pinned versions everywhere" applies equally to
+  # IaC: drifting provider versions across CI runs would produce
+  # plan-vs-apply discrepancies and is unacceptable for production
+  # deploys. Reviewer routing is platform-team because Terraform changes
+  # have infrastructure-blast-radius implications that require ops review.
+  # =====================================================================
+  - package-ecosystem: "terraform"
+    directory: "/infra/terraform"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 3
+    target-branch: "main"
+    commit-message:
+      prefix: "chore(terraform)"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "terraform"
+      - "infrastructure"
+    reviewers:
+      - "sales-connections/security-team"
+    assignees:
+      - "sales-connections/platform-team"
+    allow:
+      - dependency-type: "direct"
+    ignore:
+      # AWS provider major-version bumps (5.x -> 6.x) frequently introduce
+      # breaking attribute changes (see DL-0059 for the data.aws_region
+      # .name -> .region migration deferred until 6.x adoption); they
+      # require an explicit decision-log entry, a coordinated provider
+      # upgrade across all modules, and a planned terraform plan/apply
+      # in the dev environment before merge. Auto-PRing major bumps
+      # would risk a CD pipeline outage if a deprecated attribute were
+      # referenced anywhere in the composition.
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
