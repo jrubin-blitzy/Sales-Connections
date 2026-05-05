@@ -14,11 +14,12 @@ apps per session without ``Duplicated timeseries`` errors.
 Public API
 ----------
 ``init_metrics(app)``  Wire metrics into a Flask application.
-``http_requests_total``           Counter[method, path, status]
-``http_request_duration_seconds`` Histogram[method, path]
-``ai_request_duration_seconds``   Histogram (F-002 latency budget)
-``audit_emit_duration_seconds``   Histogram (F-013 emission budget)
-``active_sessions``               Gauge
+``http_requests_total``            Counter[method, path, status]
+``http_request_duration_seconds``  Histogram[method, path]
+``ai_request_duration_seconds``    Histogram (F-002 latency budget)
+``audit_emit_duration_seconds``    Histogram (F-013 emission budget)
+``active_sessions``                Gauge (per-worker session lifecycle)
+``failed_login_attempts_total``    Counter[outcome] (security signal)
 
 Performance budgets enforced by histogram buckets (per AAP Section 0.7.3):
 
@@ -287,13 +288,76 @@ audit_emit_duration_seconds: Histogram = Histogram(
 )
 
 # Active sessions gauge. Maintained by session lifecycle code in
-# :mod:`app.middleware.auth` (incremented on session establishment,
-# decremented on logout/expiry). Distinct from "concurrent in-flight
-# requests"; this metric counts authenticated users with valid sessions
-# regardless of whether they have an active request at the moment.
+# :mod:`app.api.auth` (incremented on session JWT mint via the
+# password-login and OAuth-callback paths; decremented on explicit
+# logout). Distinct from "concurrent in-flight requests"; this metric
+# counts authenticated users with valid sessions regardless of whether
+# they have an active request at the moment.
+#
+# Semantics and known limitations (per QA Checkpoint 10 Issue 6):
+#
+# * Per-worker counter. Each Gunicorn worker maintains its own gauge
+#   value. The Prometheus scrape sums across workers when the
+#   ``multiproc`` mode is enabled; without that mode the scraped value
+#   reflects ONE worker's view. CloudWatch dashboards aggregate via the
+#   ECS service summary metric.
+# * Resets to 0 on worker restart. Sessions minted before the restart
+#   remain valid (the JWT is verified statelessly via HMAC) but the
+#   gauge does not track them.
+# * Best-effort decrement on natural expiry. The 8-hour JWT TTL elapses
+#   silently; this gauge is decremented only when the user explicitly
+#   logs out via ``POST /auth/logout``. Operators reading the gauge
+#   should interpret it as "logins minus explicit logouts since worker
+#   start" rather than a true "currently-valid-JWT" count.
+# * May briefly go negative on worker restart. If a worker that started
+#   AFTER a session was minted receives the corresponding logout, it
+#   decrements its (zero) counter to -1. Operators interpret the sum
+#   across workers as the authoritative value; the ECS task count and
+#   service-mesh-level connection metrics are the canonical
+#   substitutes when worker-bound bookkeeping is insufficient.
 active_sessions: Gauge = Gauge(
     "active_sessions",
-    "Number of authenticated user sessions currently considered active.",
+    (
+        "Number of authenticated user sessions currently considered "
+        "active. Per-worker counter, incremented on session JWT mint "
+        "and decremented on explicit logout; resets to 0 on worker "
+        "restart and does not track natural JWT expiry."
+    ),
+    registry=metrics_registry,
+)
+
+
+# Failed login attempts counter labelled by outcome. Incremented inside
+# the password-login handler in :mod:`app.api.auth` BEFORE the global
+# error handler converts the AuthError into the anti-enumeration HTTP
+# 401 response. Provides a dedicated security signal independent of
+# the generic ``http_requests_total{path="/auth/login",status="401"}``
+# series so SIEM tooling and alerting rules can isolate authentication
+# failures from generic 401s emitted by RBAC and middleware paths.
+#
+# Outcome values (per QA Checkpoint 10 Issue 8):
+#
+# * ``user_not_found`` -- the email did not match any user row in the
+#   organization. Defense against email enumeration is preserved
+#   because the response body is identical to ``wrong_password``; the
+#   metric is internal-only.
+# * ``wrong_password`` -- the email matched a row but the bcrypt
+#   verification failed.
+# * ``oauth_only_user`` -- the email matched a row created via Google
+#   OAuth (``password_hash IS NULL``); the user must use the Google
+#   sign-in button.
+#
+# Cardinality is bounded at three labels regardless of traffic
+# volume, well within Prometheus' practical labelset limits.
+failed_login_attempts_total: Counter = Counter(
+    "failed_login_attempts_total",
+    (
+        "Failed password login attempts partitioned by outcome. "
+        "Per AAP F-012 the per-attempt response body is uniform to "
+        "preserve anti-enumeration; this counter exposes the "
+        "operator-facing breakdown without leaking it to the client."
+    ),
+    labelnames=("outcome",),
     registry=metrics_registry,
 )
 
@@ -414,7 +478,17 @@ def _metrics_endpoint() -> Response:
             )
 
     payload = generate_latest(metrics_registry)
-    return Response(payload, mimetype=CONTENT_TYPE_LATEST)
+    # Per QA Checkpoint 10 Issue 7: prometheus_client's
+    # ``CONTENT_TYPE_LATEST`` already includes ``charset=utf-8`` (e.g.,
+    # ``text/plain; version=0.0.4; charset=utf-8``). Flask's
+    # ``Response(..., mimetype=...)`` constructor independently appends
+    # its default charset, producing the duplicated
+    # ``charset=utf-8; charset=utf-8`` parameter on the wire. Setting
+    # the header explicitly via the ``content_type`` argument bypasses
+    # Flask's auto-charset behavior and yields the canonical
+    # ``Content-Type: text/plain; version=0.0.4; charset=utf-8`` value
+    # documented in the Prometheus exposition specification.
+    return Response(payload, content_type=CONTENT_TYPE_LATEST)
 
 
 def _before_request_record_start_time() -> None:
@@ -581,6 +655,7 @@ __all__ = [
     "active_sessions",
     "ai_request_duration_seconds",
     "audit_emit_duration_seconds",
+    "failed_login_attempts_total",
     "http_request_duration_seconds",
     "http_requests_total",
     "init_metrics",

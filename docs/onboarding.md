@@ -671,23 +671,38 @@ curl -s http://localhost:5000/metrics | head -40
 
 The Prometheus exposition output must contain at minimum:
 
-- Counter `http_requests_total{method,route,status}` — incremented on every response.
-- Histogram `http_request_duration_seconds{method,route}` — observed on every response.
-- Histogram `ai_request_duration_seconds` — observed on every Anthropic call.
-- Counter `audit_events_emitted_total{event_type}` — incremented on every audit event.
-- Gauge `active_sessions` — current number of valid session JWTs.
+- Counter `http_requests_total{method,path,status}` — incremented on every response.
+- Histogram `http_request_duration_seconds{method,path}` — observed on every response.
+- Histogram `ai_request_duration_seconds{outcome}` — observed on every Anthropic Claude call (with `outcome ∈ {success, timeout, error, validation}`).
+- Histogram `audit_emit_duration_seconds{event_type}` — observed on every audit event emission. The `_count` series of this histogram is the operative counter for "how many audit events have been emitted" (Prometheus emits a `..._count` and `..._sum` series for every histogram automatically).
+- Counter `failed_login_attempts_total{outcome}` — incremented on every failed password login (with `outcome ∈ {user_not_found, wrong_password, oauth_only_user}`). Provides a dedicated security signal for SIEM alerting independent of the generic `http_requests_total{path="/auth/login",status="401"}` series.
+- Gauge `active_sessions` — per-worker count of currently-known session JWTs. Incremented on session JWT mint (password login or OAuth callback), decremented on explicit logout. Resets to zero on worker restart and does NOT track natural JWT expiry; treat as "logins minus explicit logouts since worker start" rather than a true currently-valid count.
+- Built-in process collectors: `process_resident_memory_bytes`, `process_virtual_memory_bytes`, `process_cpu_seconds_total`, `process_open_fds`, `process_max_fds`, `process_start_time_seconds` (registered in `app/extensions.py`).
+- Built-in Python collectors: `python_gc_*`, `python_info`.
 
-Counters are lazy: they are not exposed until at least one observation has been recorded. If a counter is missing, trigger a sample request first.
+Counters and histograms are lazy: they are not exposed until at least one observation has been recorded. If a metric is missing, trigger a sample request first.
 
 ### Distributed traces
 
 The default development stack does not start a tracing collector. To enable end-to-end tracing locally:
 
 ```bash
-docker compose --profile tracing up
+# 1. Start the Jaeger all-in-one collector + UI (defined in docker-compose.yml under the `tracing` profile).
+docker compose --profile tracing up -d jaeger
+
+# 2. Configure the backend to export to it. Either edit backend/.env or restart with the env var inline:
+OTLP_EXPORTER_ENDPOINT=http://jaeger:4318/v1/traces docker compose up -d --no-deps backend
+
+# 3. Browse traces at http://localhost:16686/  (search service name `sales-connections-api`).
 ```
 
-This adds a Jaeger all-in-one container at `http://localhost:16686/`. Confirm that backend traces cover Flask handler spans, SQLAlchemy query spans, and outbound HTTP spans (for Anthropic and Google OAuth).
+The Jaeger container exposes:
+
+- `http://localhost:16686/` — Jaeger UI for trace search and visualization.
+- `http://localhost:4318/v1/traces` — OTLP HTTP/protobuf receiver (the backend's default exporter target).
+- `http://localhost:4317/` — OTLP gRPC receiver (alternative transport; not used by default).
+
+Confirm that backend traces cover Flask handler spans, SQLAlchemy query spans, and outbound HTTP spans (for Anthropic and Google OAuth — see `backend/app/observability/tracing.py::_instrument_outbound_http` for the `httpx` and `requests` instrumentations that propagate W3C `traceparent`/`tracestate` headers on every outbound call).
 
 ### Health checks
 

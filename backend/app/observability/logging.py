@@ -20,11 +20,20 @@ Secret redaction (per AAP Section 0.7.4)
 Values for keys matching any of these patterns are replaced with the
 literal string ``***REDACTED***`` BEFORE the renderer runs:
 
-- ``*_key``        (e.g., ``api_key``, ``signing_key``, ``ANTHROPIC_API_KEY``)
-- ``*_secret``     (e.g., ``client_secret``)
-- ``password``     (case-insensitive)
+- ``*password*``   (e.g., ``password``, ``db_password``, ``user_password``,
+                    ``password_hash``)
+- ``*secret*``     (e.g., ``client_secret``, ``aws_secret_access_key``,
+                    ``shared_secret``)
 - ``token``        (case-insensitive; ``access_token``, ``refresh_token``)
 - ``authorization`` (HTTP header naming convention)
+- ``bearer``       (HTTP ``Authorization: Bearer ...`` credential)
+- ``cookie`` / ``set_cookie`` / ``set-cookie`` (raw HTTP cookie values)
+- ``*api_key*``    (e.g., ``api_key``, ``ANTHROPIC_API_KEY``, ``stripe_apikey``)
+- specific known-sensitive ``*_key`` variants: ``signing_key``,
+  ``secret_key``, ``private_key``, ``encryption_key``, ``master_key``,
+  ``session_key``. Generic ``*_key`` is INTENTIONALLY NOT redacted to
+  avoid false positives on benign debug context like ``sort_key``,
+  ``cache_key``, ``partition_key``, ``cursor_key`` (per QA Issue 13).
 
 The redactor walks dictionaries recursively but does not descend into
 arbitrary objects, by design, to avoid expensive reflection on every
@@ -129,16 +138,24 @@ _LOG_LEVEL_MAP: dict[str, int] = {
 # ``re.fullmatch`` (whole-string match) and cover the OWASP-recommended
 # common naming patterns:
 #
-#   * ``password`` / ``passwd`` -- plain authentication credentials
-#   * ``authorization`` -- HTTP Authorization header values
+#   * ``password`` / ``passwd`` -- plain authentication credentials,
+#     including AWS-style compound names ``db_password``,
+#     ``user_password``, and bcrypt's natural ``password_hash``.
+#   * ``authorization`` -- HTTP Authorization header values.
 #   * ``token`` and ``*_token`` -- bearer/access/refresh/id tokens, etc.
-#   * ``*_secret`` -- ``client_secret``, ``shared_secret``, etc.
+#   * ``*secret*`` -- ``client_secret``, ``shared_secret``,
+#     ``aws_secret_access_key``, ``secret_token``, etc.
 #   * Any name containing ``api_key``/``api-key``/``apikey`` --
 #     covers ``stripe_api_key``, ``ANTHROPIC_API_KEY``,
 #     ``my-api-key``, ``my_apikey``, etc.
 #   * Specific known-sensitive ``*_key`` variants:
 #     ``signing_key``, ``secret_key``, ``private_key``,
 #     ``encryption_key``, ``master_key``, ``session_key``.
+#   * ``bearer`` -- HTTP "Bearer <token>" credential header naming.
+#   * ``cookie`` and ``set_cookie`` / ``set-cookie`` -- raw HTTP
+#     cookie payloads (the actual ``Cookie:`` header value carries
+#     session credentials; cookie *names* such as
+#     ``session_cookie_name`` are unaffected).
 #
 # Per QA Issue 13: the previous broad ``.*_key`` pattern matched
 # benign debug context like ``sort_key``, ``cache_key``,
@@ -148,6 +165,20 @@ _LOG_LEVEL_MAP: dict[str, int] = {
 # false-positive-tolerant matching for true credential names while
 # letting application-domain ``*_key`` identifiers (sort keys,
 # cache keys, range keys) flow through to the renderer.
+#
+# Per QA Checkpoint 10 (Issue 1): the original variants
+# ``password`` / ``.*_secret`` matched only on whole-key fullmatch
+# and missed compound credential names common in AWS/database
+# integrations: ``aws_secret_access_key``, ``db_password``,
+# ``user_password``, ``password_hash``, ``Bearer``, ``cookie``.
+# The pattern is widened to substring-style matches for
+# ``password`` and ``secret`` (still anchored as whole-key matches
+# via ``.*<word>.*``), explicit literals for ``bearer`` / ``cookie``
+# / ``set_cookie``, and the documented behavior is mirrored in
+# ``docs/security.md`` so contributors and operators see the same
+# story. A new test class ``TestRedactSecretsProcessor`` in
+# ``backend/tests/observability/test_logging_redaction.py`` covers
+# every credential variant explicitly.
 #
 # False-negative risk analysis: the explicit ``*_key`` allowlist
 # below covers every ``_key`` variant the codebase or its
@@ -160,12 +191,12 @@ _LOG_LEVEL_MAP: dict[str, int] = {
 _SECRET_KEY_PATTERN: re.Pattern[str] = re.compile(
     r"(?i)"
     r"(?:"
-    r"password"
+    r".*password.*"
     r"|passwd"
     r"|authorization"
     r"|token"
     r"|.*_token"
-    r"|.*_secret"
+    r"|.*secret.*"
     r"|.*api[_-]?key.*"
     r"|signing_key"
     r"|secret_key"
@@ -173,6 +204,9 @@ _SECRET_KEY_PATTERN: re.Pattern[str] = re.compile(
     r"|encryption_key"
     r"|master_key"
     r"|session_key"
+    r"|bearer"
+    r"|cookie"
+    r"|set[_-]?cookie"
     r")"
 )
 
@@ -265,15 +299,27 @@ def redact_secrets_processor(
     arbitrary objects (by design, to keep every log line cheap to
     render).
 
-    Per AAP Section 0.7.4, keys matching any of the following patterns
-    are redacted (case-insensitive):
+    Per AAP Section 0.7.4 and the QA Checkpoint 10 widening, keys
+    matching any of the following patterns are redacted
+    (case-insensitive, whole-key fullmatch against ``_SECRET_KEY_PATTERN``):
 
-    - ``password``
+    - Any key containing ``password`` (matches ``password``,
+      ``db_password``, ``user_password``, ``password_hash``,
+      ``aws_password``, etc.)
+    - ``passwd``
     - ``authorization``
     - ``token`` and ``*_token``
-    - ``*_key``  (e.g., ``api_key``, ``ANTHROPIC_API_KEY``)
-    - ``*_secret``
-    - any key containing ``api_key``, ``api-key``, ``apikey``
+    - Any key containing ``secret`` (matches ``secret``,
+      ``aws_secret_access_key``, ``client_secret``, ``api_secret``, etc.)
+    - Any key containing ``api_key``, ``api-key``, ``apikey``
+    - Six narrow ``*_key`` literals: ``signing_key``, ``secret_key``,
+      ``private_key``, ``encryption_key``, ``master_key``, ``session_key``
+      (the broad ``.*_key`` pattern is intentionally NOT used per
+      QA Issue 13 to avoid false-positive redaction of benign
+      identifiers like ``sort_key`` / ``cache_key`` / ``cursor_key``)
+    - ``bearer`` (raw Bearer token values)
+    - ``cookie`` and ``set_cookie`` / ``set-cookie`` (raw HTTP cookie
+      header payloads)
 
     Args:
         logger: The wrapped logger emitting the record. Unused; the

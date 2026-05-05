@@ -339,6 +339,45 @@ class TestEmailPasswordLogin:
         body = me_response.get_json()
         assert body["user"]["email"] == "persist@example.com"
 
+    def test_login_increments_active_sessions_gauge(
+        self,
+        client: Any,
+        organization: Any,
+    ) -> None:
+        """Per QA Checkpoint 10 Issue 6, a successful login increments
+        the ``active_sessions`` Gauge.
+
+        The gauge is best-effort observability per the documented
+        contract in ``app.observability.metrics.active_sessions``;
+        this test verifies the wiring exists at the API boundary
+        (regression guard against the gauge being defined but never
+        updated, which was the original bug).
+        """
+        from app.observability.metrics import active_sessions  # noqa: PLC0415
+
+        ContributorUserFactory(
+            organization=organization,
+            email="active-sessions@example.com",
+            password_hash=hash_password("Secret123!"),
+        )
+
+        before = active_sessions._value.get()
+        response = client.post(
+            "/auth/login",
+            json={
+                "email": "active-sessions@example.com",
+                "password": "Secret123!",
+            },
+        )
+        assert response.status_code == 200, (
+            "Login must succeed to test the increment side effect"
+        )
+        after = active_sessions._value.get()
+        assert after == pytest.approx(before + 1.0), (
+            f"Expected active_sessions to increment by 1 after login; "
+            f"before={before}, after={after}"
+        )
+
     def test_login_emits_audit_event(
         self,
         client: Any,
@@ -674,6 +713,32 @@ class TestLogout:
         handler reads ``g.session`` opportunistically and emits an
         audit event when present, then clears the cookie unconditionally.
     """
+
+    def test_logout_decrements_active_sessions_gauge(
+        self,
+        admin_client: Any,
+    ) -> None:
+        """Per QA Checkpoint 10 Issue 6, a successful logout decrements
+        the ``active_sessions`` Gauge.
+
+        The decrement is gated on the actor identity being resolved
+        (i.e., a valid JWT was present in the cookie and
+        ``revoke_session_and_audit`` succeeded). Anonymous logouts do
+        NOT decrement to avoid a negative-bias drift attack.
+        """
+        from app.observability.metrics import active_sessions  # noqa: PLC0415
+
+        # ``admin_client`` is already authenticated; logout MUST
+        # decrement the gauge once by exactly one because the handler
+        # successfully resolved an actor identity.
+        before = active_sessions._value.get()
+        response = admin_client.post("/auth/logout")
+        assert response.status_code == 200
+        after = active_sessions._value.get()
+        assert after == pytest.approx(before - 1.0), (
+            f"Expected active_sessions to decrement by 1 after authenticated "
+            f"logout; before={before}, after={after}"
+        )
 
     def test_logout_clears_session_cookie(
         self,

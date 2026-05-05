@@ -13,9 +13,13 @@ When ``OTLP_EXPORTER_ENDPOINT`` is configured, the function:
 3. Wires that exporter into a ``BatchSpanProcessor`` for efficient delivery
    on a background thread (vs. the latency-blocking ``SimpleSpanProcessor``).
 4. Installs the resulting ``TracerProvider`` as the global default.
-5. Auto-instruments Flask via ``FlaskInstrumentor`` and (when an engine is
+5. Auto-instruments Flask via ``FlaskInstrumentor``, (when an engine is
    supplied) SQLAlchemy via ``SQLAlchemyInstrumentor`` for end-to-end
-   request-to-database span linkage.
+   request-to-database span linkage, and outbound HTTP clients via
+   ``HTTPXClientInstrumentor`` (Anthropic Claude SDK) and
+   ``RequestsInstrumentor`` (Authlib's Google OAuth flow) so W3C trace
+   context (``traceparent``/``tracestate`` headers) is propagated on
+   every outbound call.
 
 When ``OTLP_EXPORTER_ENDPOINT`` is empty (the default in local dev/tests
 without a collector), this module is a graceful no-op so worker startup
@@ -108,6 +112,37 @@ try:
     _OTEL_AVAILABLE = True
 except ImportError:  # pragma: no cover - defensive; OTel is pinned in requirements.txt
     _OTEL_AVAILABLE = False
+
+# Outbound HTTP instrumentations (per QA Checkpoint 10 Issue 4).
+#
+# The Flask + SQLAlchemy instrumentations above cover INBOUND request
+# spans and database round-trip spans, but OUTBOUND HTTP calls (Anthropic
+# Claude via httpx, Google OAuth via Authlib's underlying ``requests``
+# session) need their own instrumentations to inject the W3C
+# ``traceparent``/``tracestate`` headers. Without these, downstream
+# services -- or future internal services -- cannot link their spans
+# back to the originating request.
+#
+# Both instrumentation packages (``opentelemetry-instrumentation-httpx``
+# and ``opentelemetry-instrumentation-requests``) are pinned in
+# ``backend/requirements.txt`` at ``==0.50b0``. The ImportError guard
+# is defensive: stripped-down environments (recovery shells, minimal
+# CI images) may run without these instrumentation extras, in which
+# case we silently skip outbound instrumentation rather than failing
+# the application factory.
+try:
+    from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+
+    _HTTPX_INSTRUMENTATION_AVAILABLE = True
+except ImportError:  # pragma: no cover - defensive
+    _HTTPX_INSTRUMENTATION_AVAILABLE = False
+
+try:
+    from opentelemetry.instrumentation.requests import RequestsInstrumentor
+
+    _REQUESTS_INSTRUMENTATION_AVAILABLE = True
+except ImportError:  # pragma: no cover - defensive
+    _REQUESTS_INSTRUMENTATION_AVAILABLE = False
 
 
 if TYPE_CHECKING:
@@ -384,6 +419,52 @@ def _instrument_sqlalchemy(engine: Engine | None) -> None:
         )
 
 
+def _instrument_outbound_http() -> None:
+    """Apply outbound-HTTP auto-instrumentation idempotently.
+
+    Per QA Checkpoint 10 Issue 4, the Flask + SQLAlchemy
+    instrumentations cover the inbound request and database round-trip
+    spans but do NOT propagate W3C trace context on outbound HTTP
+    calls. The Anthropic Claude SDK uses ``httpx`` as its underlying
+    HTTP client and Authlib's Google OAuth flow uses ``requests``;
+    instrumenting BOTH covers every outbound HTTP boundary the MVP
+    crosses.
+
+    The two instrumentations are global singletons. ``.instrument()``
+    raises an exception (varies by OTel version) when called twice;
+    pytest-flask constructs multiple Flask apps per session, so we
+    wrap each call in a defensive try/except that logs the
+    "already instrumented" path and continues.
+
+    Both instrumentations are gated behind ImportError guards because
+    the project's pyproject.toml installs them by default but
+    stripped-down environments (recovery shells, minimal CI) might run
+    without them. In those environments, outbound calls execute
+    normally but without trace-context headers; the absence does not
+    fail any request.
+    """
+    if _HTTPX_INSTRUMENTATION_AVAILABLE:
+        try:
+            HTTPXClientInstrumentor().instrument()
+        except Exception as exc:  # pragma: no cover - defensive
+            # As with Flask/SQLAlchemy, different OTel versions raise
+            # different exception classes for "already instrumented".
+            # We log and continue.
+            _logger.warning(
+                "httpx_instrumentation_skipped",
+                extra={"error": repr(exc)},
+            )
+
+    if _REQUESTS_INSTRUMENTATION_AVAILABLE:
+        try:
+            RequestsInstrumentor().instrument()
+        except Exception as exc:  # pragma: no cover - defensive
+            _logger.warning(
+                "requests_instrumentation_skipped",
+                extra={"error": repr(exc)},
+            )
+
+
 # ---------------------------------------------------------------------------
 # Public function: init_tracing
 # ---------------------------------------------------------------------------
@@ -491,21 +572,28 @@ def init_tracing(app: Flask, engine: Engine | None = None) -> None:
     # Step 5: Apply auto-instrumentation. Flask instrumentation always
     # runs (against the new app); SQLAlchemy instrumentation runs only
     # when an engine is supplied (the application factory passes None
-    # in test scenarios that do not exercise the database).
+    # in test scenarios that do not exercise the database). Outbound
+    # HTTP instrumentations (httpx for Anthropic, requests for
+    # Authlib's Google OAuth) are global singletons and are applied
+    # unconditionally; they no-op idempotently on second-or-later
+    # calls (per QA Checkpoint 10 Issue 4).
     _instrument_flask(app)
     _instrument_sqlalchemy(engine)
+    _instrument_outbound_http()
 
     # Step 6: Confirm successful initialization in the process logs so
     # operators can verify the configuration at startup. The single
     # INFO line includes the service name, the configured endpoint
     # (which is intentionally NOT redacted because the endpoint is not
-    # a secret), and a flag indicating whether SQLAlchemy
-    # instrumentation was applied.
+    # a secret), and flags indicating whether SQLAlchemy and outbound
+    # HTTP instrumentations were applied.
     _logger.info(
         "tracing_initialized",
         extra={
             "service.name": app.config.get("OTEL_SERVICE_NAME", _DEFAULT_SERVICE_NAME),
             "endpoint": app.config.get("OTLP_EXPORTER_ENDPOINT"),
             "sqlalchemy_instrumented": engine is not None,
+            "httpx_instrumented": _HTTPX_INSTRUMENTATION_AVAILABLE,
+            "requests_instrumented": _REQUESTS_INSTRUMENTATION_AVAILABLE,
         },
     )

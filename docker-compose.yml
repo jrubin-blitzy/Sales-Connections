@@ -308,6 +308,52 @@ services:
     networks:
       - sales-connections-net
 
+  # ---------------------------------------------------------------------------
+  # jaeger - optional distributed-tracing collector + UI (AAP 0.7.5)
+  # ---------------------------------------------------------------------------
+  # Behind the "tracing" profile so a default `docker compose up` does NOT
+  # pay the cost of launching it. Activate with:
+  #   docker compose --profile tracing up
+  #
+  # Jaeger all-in-one bundles the OTLP collector, an in-memory span store,
+  # and the query/UI service into one container. The :OTLP HTTP endpoint
+  # is exposed on host port 4318 so the backend's ``OTLP_EXPORTER_ENDPOINT``
+  # config can point at ``http://jaeger:4318/v1/traces`` (intra-network)
+  # or ``http://localhost:4318/v1/traces`` (host-side curl). The query UI
+  # lives at http://localhost:16686 (verifies trace propagation per the
+  # AAP §0.7.5 Observability rule).
+  #
+  # Per QA Checkpoint 10 Issue 10: the onboarding doc's "docker compose
+  # --profile tracing up" instruction now resolves to this service rather
+  # than failing with "no such profile".
+  #
+  # Pinned image per AAP §0.7.7. Update only via a decision-log entry.
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    container_name: sales-connections-jaeger
+    restart: unless-stopped
+    profiles:
+      - tracing
+    environment:
+      # Enable the OTLP receiver alongside the legacy Jaeger collectors.
+      # The backend's OTLP HTTP exporter targets port 4318 by default.
+      COLLECTOR_OTLP_ENABLED: "true"
+      # Keep span retention modest in local dev; the in-memory store is
+      # bounded by max-traces, not time. 50K traces is plenty for
+      # interactive debugging without consuming excessive memory.
+      MEMORY_MAX_TRACES: "50000"
+    ports:
+      # Jaeger UI (browse traces).
+      - "16686:16686"
+      # OTLP HTTP receiver (the backend posts spans here when
+      # OTLP_EXPORTER_ENDPOINT is set to http://localhost:4318/v1/traces).
+      - "4318:4318"
+      # OTLP gRPC receiver (alternative transport; not used by default
+      # because the backend's exporter is HTTP/protobuf per DL-0049).
+      - "4317:4317"
+    networks:
+      - sales-connections-net
+
 
 # =============================================================================
 # Networks

@@ -414,10 +414,19 @@ Secret retrieval is centralized in `backend/app/config.py`.
 
 The structlog processor in `backend/app/observability/logging.py` filters secret-like keys from every log record before serialization.
 
-- The redaction pattern is a case-insensitive regex matching keys named `password`, `authorization`, `token`, `*_token`, `*_key`, `*_secret`, or any name containing `secret`. Matched values are replaced with the literal string `***REDACTED***`.
+- The redaction pattern is a case-insensitive regex applied via `re.fullmatch` (whole-key match) to every key in the structlog event dict. The pattern matches:
+    - any name containing `password` (catches `password`, `db_password`, `user_password`, `password_hash`, etc.) and the alias `passwd`
+    - any name containing `secret` (catches `secret`, `client_secret`, `aws_secret_access_key`, `shared_secret`, etc.)
+    - `authorization` and `bearer` (HTTP credential header naming)
+    - `token` and `*_token` (bearer/access/refresh/id tokens)
+    - any name containing `api_key` / `api-key` / `apikey` (covers `ANTHROPIC_API_KEY`, `stripe_api_key`, `my-api-key`, etc.)
+    - the specific known-sensitive `*_key` variants `signing_key`, `secret_key`, `private_key`, `encryption_key`, `master_key`, and `session_key`
+    - `cookie`, `set_cookie`, and `set-cookie` (raw HTTP cookie values; the cookie *name*, e.g., `session_cookie_name`, is unaffected)
+- Matched values are replaced with the literal string `***REDACTED***`.
+- Generic `*_key` is intentionally NOT redacted to avoid noisy false positives on benign domain keys (`sort_key`, `cache_key`, `partition_key`, `cursor_key`); contributors logging a new credential name MUST choose a name covered by one of the patterns above OR extend the regex.
 - The redactor walks dictionaries recursively up to a bounded depth (chosen to prevent pathological log payloads from causing CPU exhaustion).
 - The redactor runs before any renderer, so neither JSON output nor console output ever contains a secret value.
-- Verified by `backend/tests/observability/test_logging.py`, which constructs payloads with secret-named keys and asserts the rendered output contains `***REDACTED***`.
+- Verified by `backend/tests/observability/test_logging_redaction.py`, which constructs payloads with every credential-name variant above and asserts the rendered output contains `***REDACTED***` for each.
 
 ### Boundary enforcement
 

@@ -42,10 +42,16 @@ effect here would propagate into every test invocation.
 
 from __future__ import annotations
 
+import contextlib
 from typing import TYPE_CHECKING
 
 from authlib.integrations.flask_client import OAuth
-from prometheus_client import CollectorRegistry
+from prometheus_client import (
+    CollectorRegistry,
+    GCCollector,
+    PlatformCollector,
+    ProcessCollector,
+)
 from sqlalchemy import MetaData, create_engine
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.orm import DeclarativeBase, Session as SQLAlchemySession, sessionmaker
@@ -465,15 +471,57 @@ logger: structlog.stdlib.BoundLogger = structlog.get_logger("app")
 #    ``ValueError: Duplicated timeseries``. A dedicated
 #    ``CollectorRegistry`` sidesteps this entirely.
 # 2. Namespace hygiene: keeps the application's metric surface
-#    distinct from any system-default collectors that may be
-#    auto-registered (process metrics, gc metrics) on the default
-#    registry.
+#    distinct from any unrelated collectors that downstream
+#    libraries might inadvertently register on the default
+#    ``prometheus_client.REGISTRY``.
 #
 # This registry is consumed by :func:`app.observability.metrics.init_metrics`
 # (which mounts the ``/metrics`` route and registers the application's
 # counters, histograms, and gauges).
 
 metrics_registry: CollectorRegistry = CollectorRegistry()
+
+
+# ---------------------------------------------------------------------------
+# Built-in Process / Platform / GC Collectors (per QA Checkpoint 10 Issue 5)
+# ---------------------------------------------------------------------------
+# ``prometheus_client``'s built-in ``ProcessCollector``,
+# ``PlatformCollector``, and ``GCCollector`` auto-register against the
+# DEFAULT global ``REGISTRY`` only at module import time. Because this
+# project uses a dedicated ``metrics_registry`` (above) for test
+# isolation, those collectors do NOT show up at the ``/metrics``
+# endpoint without explicit registration here. The ``ECS CloudWatch
+# container insights`` metrics fill the gap in production but
+# Prometheus-native operator tooling (Grafana, Alertmanager, pgwatch,
+# kube-prometheus-stack) expects ``process_resident_memory_bytes``,
+# ``process_open_fds``, ``process_cpu_seconds_total``, and the
+# ``python_*`` namespace at minimum.
+#
+# Each collector is constructed exactly once at module import time,
+# binding it to the custom ``metrics_registry``. The constructors are
+# idempotent in the sense that the registry rejects duplicate
+# collectors with a ``ValueError`` if module re-import ever fires
+# (which it should not under normal Python import semantics).
+#
+# A defensive try/except guard tolerates the (rare, dev-only) case
+# where the runtime is not the canonical CPython interpreter or where
+# ``/proc`` is unavailable (e.g., macOS local development without
+# /proc). In that case the platform collector is still safe; only
+# ProcessCollector is /proc-bound on POSIX. The except block silently
+# logs the failure rather than crashing the application factory.
+
+# ValueError covers "collector already registered" (which would only
+# occur if module re-import ever fired under unusual test harnesses);
+# OSError covers /proc not mounted (rare on CPython on Linux containers
+# but defensible on macOS local development).
+with contextlib.suppress(ValueError, OSError):  # pragma: no cover - defensive
+    ProcessCollector(registry=metrics_registry)
+
+with contextlib.suppress(ValueError):  # pragma: no cover - defensive
+    PlatformCollector(registry=metrics_registry)
+
+with contextlib.suppress(ValueError):  # pragma: no cover - defensive
+    GCCollector(registry=metrics_registry)
 
 
 # ---------------------------------------------------------------------------

@@ -347,6 +347,93 @@ class TestAuthenticatePassword:
                 org_id=organization.id,
             )
 
+    def test_user_not_found_increments_failed_login_counter(
+        self,
+        app: Flask,
+        db_session: DBSession,
+        organization,
+    ) -> None:
+        """Per QA Checkpoint 10 Issue 8, the user-not-found failure
+        increments ``failed_login_attempts_total{outcome="user_not_found"}``.
+        """
+        from app.observability.metrics import failed_login_attempts_total  # noqa: PLC0415
+
+        before = failed_login_attempts_total.labels(
+            outcome="user_not_found",
+        )._value.get()
+        with pytest.raises(AuthenticationError):
+            authenticate_password(
+                db_session=db_session,
+                email="nonexistent-counter-test@example.com",
+                password="any-password",
+                org_id=organization.id,
+            )
+        after = failed_login_attempts_total.labels(
+            outcome="user_not_found",
+        )._value.get()
+        assert after == pytest.approx(before + 1.0)
+
+    def test_wrong_password_increments_failed_login_counter(
+        self,
+        app: Flask,
+        db_session: DBSession,
+        organization,
+        contributor_user,
+    ) -> None:
+        """Per QA Checkpoint 10 Issue 8, the wrong-password failure
+        increments ``failed_login_attempts_total{outcome="wrong_password"}``.
+        """
+        from app.observability.metrics import failed_login_attempts_total  # noqa: PLC0415
+
+        new_hash = hash_password("right-password")
+        contributor_user.password_hash = new_hash
+        db_session.commit()
+
+        before = failed_login_attempts_total.labels(
+            outcome="wrong_password",
+        )._value.get()
+        with pytest.raises(AuthenticationError):
+            authenticate_password(
+                db_session=db_session,
+                email=contributor_user.email,
+                password="wrong-password",
+                org_id=organization.id,
+            )
+        after = failed_login_attempts_total.labels(
+            outcome="wrong_password",
+        )._value.get()
+        assert after == pytest.approx(before + 1.0)
+
+    def test_oauth_only_user_increments_failed_login_counter(
+        self,
+        app: Flask,
+        db_session: DBSession,
+        organization,
+    ) -> None:
+        """Per QA Checkpoint 10 Issue 8, the oauth-only-user failure
+        increments ``failed_login_attempts_total{outcome="oauth_only_user"}``.
+        """
+        from app.observability.metrics import failed_login_attempts_total  # noqa: PLC0415
+        from tests.factories import OAuthUserFactory  # noqa: PLC0415
+
+        oauth_user = OAuthUserFactory(organization=organization)
+        assert oauth_user.password_hash is None
+
+        before = failed_login_attempts_total.labels(
+            outcome="oauth_only_user",
+        )._value.get()
+        with pytest.raises(AuthenticationError):
+            authenticate_password(
+                db_session=db_session,
+                email=oauth_user.email,
+                password="any-password",
+                org_id=organization.id,
+            )
+        after = failed_login_attempts_total.labels(
+            outcome="oauth_only_user",
+        )._value.get()
+        assert after == pytest.approx(before + 1.0)
+
     def test_constant_time_on_user_not_found(
         self,
         app: Flask,

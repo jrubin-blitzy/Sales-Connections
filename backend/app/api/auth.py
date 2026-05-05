@@ -102,6 +102,7 @@ from app.middleware.error_handlers import (
     ValidationFailedError,
 )
 from app.models import User
+from app.observability.metrics import active_sessions
 from app.schemas import (
     LoginRequest,
     LoginResponse,
@@ -212,6 +213,80 @@ def _clear_session_cookie(response: Response) -> None:
     cookie_kwargs = _session_cookie_kwargs()
     cookie_kwargs["max_age"] = 0
     response.set_cookie(value="", **cookie_kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Active-session gauge helpers (per QA Checkpoint 10 Issue 6)
+# ---------------------------------------------------------------------------
+# Prometheus' ``active_sessions`` gauge in
+# :mod:`app.observability.metrics` was previously defined-but-never-
+# updated, reporting a misleading constant 0 regardless of how many
+# sessions were live. The two helpers below wire the gauge into the
+# auth flow's session-lifecycle boundary:
+#
+#   * ``_track_session_mint``     called after a successful JWT mint
+#                                  (password login OR OAuth callback)
+#   * ``_track_session_revocation`` called after a successful logout
+#                                    when an actor identity was
+#                                    resolved (so we know a session
+#                                    was actually retired)
+#
+# The helpers swallow exceptions so a metrics-emission failure cannot
+# fail a request. The gauge has known limitations documented in the
+# metric's docstring:
+#
+#   * Per-worker counter (workers do not share state).
+#   * Resets to 0 on worker restart.
+#   * Best-effort decrement; natural JWT expiry (TTL elapse without
+#     explicit logout) is not tracked.
+#   * Worker-restart drift can briefly push the per-worker counter
+#     below zero if a logout arrives for a session minted on a
+#     different worker. Operators interpret the sum across workers.
+
+
+def _track_session_mint() -> None:
+    """Increment ``active_sessions`` after a successful JWT mint.
+
+    Called from the password-login and Google-OAuth-callback handlers
+    immediately after :func:`mint_session_jwt`. Errors are swallowed
+    so the request response is never affected by metrics-emission
+    issues; the gauge is observability, not authoritative state.
+    """
+    # Broad ``except Exception`` is intentional: a metrics-emission
+    # failure (Prometheus client misconfiguration, registry corruption,
+    # etc.) MUST NOT cause an HTTP 500 on a successful authentication
+    # response. The gauge is observability data, not authoritative
+    # session state; the JWT itself is the ground truth. We log at
+    # DEBUG so operational systems can detect the failure without
+    # generating noise during ordinary traffic.
+    try:
+        active_sessions.inc()
+    except Exception:
+        _logger.debug("active_sessions_inc_failed", exc_info=True)
+
+
+def _track_session_revocation() -> None:
+    """Decrement ``active_sessions`` after a successful explicit logout.
+
+    Called from the logout handler ONLY when an actor identity was
+    resolved (a valid JWT was present in the cookie and the
+    ``revoke_session_and_audit`` service call succeeded). Errors
+    are swallowed so the user-visible logout (cookie clear) is
+    never affected. The decrement may briefly push a worker's
+    counter below zero if the original mint was on a different
+    worker; this is documented as expected behavior in the gauge
+    docstring.
+    """
+    # Broad ``except Exception`` is intentional: a metrics-emission
+    # failure (Prometheus client misconfiguration, registry corruption,
+    # etc.) MUST NOT cause the user-visible logout response to fail.
+    # The decrement may briefly push a worker's counter below zero if
+    # the original mint was on a different worker; this is documented
+    # as expected behavior in the ``active_sessions`` gauge docstring.
+    try:
+        active_sessions.dec()
+    except Exception:
+        _logger.debug("active_sessions_dec_failed", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -371,6 +446,13 @@ def login() -> tuple[Response, int]:
     response: Response = make_response(jsonify(body.model_dump(mode="json")), 200)
     _set_session_cookie(response, token)
 
+    # Step 6: increment the active_sessions Prometheus gauge so
+    # operators have visibility into the number of currently-known
+    # session JWTs. Per QA Checkpoint 10 Issue 6 the gauge was
+    # previously defined-but-never-updated. The increment is
+    # best-effort and metrics failures cannot fail the request.
+    _track_session_mint()
+
     _logger.info(
         "auth_login_success",
         extra={
@@ -481,6 +563,13 @@ def logout() -> tuple[Response, int]:
                     org_id=UUID(actor_org_id),
                     db_session=db_session,
                 )
+            # Decrement the active_sessions gauge ONLY when the
+            # revocation transaction committed cleanly. A failed
+            # revocation must NOT decrement because the session
+            # state on the server is unchanged (the failure
+            # branch below logs the audit-trail gap separately).
+            # Per QA Checkpoint 10 Issue 6.
+            _track_session_revocation()
             _logger.info(
                 "auth_logout_success",
                 extra={
@@ -790,6 +879,11 @@ def google_callback() -> Response:
     next_target = _safe_next_path(request.args.get("next"))
     response: Response = make_response(redirect(next_target))
     _set_session_cookie(response, token)
+
+    # Step 6: increment the active_sessions Prometheus gauge so the
+    # OAuth-issued session contributes to the per-worker session
+    # count. Mirrors the password-login bookkeeping in :func:`login`.
+    _track_session_mint()
 
     _logger.info(
         "auth_google_callback_success",

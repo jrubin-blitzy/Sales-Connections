@@ -251,6 +251,7 @@ from app.middleware.error_handlers import (
 )
 from app.models import Organization, User
 from app.models.enums import AuditEventType, UserRole
+from app.observability.metrics import failed_login_attempts_total
 from app.services.audit import emit_audit_event
 from app.utils.sanitization import redact_secret_for_logging
 
@@ -729,6 +730,16 @@ def authenticate_password(
             # cryptographic password strength.
             email_hash=_hash_email_for_log(email),
         )
+        # Failed login security signal: the dedicated counter (per
+        # QA Checkpoint 10 Issue 8) lets SIEM tooling and alerting
+        # rules isolate authentication failures without reading the
+        # generic ``http_requests_total{path="/auth/login"}`` series.
+        # Counter cardinality is bounded at three label values
+        # (user_not_found, wrong_password, oauth_only_user). We
+        # increment AFTER the constant-time bcrypt probe so the
+        # timing side channel is not reintroduced via Prometheus
+        # observation overhead.
+        failed_login_attempts_total.labels(outcome="user_not_found").inc()
         raise AuthenticationError()
 
     # User exists; check the password.
@@ -745,6 +756,11 @@ def authenticate_password(
             user_id=str(user.id),
             failure_mode=failure_mode,
         )
+        # Failed login security signal (per QA Checkpoint 10 Issue 8).
+        # The label value is the same string used in the structured
+        # log line so SIEM consumers can correlate the metric series
+        # with the JSON log events one-for-one.
+        failed_login_attempts_total.labels(outcome=failure_mode).inc()
         raise AuthenticationError()
 
     # Success path. The structured log records the event for security

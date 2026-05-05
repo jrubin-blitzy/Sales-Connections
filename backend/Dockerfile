@@ -174,12 +174,17 @@ COPY --from=builder /opt/venv /opt/venv
 # `app/` is the Flask application package (created by feature-handler agents).
 # `migrations/` is the Alembic migrations tree (env.py + versions/).
 # `wsgi.py` is the Gunicorn entrypoint (`app = create_app()`).
+# `gunicorn.conf.py` configures Gunicorn's logging integration so its
+# boot/access lines are emitted as JSON via structlog (per QA
+# Checkpoint 10 Issue 2). The CMD line below references this file via
+# the ``-c`` flag.
 # `alembic.ini` configures Alembic when present at the backend root. The
 # trailing "*" makes this COPY tolerant of Alembic config that lives inline
 # inside `migrations/env.py` instead.
 COPY --chown=appuser:appuser app/ /app/app/
 COPY --chown=appuser:appuser migrations/ /app/migrations/
 COPY --chown=appuser:appuser wsgi.py /app/wsgi.py
+COPY --chown=appuser:appuser gunicorn.conf.py /app/gunicorn.conf.py
 COPY --chown=appuser:appuser alembic.ini* /app/
 
 # Drop privileges. Every subsequent COMMAND, ENTRYPOINT, and CMD runs as
@@ -218,16 +223,27 @@ ENTRYPOINT ["/usr/bin/tini", "--"]
 #      SIGTERM.
 #
 # Gunicorn flags (AAP 0.5.2):
-#   --workers ${WEB_CONCURRENCY}        process count (tune to vCPU)
+#   -c gunicorn.conf.py              loads the JSON-logging integration
+#                                    described in that file's docstring
+#                                    (per QA Checkpoint 10 Issue 2 -
+#                                    routes Gunicorn's boot/access logs
+#                                    through structlog so every line is
+#                                    valid JSON parseable by jq /
+#                                    CloudWatch Logs Insights).
+#   --workers ${WEB_CONCURRENCY}        process count (tune to vCPU);
+#                                       gunicorn.conf.py reads the same
+#                                       env var, so the CLI flag is the
+#                                       authoritative override and the
+#                                       config file's value is the
+#                                       fallback default.
 #   --bind 0.0.0.0:${PORT}              listen on all interfaces in-container
 #   --timeout ${GUNICORN_TIMEOUT}       worker request budget
 #   --graceful-timeout ${...}           drain timeout on SIGTERM
 #   --keep-alive ${GUNICORN_KEEP_ALIVE} idle keep-alive seconds
-#   --access-logfile -                  access log to stdout (CloudWatch)
-#   --error-logfile  -                  error log to stdout (CloudWatch)
-#   --log-level ${GUNICORN_LOG_LEVEL}   filter level for Gunicorn's own logs
+#   --access-logfile / --error-logfile / --log-level are configured via
+#   gunicorn.conf.py so the JSON-logging integration owns them.
 #
 # CMD is shell-form (sh -c "...") to allow env-var expansion of
 # WEB_CONCURRENCY etc. while still benefiting from `exec` to swap in
 # Gunicorn as tini's direct child.
-CMD ["sh", "-c", "if [ \"$RUN_MIGRATIONS\" = \"true\" ]; then echo 'Running Alembic migrations...'; alembic upgrade head; fi && exec gunicorn wsgi:app --workers ${WEB_CONCURRENCY} --bind 0.0.0.0:${PORT} --timeout ${GUNICORN_TIMEOUT} --graceful-timeout ${GUNICORN_GRACEFUL_TIMEOUT} --keep-alive ${GUNICORN_KEEP_ALIVE} --access-logfile - --error-logfile - --log-level ${GUNICORN_LOG_LEVEL}"]
+CMD ["sh", "-c", "if [ \"$RUN_MIGRATIONS\" = \"true\" ]; then echo 'Running Alembic migrations...'; alembic upgrade head; fi && exec gunicorn -c /app/gunicorn.conf.py wsgi:app --workers ${WEB_CONCURRENCY} --bind 0.0.0.0:${PORT} --timeout ${GUNICORN_TIMEOUT} --graceful-timeout ${GUNICORN_GRACEFUL_TIMEOUT} --keep-alive ${GUNICORN_KEEP_ALIVE}"]

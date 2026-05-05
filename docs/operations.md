@@ -266,18 +266,25 @@ Application metrics are exposed at `GET /metrics` in Prometheus exposition forma
 
 Counters:
 
-- `http_requests_total{method, route, status}` — total HTTP requests handled.
-- `audit_events_emitted_total{event_type}` — total audit events emitted, partitioned by event type.
+- `http_requests_total{method, path, status}` — total HTTP requests handled.
+- `failed_login_attempts_total{outcome}` — total failed password-login attempts partitioned by outcome (`user_not_found`, `wrong_password`, `oauth_only_user`). Dedicated security signal for SIEM alerting; isolated from the generic `http_requests_total{path="/auth/login",status="401"}` series.
 
 Histograms:
 
-- `http_request_duration_seconds{route}` — wall-clock duration of every HTTP request.
-- `ai_request_duration_seconds` — wall-clock duration of every Anthropic Claude call.
-- `db_query_duration_seconds{query_type}` — wall-clock duration of database queries, partitioned by SELECT, INSERT, UPDATE, DELETE.
+- `http_request_duration_seconds{method, path}` — wall-clock duration of every HTTP request.
+- `ai_request_duration_seconds{outcome}` — wall-clock duration of every Anthropic Claude call (with `outcome ∈ {success, timeout, error, validation}`).
+- `audit_emit_duration_seconds{event_type}` — wall-clock duration of every audit event emission inside its parent transaction. Per AAP §0.7.3 the P95 must remain under 100 ms. The Prometheus-emitted `_count` series of this histogram is the operative "total audit events emitted" counter.
 
 Gauges:
 
-- `active_sessions` — count of distinct session JWTs validated in the last five minutes.
+- `active_sessions` — per-worker count of currently-known session JWTs. Incremented on session JWT mint, decremented on explicit logout. Resets to zero on worker restart and does not track natural JWT expiry.
+
+Built-in collectors (registered against the custom registry in `app/extensions.py`):
+
+- `process_*` — `resident_memory_bytes`, `virtual_memory_bytes`, `cpu_seconds_total`, `open_fds`, `max_fds`, `start_time_seconds`.
+- `python_*` — `gc_objects_collected_total`, `gc_objects_uncollectable_total`, `gc_collections_total`, `python_info`.
+
+These are exposed for Prometheus-native operator tooling (Grafana, Alertmanager, kube-prometheus-stack). In production AWS deployments the ECS CloudWatch container insights provides equivalent per-task metrics; both surfaces are kept for redundancy and tooling flexibility.
 
 The metrics endpoint is scraped either by a CloudWatch agent sidecar deployed in the same ECS task or by the AWS Distro for OpenTelemetry collector configured to forward to CloudWatch Metrics. Both topologies are supported; the `infra/terraform/modules/observability/main.tf` module selects between them via the `metrics_collector` Terraform variable.
 

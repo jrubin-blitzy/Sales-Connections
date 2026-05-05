@@ -40,11 +40,30 @@ class TestMetricsEndpoint:
         self,
         client: FlaskClient,
     ) -> None:
-        """When metrics are enabled, response body is text/plain."""
+        """When metrics are enabled, response body is text/plain.
+
+        Per QA Checkpoint 10 Issue 7, the response Content-Type MUST
+        contain ``text/plain`` and MUST NOT contain a duplicated
+        ``charset=utf-8`` parameter (the previous behavior emitted
+        ``text/plain; version=0.0.4; charset=utf-8; charset=utf-8``
+        because Flask's auto-charset machinery appended its own
+        ``charset`` on top of the prometheus-supplied one).
+        """
         response = client.get("/metrics")
         if response.status_code == 200:
             content_type = response.headers.get("Content-Type", "")
             assert "text/plain" in content_type
+            # Issue 7 regression guard: ``charset=utf-8`` must appear
+            # at most once. The previous code path produced two
+            # parameters because Flask's response builder appends a
+            # charset when the mimetype lacks one; the fix passes the
+            # full ``content_type`` (including charset) directly so
+            # Flask does not append a second.
+            charset_count = content_type.lower().count("charset=")
+            assert charset_count <= 1, (
+                f"Content-Type has {charset_count} charset parameters; "
+                f"expected at most 1. Header: {content_type!r}"
+            )
 
     def test_metrics_endpoint_contains_request_metrics(
         self,
