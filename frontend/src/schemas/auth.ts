@@ -219,17 +219,12 @@ export const RegisterRequestSchema = z
     display_name: z
       .string()
       .min(1, { message: "Name is required" })
-      .max(100, { message: "Name must be 100 characters or fewer" }),
+      .max(255, { message: "Name must be 255 characters or fewer" }),
     password: z
       .string()
       .min(8, { message: "Password must be at least 8 characters" })
       .max(128, { message: "Password must be 128 characters or fewer" }),
-    confirm_password: z.string().min(1, { message: "Please confirm your password" }),
   })
-  .strict()
-  .refine((data: { password: string; confirm_password: string }) => data.password === data.confirm_password, {
-    message: "Passwords do not match",
-    path: ["confirm_password"],
-  });
+  .strict();
 
 export type RegisterRequest = z.infer<typeof RegisterRequestSchema>;
