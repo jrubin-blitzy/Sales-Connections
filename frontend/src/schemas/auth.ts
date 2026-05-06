@@ -228,3 +228,19 @@ export const RegisterRequestSchema = z
   .strict();
 
 export type RegisterRequest = z.infer<typeof RegisterRequestSchema>;
+
+// RegisterFormSchema is used only by RegisterScreen for client-side form
+// validation. It extends RegisterRequestSchema with a confirm_password field
+// and a cross-field refine check. confirm_password is stripped before the
+// API call — the backend RegisterRequest has no such field.
+export const RegisterFormSchema = RegisterRequestSchema.omit({})
+  .extend({
+    confirm_password: z.string().min(1, { message: "Please confirm your password" }),
+  })
+  .refine(
+    (data: { password: string; confirm_password: string }) =>
+      data.password === data.confirm_password,
+    { message: "Passwords do not match", path: ["confirm_password"] },
+  );
+
+export type RegisterFormData = z.infer<typeof RegisterFormSchema>;

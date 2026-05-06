@@ -7,7 +7,7 @@ import { useSession, useSessionLoading } from "@/auth/AuthProvider";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { useToast } from "@/components/ui/Toast";
-import { RegisterRequestSchema, type RegisterRequest } from "@/schemas/auth";
+import { RegisterFormSchema, type RegisterFormData } from "@/schemas/auth";
 
 export function RegisterScreen(): JSX.Element {
   const navigate = useNavigate();
@@ -47,14 +47,14 @@ export function RegisterScreen(): JSX.Element {
       setConfirmPasswordError(undefined);
       setFormError(undefined);
 
-      const candidate: RegisterRequest = {
+      const candidate: RegisterFormData = {
         email,
         display_name: displayName,
         password,
         confirm_password: confirmPassword,
       };
 
-      const result = RegisterRequestSchema.safeParse(candidate);
+      const result = RegisterFormSchema.safeParse(candidate);
       if (!result.success) {
         const fieldErrors = result.error.flatten().fieldErrors;
         if (fieldErrors.email?.[0]) setEmailError(fieldErrors.email[0]);
@@ -65,7 +65,9 @@ export function RegisterScreen(): JSX.Element {
         return;
       }
 
-      registerMutation.mutate(result.data, {
+      const { confirm_password: _unused, ...apiPayload } = result.data;
+
+      registerMutation.mutate(apiPayload, {
         onSuccess: () => {
           navigate("/feed", { replace: true });
         },
