@@ -64,9 +64,8 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 
-import type { ApiError } from "@/api/client";
+import { apiDelete, apiGet, apiPatch, apiPost, type ApiError } from "@/api/client";
 import { useToast } from "@/components/ui/Toast";
-import * as store from "@/lib/localStore";
 import type {
   ConnectionCreate,
   ConnectionDuplicateCheckResponse,
@@ -204,6 +203,29 @@ export const tagKeys = {
 
 
 // ---------------------------------------------------------------------------
+// URL helpers
+// ---------------------------------------------------------------------------
+
+function buildConnectionListQuery(params: ConnectionListParams): string {
+  const q = new URLSearchParams();
+  if (params.company) q.set("company", params.company);
+  if (params.full_name_search) q.set("full_name_search", params.full_name_search);
+  params.involvement?.forEach((v) => q.append("involvement", v));
+  params.outreach_status?.forEach((v) => q.append("outreach_status", v));
+  params.owner_user_ids?.forEach((v) => q.append("owner_user_ids", v));
+  params.tag_ids?.forEach((v) => q.append("tag_ids", v));
+  if (params.submission_date_from) q.set("submission_date_from", params.submission_date_from);
+  if (params.submission_date_to) q.set("submission_date_to", params.submission_date_to);
+  if (params.include_deleted) q.set("include_deleted", "true");
+  if (params.page !== undefined) q.set("page", String(params.page));
+  if (params.page_size !== undefined) q.set("page_size", String(params.page_size));
+  if (params.sort) q.set("sort", params.sort);
+  if (params.sort_dir) q.set("sort_dir", params.sort_dir);
+  const str = q.toString();
+  return str ? `/api/connections?${str}` : "/api/connections";
+}
+
+// ---------------------------------------------------------------------------
 // Connection query hooks
 // ---------------------------------------------------------------------------
 
@@ -226,7 +248,7 @@ export function useConnectionsQuery(
 ): UseQueryResult<PaginatedConnections, ApiError> {
   return useQuery<PaginatedConnections, ApiError>({
     queryKey: connectionKeys.list(params),
-    queryFn: () => store.listConnections(params),
+    queryFn: () => apiGet<PaginatedConnections>(buildConnectionListQuery(params)),
   });
 }
 
@@ -244,7 +266,7 @@ export function useConnectionsQuery(
 export function useConnectionQuery(id: string): UseQueryResult<ConnectionRead, ApiError> {
   return useQuery<ConnectionRead, ApiError>({
     queryKey: connectionKeys.detail(id),
-    queryFn: () => store.getConnection(id),
+    queryFn: () => apiGet<ConnectionRead>(`/api/connections/${id}`),
     enabled: id.length > 0,
   });
 }
@@ -269,7 +291,7 @@ export function useConnectionHistoryQuery(
 ): UseQueryResult<PaginatedHistory, ApiError> {
   return useQuery<PaginatedHistory, ApiError>({
     queryKey: connectionKeys.history(id, page),
-    queryFn: () => store.getConnectionHistory(id),
+    queryFn: () => apiGet<PaginatedHistory>(`/api/connections/${id}/history?page=${page}`),
     enabled: id.length > 0,
   });
 }
@@ -305,7 +327,11 @@ export function useDuplicateCheckQuery(
 ): UseQueryResult<ConnectionDuplicateCheckResponse, ApiError> {
   return useQuery<ConnectionDuplicateCheckResponse, ApiError>({
     queryKey: connectionKeys.duplicateCheck(linkedinUrl, options.excludeRecordId),
-    queryFn: () => store.duplicateCheck(linkedinUrl, options.excludeRecordId),
+    queryFn: () => {
+      const q = new URLSearchParams({ linkedin_url: linkedinUrl });
+      if (options.excludeRecordId) q.set("exclude_id", options.excludeRecordId);
+      return apiGet<ConnectionDuplicateCheckResponse>(`/api/connections/duplicate-check?${q}`);
+    },
     enabled: options.enabled && linkedinUrl.length > 0,
     // Per-hook stale time override (longer than the QueryClient default
     // of 60 s) - duplicate-check responses are stable enough that
@@ -348,7 +374,7 @@ export function useCreateConnectionMutation(): UseMutationResult<
   const toast = useToast();
 
   return useMutation<ConnectionRead, ApiError, ConnectionCreate>({
-    mutationFn: (payload) => store.createConnection(payload),
+    mutationFn: (payload) => apiPost<ConnectionRead, ConnectionCreate>("/api/connections", payload),
     onSuccess: () => {
       // Invalidate every list cache; the next render of the feed
       // refetches and the new record appears at the appropriate sort
@@ -392,7 +418,7 @@ export function useUpdateConnectionMutation(): UseMutationResult<
   const toast = useToast();
 
   return useMutation<ConnectionRead, ApiError, { id: string; payload: ConnectionUpdate }>({
-    mutationFn: ({ id, payload }) => store.updateConnection(id, payload),
+    mutationFn: ({ id, payload }) => apiPatch<ConnectionRead, ConnectionUpdate>(`/api/connections/${id}`, payload),
     // The unused `data` parameter is required because TanStack Query
     // passes (data, variables, context) to the onSuccess callback in
     // that order; we destructure variables to read the id.
@@ -454,7 +480,7 @@ export function useUpdateStatusMutation(): UseMutationResult<
     { id: string; payload: ConnectionStatusUpdate },
     { previousDetail: ConnectionRead | undefined }
   >({
-    mutationFn: ({ id, payload }) => store.updateConnectionStatus(id, payload),
+    mutationFn: ({ id, payload }) => apiPatch<ConnectionRead, ConnectionStatusUpdate>(`/api/connections/${id}/status`, payload),
     onMutate: async ({ id, payload }) => {
       // Cancel any in-flight detail refetches so the optimistic value
       // does not race with a stale server response and lose.
@@ -529,7 +555,7 @@ export function useSoftDeleteConnectionMutation(): UseMutationResult<
   const toast = useToast();
 
   return useMutation<ConnectionRead, ApiError, { id: string }>({
-    mutationFn: ({ id }) => store.softDeleteConnection(id),
+    mutationFn: ({ id }) => apiDelete<ConnectionRead>(`/api/connections/${id}`),
     onSuccess: (_data, { id }) => {
       void queryClient.invalidateQueries({ queryKey: connectionKeys.lists() });
       void queryClient.invalidateQueries({ queryKey: connectionKeys.detail(id) });
@@ -562,7 +588,15 @@ export function useSoftDeleteConnectionMutation(): UseMutationResult<
 export function useTagsQuery(): UseQueryResult<TagRead[], ApiError> {
   return useQuery<TagRead[], ApiError>({
     queryKey: tagKeys.lists(),
-    queryFn: () => store.listTags(),
+    queryFn: () => apiGet<TagRead[]>("/api/tags"),
+  });
+}
+
+export function useCompaniesQuery(): UseQueryResult<string[], ApiError> {
+  return useQuery<string[], ApiError>({
+    queryKey: [...connectionKeys.lists(), "companies"] as const,
+    queryFn: () => Promise.resolve([]),
+    staleTime: Infinity,
   });
 }
 
@@ -586,7 +620,7 @@ export function useCreateTagMutation(): UseMutationResult<TagRead, ApiError, Tag
   const toast = useToast();
 
   return useMutation<TagRead, ApiError, TagCreate>({
-    mutationFn: (payload) => store.createTag(payload),
+    mutationFn: (payload) => apiPost<TagRead, TagCreate>("/api/tags", payload),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: tagKeys.lists() });
       toast.success("Tag added");

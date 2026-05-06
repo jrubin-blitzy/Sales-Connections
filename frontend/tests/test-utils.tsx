@@ -424,7 +424,7 @@ export function MockAuthProvider(props: MockAuthProviderProps): ReactElement {
     session,
     isLoading,
     isError: false,
-    login: () => {},
+    login: async () => {},
     logout: () => {},
   };
 
