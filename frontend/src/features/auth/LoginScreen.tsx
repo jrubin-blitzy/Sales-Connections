@@ -90,6 +90,7 @@ export function LoginScreen(): JSX.Element {
           await registerMutation.mutateAsync({
             email: trimmedEmail,
             password,
+            confirm_password: password,
             display_name: displayName,
           });
         } else {
