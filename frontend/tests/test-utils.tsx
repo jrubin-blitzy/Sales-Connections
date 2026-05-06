@@ -334,15 +334,11 @@ export function renderWithProviders(
  * `useRole()` derives `role` from `session.user.role`, supplying a
  * non-null `session` is sufficient to exercise role-gated UI.
  *
- * The `logout` field is accepted for API symmetry with future
- * extensions and to give consumers a single, type-safe way to
- * declare a logout spy. The current production `AuthContextValue`
- * does NOT include a `logout` function (logout is a TanStack Query
- * mutation read from `@/api/auth`, not a context field), so the
- * supplied `logout` is captured by the provider but does not flow
- * into the context. Tests that need to assert on or override the
- * logout behavior should `vi.mock("@/api/auth", ...)` to replace
- * `useLogoutMutation` directly.
+ * The `logout` field is accepted for API symmetry and to give consumers
+ * a single, type-safe way to declare a logout spy. The production
+ * `AuthContextValue` includes a `logout` function (the localStorage-based
+ * auth helper in `@/auth/AuthProvider`), but `MockAuthProvider` wires its
+ * own no-op to keep tests isolated from localStorage side effects.
  */
 export interface MockAuthProviderProps {
   /**
