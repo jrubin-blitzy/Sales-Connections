@@ -116,6 +116,7 @@ _PUBLIC_PATHS: frozenset[str] = frozenset(
         "/metrics",
         "/auth/login",
         "/auth/logout",
+        "/auth/register",
         "/auth/google/start",
         "/auth/google/callback",
     }

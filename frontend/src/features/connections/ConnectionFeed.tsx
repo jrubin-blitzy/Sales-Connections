@@ -87,12 +87,12 @@
  *   - @/router.tsx (consumer)               mounts this at /feed.
  */
 
-import { useCallback, useMemo, type ChangeEvent, type JSX } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type JSX } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Filter, Plus, Search, X } from "lucide-react";
 import clsx from "clsx";
 
-import { useConnectionsQuery, useTagsQuery, type ConnectionListParams } from "@/api/connections";
+import { useCompaniesQuery, useConnectionsQuery, useTagsQuery, type ConnectionListParams } from "@/api/connections";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -297,6 +297,82 @@ function formatDate(iso: string | null | undefined): string {
 }
 
 // ---------------------------------------------------------------------------
+// CompanyCombobox subcomponent
+// ---------------------------------------------------------------------------
+
+interface CompanyComboboxProps {
+  readonly value: string;
+  readonly onChange: (value: string) => void;
+  readonly options: string[];
+}
+
+function CompanyCombobox({ value, onChange, options }: CompanyComboboxProps): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const suggestions = useMemo(
+    () => options.filter((o) => o.toLowerCase().includes(value.toLowerCase())).slice(0, 8),
+    [options, value],
+  );
+
+  useEffect(() => {
+    function onPointerDown(e: PointerEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, []);
+
+  return (
+    <div ref={containerRef} className="relative">
+      <Input
+        label="Company"
+        placeholder="Acme"
+        value={value}
+        onChange={(e: ChangeEvent<HTMLInputElement>) => {
+          onChange(e.target.value);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") setOpen(false);
+        }}
+        inputSize="sm"
+        data-testid="connection-feed-filter-company"
+      />
+      {open && suggestions.length > 0 && (
+        <ul
+          role="listbox"
+          aria-label="Company suggestions"
+          className="absolute top-full left-0 right-0 z-10 mt-1 max-h-48 overflow-auto rounded-md border border-slate-200 bg-white py-1 shadow-lg"
+        >
+          {suggestions.map((option) => (
+            <li
+              key={option}
+              role="option"
+              aria-selected={option === value}
+              className={clsx(
+                "cursor-pointer px-3 py-1.5 text-xs text-slate-900",
+                option === value ? "bg-slate-100 font-medium" : "hover:bg-slate-50",
+              )}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                onChange(option);
+                setOpen(false);
+              }}
+            >
+              {option}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // FilterBar subcomponent
 // ---------------------------------------------------------------------------
 
@@ -377,6 +453,9 @@ function FilterBar({ searchParams, onParamsChange }: FilterBarProps): JSX.Elemen
   // navigations so the request fires once per session-org pair.
   const tagsQuery = useTagsQuery();
   const tagOptions = tagsQuery.data ?? [];
+
+  const companiesQuery = useCompaniesQuery();
+  const companyOptions = companiesQuery.data ?? [];
 
   /**
    * Set a scalar URL param to `value`, or delete it when `value` is empty.
@@ -486,13 +565,10 @@ function FilterBar({ searchParams, onParamsChange }: FilterBarProps): JSX.Elemen
           inputSize="sm"
           data-testid="connection-feed-filter-search"
         />
-        <Input
-          label="Company"
-          placeholder="Acme"
+        <CompanyCombobox
           value={company}
-          onChange={(e: ChangeEvent<HTMLInputElement>) => setScalarParam("company", e.target.value)}
-          inputSize="sm"
-          data-testid="connection-feed-filter-company"
+          onChange={(val) => setScalarParam("company", val)}
+          options={companyOptions}
         />
         <Input
           label="Date from"

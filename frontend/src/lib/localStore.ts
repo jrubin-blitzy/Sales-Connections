@@ -315,3 +315,16 @@ export function createTag(payload: TagCreate): Promise<TagRead> {
   writeTags([...tags, tag]);
   return Promise.resolve(tag);
 }
+
+export function listCompanies(): Promise<string[]> {
+  const all = readConnections();
+  const seen = new Set<string>();
+  const companies: string[] = [];
+  for (const c of all) {
+    if (c.deleted_at === null && c.company && !seen.has(c.company)) {
+      seen.add(c.company);
+      companies.push(c.company);
+    }
+  }
+  return Promise.resolve(companies.sort((a, b) => a.localeCompare(b)));
+}

@@ -133,6 +133,7 @@ __all__ = [
     "LoginRequest",
     "LoginResponse",
     "OAuthCallbackQuery",
+    "RegisterRequest",
     "SessionRead",
 ]
 
@@ -205,6 +206,32 @@ class LoginRequest(BaseModel):
                 "boundary."
             ),
         ),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Inbound: RegisterRequest
+# ---------------------------------------------------------------------------
+
+_DISPLAY_NAME_MAX_CHARS: int = 255
+
+
+class RegisterRequest(BaseModel):
+    """Payload for ``POST /auth/register`` (email/password registration)."""
+
+    model_config = _STRICT_CONFIG
+
+    email: Annotated[
+        EmailStr,
+        Field(max_length=_EMAIL_MAX_CHARS),
+    ]
+    password: Annotated[
+        SecretStr,
+        Field(min_length=8, max_length=_PASSWORD_MAX_CHARS),
+    ]
+    display_name: Annotated[
+        str,
+        Field(min_length=1, max_length=_DISPLAY_NAME_MAX_CHARS),
     ]
 
 

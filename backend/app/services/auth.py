@@ -1656,6 +1656,57 @@ def revoke_session_and_audit(
     return rows_updated
 
 
+def create_user_with_password(
+    *,
+    db_session: DBSession,
+    email: str,
+    password: str,
+    display_name: str,
+    org_id: UUID | str,
+) -> User:
+    """Create a new email/password user.
+
+    Raises :class:`~app.middleware.error_handlers.ConflictError` (409)
+    when the (org_id, email) pair already exists so the register handler
+    can surface a distinct error to the SPA.
+
+    Args:
+        db_session: Open SQLAlchemy session with an active transaction.
+        email: Pre-normalized (lowercased, stripped) email address.
+        password: Plaintext password — hashed before storage.
+        display_name: Human-readable name for the UI.
+        org_id: Organization scope (single-org MVP uses DEFAULT_ORG_ID).
+
+    Returns:
+        The freshly-flushed :class:`User` ORM instance.
+
+    Raises:
+        ConflictError: Email already registered in this org.
+        ValidationFailedError: Password fails bcrypt pre-conditions.
+    """
+    from app.middleware.error_handlers import ConflictError  # local import avoids circular
+
+    org_uuid = _coerce_uuid(org_id, field_name="org_id")
+
+    existing = db_session.scalar(
+        select(User).where(User.org_id == org_uuid, User.email == email)
+    )
+    if existing is not None:
+        raise ConflictError("An account with that email address already exists.")
+
+    pw_hash = hash_password(password)
+    user = User(
+        org_id=org_uuid,
+        email=email,
+        display_name=display_name,
+        password_hash=pw_hash,
+        role=UserRole.CONTRIBUTOR,
+    )
+    db_session.add(user)
+    db_session.flush()
+    return user
+
+
 def _resolve_default_org_id() -> UUID:
     """Return the single-org MVP default organization id from app config.
 

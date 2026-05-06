@@ -47,6 +47,7 @@ from app.schemas.auth import (
     LoginRequest,
     LoginResponse,
     OAuthCallbackQuery,
+    RegisterRequest,
     SessionRead,
 )
 from app.schemas.connection import (
@@ -81,6 +82,7 @@ __all__ = [
     "LoginRequest",
     "LoginResponse",
     "NoteGenerationRequest",
+    "RegisterRequest",
     "NoteGenerationResponse",
     "OAuthCallbackQuery",
     "PaginatedAdminConnections",

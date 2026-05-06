@@ -106,12 +106,14 @@ from app.observability.metrics import active_sessions
 from app.schemas import (
     LoginRequest,
     LoginResponse,
+    RegisterRequest,
     SessionRead,
     UserRead,
 )
 from app.services.auth import (
     AuthenticationError,
     authenticate_email_password,
+    create_user_with_password,
     mint_session_jwt,
     record_login_audit,
     revoke_session_and_audit,
@@ -468,6 +470,88 @@ def login() -> tuple[Response, int]:
         },
     )
     return response, 200
+
+
+# ---------------------------------------------------------------------------
+# POST /auth/register -- create a new email/password account
+# ---------------------------------------------------------------------------
+
+
+@auth_bp.route("/register", methods=["POST"])
+def register() -> tuple[Response, int]:
+    """Create a new email/password account and mint a session cookie.
+
+    Request body (JSON)::
+
+        {"email": "alice@blitzy.com", "password": "...", "display_name": "Alice"}
+
+    Success (HTTP 201) -- same shape as login, cookie set::
+
+        {"user": {"id": "...", "email": "...", "display_name": "...", ...}}
+
+    Failure responses:
+        - 422 on schema validation failure.
+        - 409 when the email is already registered.
+    """
+    raw_body = request.get_json(silent=True)
+    if raw_body is None or not isinstance(raw_body, dict):
+        raise ValidationFailedError(
+            message="Request body must be a JSON object.",
+            fields=[
+                {
+                    "field": "_root",
+                    "code": "invalid_json",
+                    "message": "Expected a JSON object with 'email', 'password', and 'display_name'.",
+                }
+            ],
+        )
+
+    try:
+        payload = RegisterRequest.model_validate(raw_body)
+    except ValidationError as exc:
+        safe_fields: list[dict[str, Any]] = []
+        for err in exc.errors():
+            loc_segments = [str(seg) for seg in err.get("loc", ())]
+            if loc_segments and loc_segments[0] == "body":
+                loc_segments = loc_segments[1:]
+            field_path = ".".join(loc_segments) if loc_segments else "_root"
+            safe_fields.append(
+                {
+                    "field": field_path,
+                    "code": str(err.get("type", "value_error")),
+                    "message": str(err.get("msg", "Invalid value.")),
+                }
+            )
+        raise ValidationFailedError(
+            message="The request payload failed validation.",
+            fields=safe_fields,
+        ) from exc
+
+    org_id = _default_org_id()
+
+    with db.session() as db_session, db_session.begin():
+        user = create_user_with_password(
+            db_session=db_session,
+            email=str(payload.email).strip().lower(),
+            password=payload.password.get_secret_value(),
+            display_name=payload.display_name,
+            org_id=org_id,
+        )
+        record_login_audit(user, method="password_register", db_session=db_session)
+        token = mint_session_jwt(user)
+        user_id = str(user.id)
+        user_org_id = str(user.org_id)
+
+    body = LoginResponse(user=UserRead.model_validate(user))
+    response: Response = make_response(jsonify(body.model_dump(mode="json")), 201)
+    _set_session_cookie(response, token)
+    _track_session_mint()
+
+    _logger.info(
+        "auth_register_success",
+        extra={"user_id": user_id, "org_id": user_org_id},
+    )
+    return response, 201
 
 
 # ---------------------------------------------------------------------------
