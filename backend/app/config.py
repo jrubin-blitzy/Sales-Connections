@@ -426,11 +426,11 @@ class ProductionConfig(BaseConfig):
     TESTING = False
     PROPAGATE_EXCEPTIONS = True
 
-    # Strict cookie attributes; HTTPS termination at the ALB ensures
-    # secure-only cookies are valid in production.
-    SESSION_COOKIE_SECURE = True
+    # Cookie attributes — read from env vars so cross-origin deployments
+    # (e.g. Vercel frontend + Render backend) can set SameSite=None; Secure.
+    SESSION_COOKIE_SECURE = _str_to_bool(os.environ.get("SESSION_COOKIE_SECURE"), True)
     SESSION_COOKIE_HTTPONLY = True
-    SESSION_COOKIE_SAMESITE = "Lax"
+    SESSION_COOKIE_SAMESITE = os.environ.get("SESSION_COOKIE_SAMESITE", "Lax")
 
     # JSON logging in production for CloudWatch log-insights queries.
     LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
@@ -530,12 +530,10 @@ class ProductionConfig(BaseConfig):
                 empty, placeholder, or (for ``JWT_SIGNING_KEY``) under
                 the 32-byte length floor.
         """
-        # Order matters only for the error-message UX; the same set of
-        # keys is checked regardless. The four-tuple matches AAP Sec
-        # 0.7.4 verbatim: Anthropic, Google OAuth, JWT, DB.
+        # Only DATABASE_URL and JWT_SIGNING_KEY are hard requirements.
+        # ANTHROPIC_API_KEY and GOOGLE_OAUTH_CLIENT_SECRET are optional
+        # features (AI notes and Google OAuth) that can be left empty.
         required_keys: tuple[str, ...] = (
-            "ANTHROPIC_API_KEY",
-            "GOOGLE_OAUTH_CLIENT_SECRET",
             "JWT_SIGNING_KEY",
             "DATABASE_URL",
         )
