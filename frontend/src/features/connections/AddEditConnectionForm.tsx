@@ -581,7 +581,7 @@ export function AddEditConnectionForm({ mode }: AddEditConnectionFormProps): JSX
         {/* === Section: Person details (2-column grid on sm+) === */}
         <section className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Input
-            label="Full name"
+            label="Connection's Full Name"
             value={formState.full_name}
             onChange={(e) => handleChange("full_name", e.target.value)}
             required
