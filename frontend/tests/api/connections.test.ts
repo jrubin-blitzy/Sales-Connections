@@ -709,6 +709,7 @@ describe("useCreateConnectionMutation", () => {
     const { wrapper } = makeWrapper();
     const { result } = renderHook(() => useCreateConnectionMutation(), { wrapper });
     result.current.mutate({
+      submitted_by: "Test User",
       full_name: "Jane Doe",
       linkedin_url: "https://www.linkedin.com/in/janedoe",
       company: "Acme",
@@ -730,6 +731,7 @@ describe("useCreateConnectionMutation", () => {
     const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
     const { result } = renderHook(() => useCreateConnectionMutation(), { wrapper });
     result.current.mutate({
+      submitted_by: "Test User",
       full_name: "Test",
       linkedin_url: "https://www.linkedin.com/in/test",
       company: "Test Co",
@@ -754,6 +756,7 @@ describe("useCreateConnectionMutation", () => {
     const { wrapper } = makeWrapper();
     const { result } = renderHook(() => useCreateConnectionMutation(), { wrapper });
     result.current.mutate({
+      submitted_by: "Test User",
       full_name: "Test",
       linkedin_url: "https://www.linkedin.com/in/x",
       company: "X Corp",
@@ -774,6 +777,7 @@ describe("useCreateConnectionMutation", () => {
     const { wrapper } = makeWrapper();
     const { result } = renderHook(() => useCreateConnectionMutation(), { wrapper });
     result.current.mutate({
+      submitted_by: "Test User",
       full_name: "X",
       linkedin_url: "not-a-url",
       company: "X Corp",

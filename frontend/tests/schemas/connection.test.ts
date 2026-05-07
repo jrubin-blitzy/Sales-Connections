@@ -164,6 +164,7 @@ describe("AUDIT_EVENT_TYPE_VALUES constant (8 event types per F-013)", () => {
 describe("LinkedIn URL validation (via ConnectionCreateSchema.linkedin_url)", () => {
   // Build a valid base payload; tests vary only the linkedin_url field.
   const validBase: ConnectionCreate = {
+    submitted_by: "Test User",
     full_name: "Jane Doe",
     linkedin_url: "https://www.linkedin.com/in/jane-doe",
     company: "Acme",
@@ -398,6 +399,7 @@ describe("TagCreateSchema (strict)", () => {
 
 describe("ConnectionCreateSchema", () => {
   const validPayload: ConnectionCreate = {
+    submitted_by: "Test User",
     full_name: "Jane Doe",
     linkedin_url: "https://www.linkedin.com/in/jane-doe",
     company: "Acme Logistics",

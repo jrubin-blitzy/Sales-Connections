@@ -77,7 +77,6 @@ import { Loader2 } from "lucide-react";
 import clsx from "clsx";
 
 import { useUpdateStatusMutation } from "@/api/connections";
-import { Badge } from "@/components/ui/Badge";
 import { Select } from "@/components/ui/Select";
 import { OUTREACH_STATUS_VALUES, type OutreachStatusValue } from "@/schemas/connection";
 
@@ -150,34 +149,6 @@ export interface StatusChipProps {
  * fail to type-check until this union is updated in lockstep with the
  * Zod schema and the backend pydantic / PostgreSQL enum.
  */
-type StatusBadgeVariant =
-  | "outreach-not-started"
-  | "outreach-in-progress"
-  | "outreach-contacted"
-  | "outreach-closed";
-
-/**
- * Translation table from the Zod-derived `OutreachStatusValue` literal
- * union to the corresponding Badge variant. The TypeScript
- * `Record<OutreachStatusValue, StatusBadgeVariant>` constraint enforces
- * exhaustiveness across the four F-005 values:
- *   - "Not Started" -> "outreach-not-started"
- *   - "In Progress" -> "outreach-in-progress"
- *   - "Contacted"   -> "outreach-contacted"
- *   - "Closed"      -> "outreach-closed"
- *
- * Declared as a module-level `const` so the lookup is a single object
- * dereference at render time and so future contributors can audit the
- * full mapping at a glance. This is the single source of truth for
- * the value-to-variant translation; consumers should never duplicate
- * it.
- */
-const STATUS_TO_VARIANT: Record<OutreachStatusValue, StatusBadgeVariant> = {
-  "Not Started": "outreach-not-started",
-  "In Progress": "outreach-in-progress",
-  Contacted: "outreach-contacted",
-  Closed: "outreach-closed",
-};
 
 /**
  * Per-status background+foreground+border class strings applied to
