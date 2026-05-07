@@ -510,8 +510,8 @@ def _before_request_authenticate() -> None:
         "auth_succeeded",
         path=path,
         method=request.method,
-        user_id=str(session.user_id),
-        role=session.role.value,
+        user_id=str(anon_session.user_id),
+        role=anon_session.role.value,
     )
 
 
