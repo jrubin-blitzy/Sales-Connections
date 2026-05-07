@@ -356,7 +356,6 @@ def list_tags() -> tuple[Response, int]:
 
 
 @tags_bp.route("", methods=["POST"])
-@requires_role(UserRole.CONTRIBUTOR, UserRole.ADMIN)
 def create_tag() -> tuple[Response, int]:
     """Create a tag in the actor's organization (idempotent on name).
 

@@ -122,6 +122,12 @@ _PUBLIC_PATHS: frozenset[str] = frozenset(
     }
 )
 
+# Fixed UUIDs for anonymous (no-auth) mode.
+# The system user row is inserted by migration 0003_anon_access and
+# satisfies the records.owner_user_id FK constraint for all submissions.
+_ANON_USER_ID: UUID = UUID("00000000-0000-0000-0000-000000000002")
+_ANON_ORG_ID: UUID = UUID("00000000-0000-0000-0000-000000000001")
+
 # Path prefixes that REQUIRE authentication. Requests to paths NOT in
 # ``_PUBLIC_PATHS`` but matching one of these prefixes are rejected
 # with 401 if the session cookie is absent/invalid. Currently this
@@ -461,140 +467,39 @@ def _build_session_from_claims(claims: dict[str, Any]) -> Session:
 
 
 def _before_request_authenticate() -> None:
-    """Flask before_request hook: validate the session JWT.
+    """Flask before_request hook: inject anonymous session for all API routes.
 
-    Decision tree (in order):
-        1. If path is in the public allowlist -> return; no auth needed.
-        2. Otherwise, attempt to extract a token from cookie/header.
-        3. If no token AND path is protected -> raise AuthError(401).
-        4. If no token AND path is NOT protected (e.g., 404) -> return;
-           let the request reach the 404 handler.
-        5. If a token is present -> verify and populate g.session.
-
-    This hook runs AFTER ``register_correlation_middleware`` so log
-    lines emitted from here carry the correlation_id. Per the strict
-    middleware order in ``app.__init__::create_app``::
-
-        correlation -> auth -> error_handlers -> blueprints
-
-    Returns:
-        None on success (Flask continues to the next handler) or on
-        a public-path bypass. Raises ``AuthError`` on auth failure
-        (the registered error handler converts to 401 JSON envelope).
-
-    Raises:
-        AuthError: when the session cookie is missing on a protected
-            path, when token verification fails (signature mismatch,
-            expiry, malformation), or when verified claims are
-            malformed. ALL of these are 401, not 500.
+    The app runs in anonymous-access mode: no JWT is required. Every
+    request to a protected path receives a synthetic Session populated
+    with the system user (migration 0003_anon_access) and the default
+    org so all downstream service-layer logic works unchanged.
     """
-    # Fetch the structlog logger lazily inside the hook (not at module
-    # level) because ``configure_structlog`` may not have run by the
-    # time this module is imported. Calling ``structlog.get_logger``
-    # here ensures the configured processor chain is used.
     logger = structlog.get_logger("app.middleware.auth")
     path = request.path
 
     if _is_public_path(path):
-        # Nothing to do; downstream handler is public.
         logger.debug("auth_skipped_public_path", path=path)
         return
 
-    cookie_name = current_app.config.get("SESSION_COOKIE_NAME", _DEFAULT_COOKIE_NAME)
-    token = _extract_token(request, cookie_name)
-
-    if not token:
-        if _is_protected_path(path):
-            logger.info("auth_missing_token", path=path, method=request.method)
-            raise AuthError(message="Missing session cookie or bearer token.")
-        # Not protected (e.g., ambient 404 paths). Let the request
-        # continue; Flask will route to the 404 handler.
+    if not _is_protected_path(path):
         logger.debug("auth_skipped_ambient_path", path=path)
         return
 
-    # Token is present; defer to the services layer to verify it.
-    # We import lazily here (rather than at module top) for two
-    # complementary reasons:
-    #   1. ``app.services.auth`` is not in this file's depends_on_files
-    #      manifest. The lazy import keeps the module compile-safe
-    #      regardless of services-layer availability at module load.
-    #   2. Avoids any potential import cycles at app-factory
-    #      construction time (services -> models -> middleware ->
-    #      services).
-    from app.services.auth import verify_session_jwt  # noqa: PLC0415
-
-    try:
-        claims = verify_session_jwt(token)
-    except Exception as exc:
-        # Per AAP, ANY token verification failure (signature mismatch,
-        # expired, malformed payload, ...) MUST surface as 401 rather
-        # than 500. The original exception is chained via
-        # ``raise ... from exc`` so the structured log captures the
-        # underlying type without leaking it to the client.
-        logger.info(
-            "auth_token_verification_failed",
-            path=path,
-            method=request.method,
-            error=type(exc).__name__,
-        )
-        raise AuthError(message="Invalid or expired session token.") from exc
-
-    if not claims:
-        # Verifier returned None or an empty dict - treat as invalid.
-        logger.info("auth_token_empty_claims", path=path, method=request.method)
-        raise AuthError(message="Session token did not yield valid claims.")
-
-    try:
-        session = _build_session_from_claims(claims)
-    except ValueError as exc:
-        # Malformed-claim tokens are equivalent to invalid tokens
-        # from the client's perspective: re-authenticate.
-        logger.info(
-            "auth_claims_malformed",
-            path=path,
-            method=request.method,
-            error=str(exc),
-        )
-        raise AuthError(message="Session token has malformed claims.") from exc
-
-    # Per AAP section 0.7.4 (Security Invariants): "Tokens rotated on
-    # logout. Logout invalidates the cookie and (for the email/password
-    # flow) advances the per-user signing-key version."
-    #
-    # We MUST compare the JWT's ``tv`` claim against the live
-    # ``users.token_version`` value on every protected request. A
-    # mismatch means the user has logged out (or had their token_version
-    # bumped for any other revocation reason) AFTER this JWT was minted;
-    # the token must therefore be rejected even though its signature
-    # and expiry are still valid.
-    #
-    # The DB read is cheap: a single PK lookup on the indexed
-    # ``users.id`` column, sub-millisecond at any tenant scale. The
-    # added latency is well within the AAP's per-request budget.
-    if not _verify_token_version(session):
-        logger.info(
-            "auth_token_version_stale",
-            path=path,
-            method=request.method,
-            user_id=str(session.user_id),
-        )
-        raise AuthError(message="Session has been invalidated; please log in again.")
-
-    # Stash the typed session on ``g`` so downstream handlers and the
-    # RBAC decorator can read it via ``g.session``.
-    g.session = session
-
-    # Bind identity context into structlog so subsequent log lines
-    # within this request automatically carry user_id, org_id, role.
-    # The ``merge_contextvars`` processor in
-    # ``app.observability.logging`` surfaces these on every log line
-    # emitted within the request scope. The correlation middleware's
-    # ``teardown_request`` hook clears all bound contextvars so values
-    # do not leak across requests on the same worker thread.
+    # Anonymous-access mode: inject a fixed system session so all
+    # downstream service-layer logic (org scoping, ownership checks)
+    # works without a real JWT.
+    anon_session = Session(
+        user_id=_ANON_USER_ID,
+        org_id=_ANON_ORG_ID,
+        role=UserRole.ADMIN,
+        email="system@internal",
+        display_name="System",
+    )
+    g.session = anon_session
     structlog.contextvars.bind_contextvars(
-        user_id=str(session.user_id),
-        org_id=str(session.org_id),
-        role=session.role.value,
+        user_id=str(_ANON_USER_ID),
+        org_id=str(_ANON_ORG_ID),
+        role=UserRole.ADMIN.value,
     )
 
     # Successful auth log line. We intentionally do NOT include

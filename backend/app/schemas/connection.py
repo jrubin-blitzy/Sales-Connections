@@ -234,6 +234,7 @@ class ConnectionCreate(BaseModel):
 
     model_config = _STRICT_CONFIG
 
+    submitted_by: Annotated[str, Field(min_length=1, max_length=_OWNER_DISPLAY_NAME_MAX_CHARS)]
     full_name: Annotated[str, Field(min_length=1, max_length=_FULL_NAME_MAX_CHARS)]
     linkedin_url: Annotated[
         str,

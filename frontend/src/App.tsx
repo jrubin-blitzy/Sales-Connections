@@ -109,17 +109,13 @@
  *   - DL-0040 App.tsx layout shell pattern (layout route + Outlet).
  */
 
-import { Component, useCallback, useEffect, useState } from "react";
+import { Component, useState } from "react";
 import type { ErrorInfo, JSX, ReactNode } from "react";
-import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { Home, LogOut, Menu, Plus, ShieldCheck, X } from "lucide-react";
+import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
+import { Home, Menu, Plus, ShieldCheck, X } from "lucide-react";
 import clsx from "clsx";
 
-import { useLogout, useRole, useSession, useSessionLoading } from "@/auth/AuthProvider";
-import { RoleGate } from "@/auth/RoleGate";
-import { Badge } from "@/components/ui/Badge";
-import { Button } from "@/components/ui/Button";
-import { ToastContainer, useToast } from "@/components/ui/Toast";
+import { ToastContainer } from "@/components/ui/Toast";
 
 // ---------------------------------------------------------------------------
 // AppErrorBoundary - class component for React error boundaries
@@ -356,49 +352,14 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
  * links collapse into the drawer.
  */
 function AppHeader(): JSX.Element {
-  const session = useSession();
-  const { role } = useRole();
-  const logout = useLogout();
-  const navigate = useNavigate();
   const location = useLocation();
-  const toast = useToast();
-
-  // Local mobile-drawer open state. Reset on every route change so
-  // the drawer auto-closes when the user navigates via a link inside
-  // it (otherwise the drawer would remain open after navigation).
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  useEffect(() => {
-    setMobileMenuOpen(false);
-  }, [location.pathname]);
 
-  /**
-   * Logout handler.
-   *
-   * Calls the AuthProvider's useLogout mutation; on success or error
-   * navigates to /login. The mutation itself is responsible for
-   * clearing the session cookie server-side, purging the TanStack
-   * Query cache, and resetting the correlation id (per
-   * @/auth/AuthProvider docstrings). The navigate happens here
-   * because the AuthProvider does not own routing.
-   *
-   * Wrapped in useCallback so the bound function identity is stable
-   * across re-renders (irrelevant for the button's onClick prop in
-   * practice, but matches the codebase's hook-discipline convention).
-   */
-  const handleLogout = useCallback(async (): Promise<void> => {
-    try {
-      await logout.mutateAsync();
-    } catch {
-      // The useLogout hook surfaces its own error toast; we still
-      // navigate the user to /login because the session cookie may
-      // have been cleared even on apparent error (e.g., the network
-      // request succeeded but the response parser rejected the
-      // payload). Erring on the safe side and navigating to /login.
-      toast.error("Logout encountered an error; redirecting to login.");
-    } finally {
-      navigate("/login", { replace: true });
-    }
-  }, [logout, navigate, toast]);
+  // Close drawer on navigation
+  const prevPathname = useState(location.pathname)[0];
+  if (prevPathname !== location.pathname && mobileMenuOpen) {
+    setMobileMenuOpen(false);
+  }
 
   return (
     <header
@@ -406,16 +367,12 @@ function AppHeader(): JSX.Element {
       data-testid="app-header"
     >
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
-        {/* Brand cluster - left side */}
+        {/* Brand */}
         <div className="flex items-center gap-3">
           <Link
             to="/feed"
             className={clsx(
               "flex items-center gap-2 rounded-md text-lg font-semibold text-slate-900",
-              // WCAG 2.5.8 / SC 2.5.5: 44x44 minimum touch target on
-              // mobile; full-size header retains its natural height on
-              // sm+ where pointer precision is high (Visual Consistency
-              // QA Issue 6).
               "min-h-[44px] min-w-[44px] px-2 sm:min-h-0 sm:min-w-0 sm:px-0",
               "focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2",
             )}
@@ -428,79 +385,40 @@ function AppHeader(): JSX.Element {
           </Link>
         </div>
 
-        {/* Desktop nav - hidden below md */}
+        {/* Desktop nav */}
         <nav
           aria-label="Primary navigation"
           className="hidden md:flex md:items-center md:gap-1"
           data-testid="primary-nav"
         >
-          {NAV_ITEMS.map((item) => {
-            const linkElement = renderNavLink(item, false);
-            if (item.adminOnly) {
-              return (
-                <RoleGate key={item.to} role="Admin">
-                  {linkElement}
-                </RoleGate>
-              );
-            }
-            return linkElement;
-          })}
+          {NAV_ITEMS.filter((item) => !item.adminOnly).map((item) =>
+            renderNavLink(item, false),
+          )}
         </nav>
 
-        {/* User cluster - right side. Always inline regardless of viewport. */}
-        <div className="flex items-center gap-3" data-testid="user-cluster">
-          <div className="hidden flex-col items-end leading-tight md:flex" data-testid="user-info">
-            <span className="text-sm font-medium text-slate-900">
-              {session?.user.display_name ?? ""}
-            </span>
-            {role !== null ? (
-              <Badge variant="brand" size="sm" withDot>
-                {role}
-              </Badge>
-            ) : null}
-          </div>
-          <Button
-            variant="ghost"
-            size="md"
-            type="button"
-            onClick={handleLogout}
-            loading={logout.isPending}
-            disabled={logout.isPending}
-            leftIcon={<LogOut aria-hidden="true" className="h-4 w-4" />}
-            data-testid="logout-button"
-          >
-            <span className="hidden sm:inline">Logout</span>
-            <span className="sm:hidden sr-only">Logout</span>
-          </Button>
-          {/* Mobile hamburger toggle - hidden at md+. */}
-          <button
-            type="button"
-            onClick={() => setMobileMenuOpen((open) => !open)}
-            className={clsx(
-              // Per Visual Consistency QA Issue 6 the mobile
-              // hamburger MUST hit the 44x44 touch-target floor. The
-              // min-h / min-w utilities apply at every viewport but
-              // the button is only rendered at < md (md:hidden) so
-              // they only matter on mobile.
-              "inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md p-2 md:hidden",
-              "text-slate-700 hover:bg-slate-100 hover:text-slate-900",
-              "focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2",
-            )}
-            aria-label={mobileMenuOpen ? "Close primary navigation" : "Open primary navigation"}
-            aria-expanded={mobileMenuOpen}
-            aria-controls="mobile-nav-drawer"
-            data-testid="mobile-menu-toggle"
-          >
-            {mobileMenuOpen ? (
-              <X aria-hidden="true" className="h-5 w-5" />
-            ) : (
-              <Menu aria-hidden="true" className="h-5 w-5" />
-            )}
-          </button>
-        </div>
+        {/* Mobile hamburger */}
+        <button
+          type="button"
+          onClick={() => setMobileMenuOpen((open) => !open)}
+          className={clsx(
+            "inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md p-2 md:hidden",
+            "text-slate-700 hover:bg-slate-100 hover:text-slate-900",
+            "focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2",
+          )}
+          aria-label={mobileMenuOpen ? "Close navigation" : "Open navigation"}
+          aria-expanded={mobileMenuOpen}
+          aria-controls="mobile-nav-drawer"
+          data-testid="mobile-menu-toggle"
+        >
+          {mobileMenuOpen ? (
+            <X aria-hidden="true" className="h-5 w-5" />
+          ) : (
+            <Menu aria-hidden="true" className="h-5 w-5" />
+          )}
+        </button>
       </div>
 
-      {/* Mobile nav drawer - shown when mobileMenuOpen=true on < md viewports. */}
+      {/* Mobile drawer */}
       {mobileMenuOpen ? (
         <nav
           id="mobile-nav-drawer"
@@ -509,17 +427,9 @@ function AppHeader(): JSX.Element {
           data-testid="mobile-nav-drawer"
         >
           <ul className="flex flex-col gap-1">
-            {NAV_ITEMS.map((item) => {
-              const linkElement = <li key={item.to}>{renderNavLink(item, true)}</li>;
-              if (item.adminOnly) {
-                return (
-                  <RoleGate key={item.to} role="Admin">
-                    {linkElement}
-                  </RoleGate>
-                );
-              }
-              return linkElement;
-            })}
+            {NAV_ITEMS.filter((item) => !item.adminOnly).map((item) => (
+              <li key={item.to}>{renderNavLink(item, true)}</li>
+            ))}
           </ul>
         </nav>
       ) : null}
@@ -591,18 +501,10 @@ function renderNavLink(item: NavItem, mobile: boolean): JSX.Element {
  * spinner before the Outlet content mounts.
  */
 export function App(): JSX.Element {
-  const session = useSession();
-  const isLoading = useSessionLoading();
-
-  // Render the header only when authenticated AND not in initial
-  // hydration. During hydration we render a minimal placeholder so
-  // there is no layout shift when the header eventually appears.
-  const showHeader = session !== null && !isLoading;
-
   return (
     <div className="flex min-h-screen flex-col bg-slate-50" data-testid="app-shell">
       <AppErrorBoundary>
-        {showHeader ? <AppHeader /> : null}
+        <AppHeader />
         <main className="flex-1" data-testid="app-main">
           {/* Inner error boundary so a route render error preserves
               the header chrome above (when present). The outer

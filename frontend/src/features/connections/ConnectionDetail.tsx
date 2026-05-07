@@ -91,12 +91,9 @@ import { ArrowLeft, Briefcase, Calendar, ExternalLink, Pencil, Trash2, User } fr
 import clsx from "clsx";
 
 import { useConnectionQuery, useSoftDeleteConnectionMutation } from "@/api/connections";
-import { useRole, useSession } from "@/auth/AuthProvider";
-import { RoleGate } from "@/auth/RoleGate";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
-import type { ConnectionRead } from "@/schemas/connection";
 
 import { EditHistoryFeed } from "./EditHistoryFeed";
 import { InvolvementBadge } from "./InvolvementBadge";
@@ -151,36 +148,6 @@ function formatDate(value: string | null | undefined): string {
   });
 }
 
-/**
- * Determine whether the current session is permitted to edit/soft-delete
- * the given record at the UI layer.
- *
- * IMPORTANT (per AAP Sec 0.7.1 invariant 7): the backend RBAC decorator
- * is the authoritative gate. This helper hides UI controls as a UX
- * courtesy / secondary defense; a user who tampers with the DOM to
- * surface the buttons would still receive HTTP 403 from the API.
- *
- * Permission matrix:
- *   - Admins:        edit ANY record.
- *   - Contributors:  edit OWN records (sessionUserId === owner_user_id).
- *   - Viewers:       cannot edit (status mutation is delegated to the
- *                    StatusChip's own role-gate which admits Viewer/Admin).
- *
- * @param record         The record being viewed.
- * @param sessionUserId  The current session user id, or null when no
- *                       session has hydrated yet.
- * @param hasRole        The role predicate from useRole().
- * @returns              True when the current user may edit/soft-delete.
- */
-function canEditRecord(
-  record: ConnectionRead,
-  sessionUserId: string | null,
-  hasRole: (role: "Admin" | "Contributor" | "Viewer") => boolean,
-): boolean {
-  if (hasRole("Admin")) return true;
-  if (hasRole("Contributor") && sessionUserId === record.owner_user_id) return true;
-  return false;
-}
 
 // ---------------------------------------------------------------------------
 // DetailField subcomponent
@@ -250,9 +217,6 @@ function DetailField({ label, icon, children, className, testId }: DetailFieldPr
 export function ConnectionDetail(): JSX.Element {
   const { id = "" } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const session = useSession();
-  const { has: hasRole } = useRole();
-
   const recordQuery = useConnectionQuery(id);
   const softDelete = useSoftDeleteConnectionMutation();
 
@@ -371,8 +335,7 @@ export function ConnectionDetail(): JSX.Element {
   // Rendered state - record is loaded
   // -------------------------------------------------------------------------
   const record = recordQuery.data;
-  const sessionUserId = session?.user.id ?? null;
-  const editable = canEditRecord(record, sessionUserId, hasRole);
+  const editable = true;
   const isSoftDeleted = record.deleted_at !== null;
 
   return (
@@ -431,29 +394,25 @@ export function ConnectionDetail(): JSX.Element {
               className="flex flex-wrap items-center gap-2"
               data-testid="connection-detail-actions"
             >
-              <RoleGate role={["Admin", "Contributor"]}>
-                <Link to={`/connections/${record.id}/edit`}>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    leftIcon={<Pencil aria-hidden="true" />}
-                    data-testid="connection-detail-edit"
-                  >
-                    Edit
-                  </Button>
-                </Link>
-              </RoleGate>
-              <RoleGate role={["Admin", "Contributor"]}>
+              <Link to={`/connections/${record.id}/edit`}>
                 <Button
-                  variant="destructive"
+                  variant="secondary"
                   size="sm"
-                  leftIcon={<Trash2 aria-hidden="true" />}
-                  onClick={handleOpenDelete}
-                  data-testid="connection-detail-delete"
+                  leftIcon={<Pencil aria-hidden="true" />}
+                  data-testid="connection-detail-edit"
                 >
-                  Delete
+                  Edit
                 </Button>
-              </RoleGate>
+              </Link>
+              <Button
+                variant="destructive"
+                size="sm"
+                leftIcon={<Trash2 aria-hidden="true" />}
+                onClick={handleOpenDelete}
+                data-testid="connection-detail-delete"
+              >
+                Delete
+              </Button>
             </div>
           )}
         </div>

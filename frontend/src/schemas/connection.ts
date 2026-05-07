@@ -478,6 +478,10 @@ export type TagCreate = z.infer<typeof TagCreateSchema>;
  */
 export const ConnectionCreateSchema = z
   .object({
+    submitted_by: z
+      .string()
+      .min(1, { message: "Your name is required" })
+      .max(255, { message: "Name must be 255 characters or fewer" }),
     full_name: z
       .string()
       .min(1, { message: "Full name is required" })

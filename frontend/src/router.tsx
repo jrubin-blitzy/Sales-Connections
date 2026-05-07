@@ -88,15 +88,6 @@
 import { createBrowserRouter, Navigate } from "react-router-dom";
 
 import { App } from "@/App";
-import { ProtectedRoute } from "@/auth/ProtectedRoute";
-import { RoleGate } from "@/auth/RoleGate";
-
-import { AdminPanel } from "@/features/admin/AdminPanel";
-import { Analytics } from "@/features/admin/Analytics";
-import { RecordModeration } from "@/features/admin/RecordModeration";
-import { UserManagement } from "@/features/admin/UserManagement";
-
-import { LoginScreen } from "@/features/auth/LoginScreen";
 
 import { AddEditConnectionForm } from "@/features/connections/AddEditConnectionForm";
 import { ConnectionDetail } from "@/features/connections/ConnectionDetail";
@@ -129,170 +120,15 @@ import { ConnectionFeed } from "@/features/connections/ConnectionFeed";
  *      then handles the unauthenticated case by bouncing to /login.
  */
 export const router = createBrowserRouter([
-  // =========================================================================
-  // Public authentication surface (NOT wrapped in <ProtectedRoute>; NOT
-  // wrapped in the App layout shell either, because the login screen and
-  // the OAuth bounce surfaces should render WITHOUT the SPA chrome).
-  // =========================================================================
-
-  {
-    path: "/login",
-    element: <LoginScreen />,
-  },
-
-  // =========================================================================
-  // Authenticated surface (wrapped in the App layout shell + ProtectedRoute)
-  //
-  // The App layout shell renders: outer <AppErrorBoundary>, conditional
-  // <AppHeader> (visible only when authenticated), <main><Outlet /></main>,
-  // and the global <ToastContainer />. Per AAP Section 0.7.1 invariant 7,
-  // the App layout's <RoleGate> on the Admin nav link is a UI courtesy;
-  // the backend RBAC decorator on every /api/admin/* endpoint is the
-  // authoritative authorization gate. The App layout itself does NOT gate
-  // authentication - that responsibility stays with <ProtectedRoute> on
-  // each child route below so a forgotten ProtectedRoute does NOT silently
-  // expose a route to unauthenticated visitors.
-  //
-  // Resolves the Checkpoint 5 MAJOR review finding ("App.tsx missing,
-  // layout shell requirements (header/navigation/Toaster/ErrorBoundary)
-  // not satisfied anywhere in the codebase") by mounting <App /> as the
-  // layout-route element. Resolves the Checkpoint 5 MINOR finding ("No
-  // top-level <ErrorBoundary> wrapping any route") via the AppErrorBoundary
-  // class component inside App.tsx wrapping <Outlet /> for per-route render
-  // failures plus an outer boundary catching header/chrome failures.
-  // =========================================================================
-
   {
     element: <App />,
     children: [
-      // Index route: the bare "/" redirects to /feed. Wrapped in
-      // <ProtectedRoute> so unauthenticated visitors are bounced to /login
-      // first; the Navigate only fires for authenticated users, who then
-      // land on /feed (the AAP-specified default landing surface for
-      // Viewer and Contributor roles per AAP Sec 0.5.4).
-      {
-        path: "/",
-        element: (
-          <ProtectedRoute>
-            <Navigate to="/feed" replace />
-          </ProtectedRoute>
-        ),
-      },
-
-      // F-004 Connection Feed / Dashboard: the primary surface for Sales
-      // Reps (Viewer role) and Contributors. Filter and sort state is
-      // encoded in URL search params (handled inside the ConnectionFeed
-      // component via useSearchParams), NOT as separate routes - keeping
-      // the route table minimal and the URL shareable.
-      {
-        path: "/feed",
-        element: (
-          <ProtectedRoute>
-            <ConnectionFeed />
-          </ProtectedRoute>
-        ),
-      },
-
-      // F-001 Add Connection: mounts AddEditConnectionForm in create mode.
-      // The component reads its `mode` prop to decide whether to load an
-      // existing record (mode="edit") or start with empty state (mode="create").
-      {
-        path: "/connections/new",
-        element: (
-          <ProtectedRoute>
-            <AddEditConnectionForm mode="create" />
-          </ProtectedRoute>
-        ),
-      },
-
-      // F-011 Connection Detail: shows all nine record fields plus the
-      // edit-history feed (sourced from audit_events via
-      // GET /api/connections/:id/history). The :id parameter is read inside
-      // the component via useParams.
-      {
-        path: "/connections/:id",
-        element: (
-          <ProtectedRoute>
-            <ConnectionDetail />
-          </ProtectedRoute>
-        ),
-      },
-
-      // F-001 / F-007 Edit Connection: mounts AddEditConnectionForm in edit
-      // mode. The component reads :id via useParams and hydrates the form
-      // by fetching GET /api/connections/:id. Edit authorization is
-      // enforced by the backend (own record for Contributor, any record
-      // for Admin); the UI does not gate this route because Contributors
-      // should be able to navigate to their own records' edit form.
-      {
-        path: "/connections/:id/edit",
-        element: (
-          <ProtectedRoute>
-            <AddEditConnectionForm mode="edit" />
-          </ProtectedRoute>
-        ),
-      },
-
-      // ======================================================================
-      // Admin surface (Admin role required via <RoleGate>)
-      //
-      // F-014 Admin Panel: nested route tree. The /admin root mounts
-      // AdminPanel (header banner + tab navigation + <Outlet />), and the
-      // children render inside the outlet. Index route redirects /admin to
-      // /admin/users so the user lands on a populated tab immediately
-      // rather than seeing an empty outlet, matching the AAP Sec 0.5.4
-      // description. The App layout's <Outlet /> hosts the AdminPanel,
-      // which itself contains a nested <Outlet /> for users/records/analytics.
-      //
-      // RoleGate's `fallback` prop renders <Navigate to="/feed" replace />
-      // for non-Admin sessions, surfacing the "you cannot view this surface"
-      // outcome as a route redirect rather than a blank page. The backend's
-      // @requires_role(Admin) decorator on every /api/admin/* endpoint is
-      // the authoritative gate (per AAP Sec 0.7.1 invariant 7); this
-      // RoleGate is a UI courtesy that prevents the broken admin UI from
-      // rendering for users who would only see 403 errors anyway.
-      // ======================================================================
-      {
-        path: "/admin",
-        element: (
-          <ProtectedRoute>
-            <RoleGate role="Admin" fallback={<Navigate to="/feed" replace />}>
-              <AdminPanel />
-            </RoleGate>
-          </ProtectedRoute>
-        ),
-        children: [
-          // Default index: /admin -> /admin/users.
-          { index: true, element: <Navigate to="/admin/users" replace /> },
-
-          // F-009 / F-014 User management: list users, edit roles.
-          { path: "users", element: <UserManagement /> },
-
-          // F-007 / F-014 Record moderation: includes soft-deleted records
-          // and the Admin-only hard-delete control.
-          { path: "records", element: <RecordModeration /> },
-
-          // F-014 Analytics: most active contributors, leads by status,
-          // weekly activity sparkline.
-          { path: "analytics", element: <Analytics /> },
-        ],
-      },
+      { path: "/", element: <Navigate to="/feed" replace /> },
+      { path: "/feed", element: <ConnectionFeed /> },
+      { path: "/connections/new", element: <AddEditConnectionForm mode="create" /> },
+      { path: "/connections/:id", element: <ConnectionDetail /> },
+      { path: "/connections/:id/edit", element: <AddEditConnectionForm mode="edit" /> },
     ],
   },
-
-  // =========================================================================
-  // Catch-all (unknown URLs) - rendered OUTSIDE the layout shell so
-  // unmatched paths are not subjected to the header chrome flicker
-  // before the redirect fires.
-  // =========================================================================
-
-  // Any unmatched path redirects to /feed. ProtectedRoute on /feed then
-  // handles the unauthenticated case by bouncing to /login. This is simpler
-  // than a dedicated 404 component for MVP; a friendlier styled NotFound
-  // page is logged as a suggested next task in docs/decision-log.md per
-  // AAP Sec 0.7.5.
-  {
-    path: "*",
-    element: <Navigate to="/feed" replace />,
-  },
+  { path: "*", element: <Navigate to="/feed" replace /> },
 ]);

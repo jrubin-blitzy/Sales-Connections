@@ -524,22 +524,10 @@ def create_record(payload: ConnectionCreate, actor: Session) -> Record:
     # state change must commit atomically per AAP Section 0.7.1
     # invariant 6.
     with db.session() as session, session.begin():
-        # ----- Step 1: Resolve owner ----------------------------------
-        # Org-scoped lookup: the User row MUST be in the actor's org
-        # (by definition the actor's own org via the auth middleware,
-        # but enforce explicitly so a future change to the auth
-        # middleware doesn't silently change the security invariant).
-        owner: User | None = session.execute(
-            select(User).where(User.id == actor_user_id, User.org_id == org_id)
-        ).scalar_one_or_none()
-        if owner is None:
-            # Theoretically unreachable (the auth middleware verifies
-            # the User row via the token-version check) but kept as
-            # explicit defense.
-            raise ForbiddenError(
-                message="The authenticated user no longer exists in this organization.",
-            )
-        owner_display_name = owner.display_name
+        # ----- Step 1: Set owner display name from submitted_by -------
+        # Anonymous-access mode: the submitter's name comes directly
+        # from the form field instead of a User row lookup.
+        owner_display_name = payload.submitted_by
 
         # ----- Step 2: Resolve and validate tags ----------------------
         # Skip the round-trip when the payload has zero tags.

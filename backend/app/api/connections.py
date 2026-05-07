@@ -315,7 +315,6 @@ _DUPLICATE_FAILURE_CLASS: type[DuplicateRecordError] = DuplicateRecordError
 
 
 @connections_bp.route("", methods=["POST"])
-@requires_role(UserRole.CONTRIBUTOR, UserRole.ADMIN)
 def create_connection() -> tuple[Response, int]:
     """Create a Connection-Idea record (F-001).
 
@@ -1005,7 +1004,6 @@ def _build_filters_from_query(actor_role: Any) -> ConnectionFilters:
 
 
 @connections_bp.route("/duplicate-check", methods=["GET"])
-@requires_role(UserRole.ADMIN, UserRole.CONTRIBUTOR)
 def duplicate_check() -> tuple[Response, int]:
     """Check whether a LinkedIn URL already exists in the actor's org (F-010).
 
@@ -1125,7 +1123,6 @@ def duplicate_check() -> tuple[Response, int]:
 
 
 @connections_bp.route("", methods=["GET"])
-@requires_role(UserRole.ADMIN, UserRole.CONTRIBUTOR, UserRole.VIEWER)
 def list_connections() -> tuple[Response, int]:
     """Paginated, filterable, sortable list of records (F-004).
 
@@ -1212,7 +1209,6 @@ def list_connections() -> tuple[Response, int]:
 
 
 @connections_bp.route("/<uuid:record_id>", methods=["GET"])
-@requires_role(UserRole.ADMIN, UserRole.CONTRIBUTOR, UserRole.VIEWER)
 def get_connection(record_id: UUID) -> tuple[Response, int]:
     """Fetch a single record's full detail (F-011).
 
@@ -1266,7 +1262,6 @@ def get_connection(record_id: UUID) -> tuple[Response, int]:
 
 
 @connections_bp.route("/<uuid:record_id>/history", methods=["GET"])
-@requires_role(UserRole.ADMIN, UserRole.CONTRIBUTOR, UserRole.VIEWER)
 def get_connection_history(record_id: UUID) -> tuple[Response, int]:
     """Return paginated audit-event history for a record (F-011).
 
@@ -1354,7 +1349,6 @@ def get_connection_history(record_id: UUID) -> tuple[Response, int]:
 
 
 @connections_bp.route("/<uuid:record_id>", methods=["PATCH"])
-@requires_role(UserRole.ADMIN, UserRole.CONTRIBUTOR)
 def update_connection(record_id: UUID) -> tuple[Response, int]:
     """Edit a record (F-007).
 
@@ -1451,7 +1445,6 @@ def update_connection(record_id: UUID) -> tuple[Response, int]:
 
 
 @connections_bp.route("/<uuid:record_id>/status", methods=["PATCH"])
-@requires_role(UserRole.ADMIN, UserRole.VIEWER)
 def update_connection_status(record_id: UUID) -> tuple[Response, int]:
     """Mutate the outreach status of a record (F-005).
 
@@ -1538,7 +1531,6 @@ def update_connection_status(record_id: UUID) -> tuple[Response, int]:
 
 
 @connections_bp.route("/<uuid:record_id>", methods=["DELETE"])
-@requires_role(UserRole.ADMIN, UserRole.CONTRIBUTOR, UserRole.VIEWER)
 def soft_delete_connection(record_id: UUID) -> tuple[Response, int]:
     """Soft-delete a record (F-007).
 

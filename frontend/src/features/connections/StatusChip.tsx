@@ -77,7 +77,6 @@ import { Loader2 } from "lucide-react";
 import clsx from "clsx";
 
 import { useUpdateStatusMutation } from "@/api/connections";
-import { RoleGate } from "@/auth/RoleGate";
 import { Badge } from "@/components/ui/Badge";
 import { Select } from "@/components/ui/Select";
 import { OUTREACH_STATUS_VALUES, type OutreachStatusValue } from "@/schemas/connection";
@@ -253,49 +252,7 @@ const STATUS_OPTIONS: ReadonlyArray<{
 }> = OUTREACH_STATUS_VALUES.map((v) => ({ value: v, label: v }));
 
 // ---------------------------------------------------------------------------
-// ReadOnlyStatusBadge - read-only fallback subcomponent
-// ---------------------------------------------------------------------------
-
-/**
- * Props for the read-only fallback path.
- *
- * Marked internal; not exported.
- */
-interface ReadOnlyStatusBadgeProps {
-  readonly value: OutreachStatusValue;
-  readonly className?: string;
-  readonly testIdSuffix?: string;
-}
-
-/**
- * Render a static, non-interactive Badge with the appropriate
- * outreach-* variant for the given status. Used as the `<RoleGate>`
- * fallback so non-permitted roles (Contributor) still SEE the
- * connection's current outreach status without being able to mutate
- * it. The Badge primitive does not expose `data-testid` on its public
- * props interface, so the testid is placed on the wrapping `<span>`
- * instead - matching the convention used by InvolvementBadge.tsx.
- */
-function ReadOnlyStatusBadge({
-  value,
-  className,
-  testIdSuffix,
-}: ReadOnlyStatusBadgeProps): JSX.Element {
-  const variant = STATUS_TO_VARIANT[value];
-  return (
-    <span
-      className={clsx("inline-flex", className)}
-      data-testid={testIdSuffix ? `status-chip-readonly-${testIdSuffix}` : "status-chip-readonly"}
-    >
-      <Badge variant={variant} size="sm" withDot>
-        {value}
-      </Badge>
-    </span>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// EditableStatusSelect - role-admitted editable subcomponent
+// EditableStatusSelect - editable subcomponent
 // ---------------------------------------------------------------------------
 
 /**
@@ -481,16 +438,11 @@ export function StatusChip({
   className,
 }: StatusChipProps): JSX.Element {
   return (
-    <RoleGate
-      role={["Admin", "Viewer"]}
-      fallback={<ReadOnlyStatusBadge value={value} className={className} testIdSuffix={recordId} />}
-    >
-      <EditableStatusSelect
-        recordId={recordId}
-        value={value}
-        disabled={disabled}
-        className={className}
-      />
-    </RoleGate>
+    <EditableStatusSelect
+      recordId={recordId}
+      value={value}
+      disabled={disabled}
+      className={className}
+    />
   );
 }
