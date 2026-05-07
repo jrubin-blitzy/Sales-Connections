@@ -29,7 +29,7 @@ def upgrade() -> None:
     op.execute(
         sa.text(
             """
-            INSERT INTO users (id, org_id, email, display_name, role, password_hash, token_version, created_at, updated_at)
+            INSERT INTO users (id, org_id, email, display_name, role, password_hash, token_version, created_at)
             VALUES (
                 CAST(:user_id AS uuid),
                 CAST(:org_id AS uuid),
@@ -38,7 +38,6 @@ def upgrade() -> None:
                 :role,
                 NULL,
                 0,
-                NOW(),
                 NOW()
             )
             ON CONFLICT (id) DO NOTHING;
