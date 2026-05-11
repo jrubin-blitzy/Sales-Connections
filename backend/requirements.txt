@@ -59,8 +59,8 @@ greenlet==3.2.4
 # email-validator is the runtime backend for pydantic's EmailStr type.
 # Without it, importing EmailStr (used by app.schemas.admin.UserRead and
 # app.schemas.auth) raises ImportError at module load time.
-pydantic==2.10.3
-pydantic-core==2.27.1
+pydantic==2.13.4
+pydantic-core==2.46.4
 typing-extensions==4.15.0
 annotated-types==0.7.0
 email-validator==2.2.0
