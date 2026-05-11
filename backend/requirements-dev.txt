@@ -135,7 +135,7 @@ mypy==1.18.2
 # pin in requirements.txt so signatures are aligned.
 types-PyYAML==6.0.12.20240917
 types-requests==2.32.0.20240914
-boto3-stubs[essential]==1.35.99
+boto3-stubs[essential]==1.43.6
 
 # ---------------------------------------------------------------------
 # pip-tools and build (requirements compilation, packaging)
