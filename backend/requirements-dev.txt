@@ -49,7 +49,7 @@
 # fixture for monkeypatching SDK clients in unit tests.
 pytest==8.4.2
 pytest-flask==1.3.0
-pytest-cov==6.0.0
+pytest-cov==6.3.0
 pytest-mock==3.15.1
 
 # ---------------------------------------------------------------------
@@ -71,7 +71,7 @@ faker==33.1.0
 # both libraries are installed because the project's HTTP surface
 # spans both clients.
 freezegun==1.5.5
-responses==0.25.8
+responses==0.26.0
 respx==0.22.0
 
 # httpx is already a transitive of langchain/anthropic in
@@ -85,7 +85,7 @@ httpx==0.28.1
 # The [toml] extra enables pyproject.toml-based [tool.coverage.*]
 # configuration consumption (tomllib is stdlib on Python 3.12; the
 # extra is a no-op on 3.11+, included for forward compatibility).
-coverage[toml]==7.6.10
+coverage[toml]==7.14.0
 
 # ---------------------------------------------------------------------
 # Test parallelization (CI speed)
@@ -93,7 +93,7 @@ coverage[toml]==7.6.10
 # pytest-xdist enables `-n auto` to run the test suite across worker
 # processes. Critical for keeping CI runtime bounded as backend/tests/
 # grows alongside feature delivery (F-001..F-014).
-pytest-xdist==3.6.1
+pytest-xdist==3.8.0
 
 # ---------------------------------------------------------------------
 # Better assertion messages
