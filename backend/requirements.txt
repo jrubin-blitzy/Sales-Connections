@@ -49,11 +49,11 @@ backports.zstd==1.4.0
 
 # --- Database (SQLAlchemy 2.x + psycopg 3.x + Alembic 1.x) ---
 # psycopg[binary] ships pre-compiled libpq wheels; runtime image needs no libpq-dev.
-SQLAlchemy==2.0.43
-psycopg[binary]==3.2.10
-alembic==1.16.4
+SQLAlchemy==2.0.49
+psycopg[binary]==3.3.4
+alembic==1.18.4
 Mako==1.3.12
-greenlet==3.2.4
+greenlet==3.5.0
 
 # --- Validation / data shaping (pydantic 2.x) ---
 # email-validator is the runtime backend for pydantic's EmailStr type.
