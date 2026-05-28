@@ -83,7 +83,6 @@
  * itself trigger a full reload regardless of this rule because the router
  * instance is created once at module-load time and held by RouterProvider.
  */
-/* eslint-disable react-refresh/only-export-components */
 
 import { createBrowserRouter, Navigate } from "react-router-dom";
 
