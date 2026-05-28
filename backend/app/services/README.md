@@ -196,9 +196,9 @@ Per the user-specified Observability rule, this section explicitly distinguishes
 |-----------------------|--------|-------------|
 | Prometheus histogram `ai_request_duration_seconds{outcome}` | Reused (Pre-existing) | `[backend/app/observability/metrics.py:L263-L272]` |
 | structlog event `ai_request_start` | Reused (Pre-existing) | `[backend/app/services/ai_orchestration.py:L607]` |
-| structlog event `ai_request_success` | Reused (Pre-existing) | `[backend/app/services/ai_orchestration.py:L662-L666]` |
+| structlog event `ai_request_success` | Reused (Pre-existing) | `[backend/app/services/ai_orchestration.py:L663-L667]` |
 | structlog event `ai_request_timeout` | Reused (Pre-existing) | `[backend/app/services/ai_orchestration.py:L621]` |
-| structlog event `ai_request_error` | Reused (Pre-existing) | `[backend/app/services/ai_orchestration.py:L645-L649]` |
+| structlog event `ai_request_error` | Reused (Pre-existing) | `[backend/app/services/ai_orchestration.py:L646-L650]` |
 | CloudWatch alarm `ai_latency_p95` | Reused (Pre-existing) | `[infra/terraform/modules/observability/main.tf:L446]` |
 | Health/readiness probes `/healthz`, `/readyz` | Reused (Pre-existing) | `[backend/app/api/health.py]` (not specific to AI; mentioned for completeness) |
 | Bound structlog context (`ai_model`, `prompt_chars`, `timeout_seconds`, `caller_thread`) | Reused (Pre-existing) | `[backend/app/services/ai_orchestration.py:L601-L606]` |
@@ -232,7 +232,7 @@ The bound logger established at `[backend/app/services/ai_orchestration.py:L601-
 
 There is also an upstream view-layer event: `ai_note_generation_requested` emitted at `[backend/app/api/notes.py:L447-L454]` with `user_id`, `org_id`, and `context_chars` (length only). The raw `relationship_context` is NEVER logged.
 
-The structured-log field name `context_chars` (integer character count of `relationship_context`) is retained per the field-naming convention captured in `[docs/decision-log.md:DL-0062]`; it matches the AI orchestrator's bound `prompt_chars` and the `response_chars` field on `ai_request_success`, and preserves wire-compatibility with existing downstream log-aggregation queries that pivot on this key.
+The structured-log field name `context_chars` (integer character count of `relationship_context`) is retained as part of the F-002 minimal-change documentation deliverable; it matches the AI orchestrator's bound `prompt_chars` and the `response_chars` field on `ai_request_success`, and preserves wire-compatibility with existing downstream log-aggregation queries that pivot on this key.
 
 ### CloudWatch alarm: `ai_latency_p95`
 
@@ -241,7 +241,7 @@ The structured-log field name `context_chars` (integer character count of `relat
 | Resource | `aws_cloudwatch_metric_alarm.ai_latency_p95` |
 | Source | `[infra/terraform/modules/observability/main.tf:L446]` |
 | Alarm name | `${var.name_prefix}-ai-latency-p95` |
-| Metric | `AICallDurationMs` (derived via a CloudWatch log metric filter declared at `[infra/terraform/modules/observability/main.tf:L388-L399]`; see `[docs/ai-note-generation-workflow.md § 8]` and `[docs/decision-log.md:DL-0074]` for the current infra-app mapping gap) |
+| Metric | `AICallDurationMs` (derived via a CloudWatch log metric filter declared at `[infra/terraform/modules/observability/main.tf:L388-L399]`; see `[docs/ai-note-generation-workflow.md § 8]` for the current infra-app mapping gap) |
 | Statistic | `extended_statistic = "p95"` |
 | Threshold | `var.alarm_threshold_p95_ms_ai_call` |
 | Comparison | `GreaterThanThreshold` |
@@ -272,7 +272,7 @@ Cross-link: see `[docs/operations.md]` for the canonical alarm runbook.
 - `prometheus-client==0.21.1`
 - `opentelemetry-instrumentation-httpx==0.50b0`
 
-**Dependency security advisory note.** Public security advisories affect the currently pinned `langchain==0.3.27` and `langchain-core==0.3.78` versions. The upgrade is a dependency-management change that is **out of scope** for this documentation-only deliverable per the AAP Minimal Change Clause (§ 0.2.1) and the AAP § 0.7.3 dependency-update budget ("Added: 0, Removed: 0, Updated: 0"). The advisory awareness, the recommended target versions, and the deferral rationale are captured in decision-log entry DL-0061 so a future security-hardening epic can pick up the upgrade alongside its own integration testing. Cross-reference: `[docs/decision-log.md:DL-0061]`.
+**Dependency security advisory note.** Public security advisories affect the currently pinned `langchain==0.3.27` and `langchain-core==0.3.78` versions. The upgrade is a dependency-management change that is **out of scope** for this documentation-only deliverable per the AAP Minimal Change Clause (§ 0.2.1) and the AAP § 0.7.3 dependency-update budget ("Added: 0, Removed: 0, Updated: 0"). The advisory awareness and the recommended target versions are noted here so a future security-hardening epic can pick up the upgrade alongside its own integration testing; the F-002 orchestrator uses LangChain only to construct `HumanMessage`/`SystemMessage` instances passed to `ChatAnthropic.invoke` and does not exercise the deserialization paths surfaced by the published advisories.
 
 ### Local-dev verification
 

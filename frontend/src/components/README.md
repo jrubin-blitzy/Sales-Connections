@@ -4,7 +4,7 @@
 
 `frontend/src/components/` is the host for the SPA's design-system primitives. The folder contains exactly one subfolder, `ui/`, holding 8 typed, accessible TailwindCSS-based primitives (Badge, Button, Input, Modal, Select, Table, Textarea, Toast). These primitives are dependency-light (TailwindCSS, clsx, lucide-react only) and composed by feature components elsewhere in the SPA. TypeScript 5.7.2 strict mode is enforced; React 19.2.5 forwardRef pattern is used where consumers need imperative refs. The primitives are intentionally feature-agnostic — feature-specific composition (the F-002 "Generate AI Notes" affordance) lives in `features/connections/`, not here.
 
-**Path note**: The "Add/Edit Connection" form that integrates the AI notes feature is implemented at [`frontend/src/features/connections/AddEditConnectionForm.tsx`](../features/connections/AddEditConnectionForm.tsx) — not in this folder. This README documents the design-system primitives this folder hosts AND cross-references the form as the AI-notes integration point per DL-0066 in [`docs/decision-log.md`](../../../docs/decision-log.md).
+**Path note**: The "Add/Edit Connection" form that integrates the AI notes feature is implemented at [`frontend/src/features/connections/AddEditConnectionForm.tsx`](../features/connections/AddEditConnectionForm.tsx) — not in this folder. This README documents the design-system primitives this folder hosts AND cross-references the form as the AI-notes integration point per DL-0060 in [`docs/decision-log.md`](../../../docs/decision-log.md).
 
 ## 2. Business Context
 
@@ -41,11 +41,11 @@ This folder contains a single `ui/` subfolder. Each primitive is a single, stric
 
 ### Cross-reference — AI-notes integration consumer (NOT in this folder)
 
-The "Add/Edit Connection" form that composes these primitives into the AI-notes affordance lives in `features/connections/`, not in this folder. See DL-0066 in [`docs/decision-log.md`](../../../docs/decision-log.md) for the rationale.
+The "Add/Edit Connection" form that composes these primitives into the AI-notes affordance lives in `features/connections/`, not in this folder. See DL-0060 in [`docs/decision-log.md`](../../../docs/decision-log.md) for the rationale.
 
 - [`frontend/src/features/connections/AddEditConnectionForm.tsx:L328`](../features/connections/AddEditConnectionForm.tsx) — exported `AddEditConnectionForm` component composes `<Button>`, `<Input>`, `<Textarea>`, and `<Toast>` (via `useToast()`) primitives.
 - [`frontend/src/features/connections/AddEditConnectionForm.tsx:L380`](../features/connections/AddEditConnectionForm.tsx) — `handleGenerateAi` callback wired to the "Generate AI Notes" `<Button>`.
-- [`frontend/src/api/notes.ts:L242`](../api/notes.ts) — `useGenerateNotesMutation` hook the button handler invokes.
+- [`frontend/src/api/notes.ts:L233`](../api/notes.ts) — `useGenerateNotesMutation` hook the button handler invokes.
 - [`frontend/src/api/client.ts:L572`](../api/client.ts) — `apiPost` (the underlying HTTP transport).
 
 ## 4. Data Flow
@@ -104,7 +104,7 @@ This README summarizes the four primitives the AI-notes flow uses. Refer to each
 
 - `<Input>` / `<Textarea>` `errorMessage` prop renders the validation message below the field with `aria-describedby` wiring and `aria-invalid="true"` on the control; the surrounding form sets per-field error strings only when `submitAttempted` is true (see [`frontend/src/features/connections/AddEditConnectionForm.tsx`](../features/connections/AddEditConnectionForm.tsx)).
 - `<Button>` `loading` state automatically replaces the left icon with a Lucide `Loader2` spinner and disables the button — used while `useGenerateNotesMutation.isPending` is true.
-- `<Toast>` summon pattern for hard AI failures: `useGenerateNotesMutation`'s `onError` callback calls `toast.error(...)` ONLY when `isSoftAiFailure(error)` returns false; see [`frontend/src/api/notes.ts:L190`](../api/notes.ts) for the `isSoftAiFailure` predicate definition.
+- `<Toast>` summon pattern for hard AI failures: `useGenerateNotesMutation`'s `onError` callback calls `toast.error(...)` ONLY when `isSoftAiFailure(error)` returns false; see [`frontend/src/api/notes.ts:L181`](../api/notes.ts) for the `isSoftAiFailure` predicate definition.
 - Soft AI failures (504 `ai_timeout` / 502 `ai_unavailable`) bypass the Toast and surface an inline retry banner in the form via the `aiSoftFailure` derived flag at [`frontend/src/features/connections/AddEditConnectionForm.tsx:L406-L409`](../features/connections/AddEditConnectionForm.tsx), preserving the F-002 non-blocking contract per AAP § 0.4.4.
 
 ## 7. Security and Privacy Notes
@@ -147,10 +147,10 @@ if (generateNotes.isError && isSoftAiFailure(generateNotes.error)) {
 
 ## 10. Related Modules
 
-- [`frontend/src/features/connections/AddEditConnectionForm.tsx`](../features/connections/AddEditConnectionForm.tsx) — actual AI-notes consumer form (per DL-0066).
-- [`frontend/src/api/notes.ts`](../api/notes.ts) — `useGenerateNotesMutation` hook; the demo-mode rejection is defined at [`frontend/src/api/notes.ts:L246-L248`](../api/notes.ts) per AAP § 0.9.1.
+- [`frontend/src/features/connections/AddEditConnectionForm.tsx`](../features/connections/AddEditConnectionForm.tsx) — actual AI-notes consumer form (per DL-0060).
+- [`frontend/src/api/notes.ts`](../api/notes.ts) — `useGenerateNotesMutation` hook; the demo-mode rejection is defined at [`frontend/src/api/notes.ts:L245-L248`](../api/notes.ts) per AAP § 0.9.1.
 - [`frontend/src/api/client.ts`](../api/client.ts) — `apiPost` shared HTTP transport; [`frontend/src/api/client.ts:L182`](../api/client.ts) defines the exported `ApiError` class consumed by the AI-notes flow.
 - [`frontend/src/lib/README.md`](../lib/README.md) — cross-cutting browser utilities (correlation ID lifecycle, TanStack Query client singleton).
 - [`docs/ai-note-generation-workflow.md`](../../../docs/ai-note-generation-workflow.md) — end-to-end F-002 deep-dive (SPA → API → service → provider).
 - [`backend/app/api/README.md`](../../../backend/app/api/README.md) — server-side `POST /api/notes/generate` endpoint contract.
-- [`docs/decision-log.md`](../../../docs/decision-log.md) — DL-0066 (README placement deviation rationale).
+- [`docs/decision-log.md`](../../../docs/decision-log.md) — DL-0060 (README placement deviation rationale).

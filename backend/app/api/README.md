@@ -149,7 +149,7 @@ The package exposes one public HTTP route for F-002: `POST /api/notes/generate`.
 
 This README summarizes the F-002 surface only. `[docs/api.md]` is the cross-cutting REST endpoint catalog for the rest of the API surface (auth, connections, tags, admin, health) — refer there for the cross-endpoint conventions (pagination, RBAC matrix, uniform error envelope shape).
 
-**Authority for the F-002 endpoint contract itself.** The single-field request body (`relationship_context` only), the response shape, and the validation/RBAC/error contract are sourced from and verified against the live Pydantic schemas at `[backend/app/schemas/note_generation.py:NoteGenerationRequest]` and `[backend/app/schemas/note_generation.py:NoteGenerationResponse]` plus the comprehensive `generate()` view docstring at `[backend/app/api/notes.py:L249-L362]`. If `[docs/api.md]` and this README diverge for the F-002 endpoint, this README and the inline view docstring win because they are co-located with the implementation. A future docs/api.md refresh is recommended to reconcile its F-002 § with the actual schema (see decision-log entry DL-0065 for the cross-doc reconciliation deferral).
+**Authority for the F-002 endpoint contract itself.** The single-field request body (`relationship_context` only), the response shape, and the validation/RBAC/error contract are sourced from and verified against the live Pydantic schemas at `[backend/app/schemas/note_generation.py:NoteGenerationRequest]` and `[backend/app/schemas/note_generation.py:NoteGenerationResponse]` plus the comprehensive `generate()` view docstring at `[backend/app/api/notes.py:L249-L362]`. If `[docs/api.md]` and this README diverge for the F-002 endpoint, this README and the inline view docstring win because they are co-located with the implementation. A future `docs/api.md` refresh is recommended to reconcile its F-002 section with the actual schema; that refresh is out of scope for the F-002 documentation deliverable per the AAP Minimal Change Clause (§ 0.2.1) because `docs/api.md` is not on the in-scope file list.
 
 ## 6. Error Handling
 
@@ -218,7 +218,7 @@ Per the user-specified Observability rule, this section explicitly distinguishes
 | Service-layer telemetry (`ai_request_duration_seconds`, structlog `ai_request_*` events, `ai_latency_p95` alarm) | Reused (Pre-existing) | `[backend/app/services/ai_orchestration.py]` — see `[backend/app/services/README.md]` § 8 |
 | **Added by This Deliverable** | (none) | — |
 
-**Verification:** every entry above can be exercised in local development; no new instrumentation was required, and the documentation deliverable did not modify `[backend/app/api/notes.py]` logic, the central error handler, or any middleware module. Per the AAP Minimal Change Clause, no additional API-layer log events (e.g., `ai_note_generation_succeeded`, `ai_note_generation_failed`) were introduced — see decision-log entry DL-0064.
+**Verification:** every entry above can be exercised in local development; no new instrumentation was required, and the documentation deliverable did not modify `[backend/app/api/notes.py]` logic, the central error handler, or any middleware module. Per the AAP Minimal Change Clause, no additional API-layer log events (e.g., `ai_note_generation_succeeded`, `ai_note_generation_failed`) were introduced — the existing single `ai_note_generation_requested` event paired with the four service-layer events under § 8 is sufficient.
 
 ### Structured log events emitted by this blueprint
 
@@ -283,7 +283,7 @@ Failure-mode JSON envelope examples for `validation_failed`, `ai_timeout`, `ai_u
 - `[backend/app/middleware/rbac.py]` — `requires_role` decorator
 - `[backend/app/middleware/error_handlers.py]` — `AppError` hierarchy and central JSON error envelope handler
 - `[backend/app/api/__init__.py]` — `register_blueprints(app)` and the URL-prefix table
-- `[docs/api.md]` — Cross-cutting REST endpoint catalog for the rest of the API surface (auth, connections, tags, admin, health); for the F-002 endpoint contract specifically, this README and the `generate()` view docstring at `[backend/app/api/notes.py:L249-L362]` are the authoritative references — see DL-0065 in `[docs/decision-log.md]`
+- `[docs/api.md]` — Cross-cutting REST endpoint catalog for the rest of the API surface (auth, connections, tags, admin, health); for the F-002 endpoint contract specifically, this README and the `generate()` view docstring at `[backend/app/api/notes.py:L249-L362]` are the authoritative references
 - `[docs/ai-note-generation-workflow.md]` — Cross-cutting F-002 workflow deep-dive
 - `[docs/security.md]` — Security policy (auth, RBAC, validation, sanitization invariants)
 - `[docs/operations.md]` — Operations runbook (deployment, health checks, alarms, `ai_latency_p95` runbook)

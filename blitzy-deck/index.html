@@ -49,6 +49,17 @@
       --blitzy-accent-soft: #1f6feb;
       --blitzy-accent-glow: rgba(79, 142, 247, 0.15);
 
+      /* Canonical Blitzy brand palette (Executive Presentation rule) */
+      --blitzy-primary: #5B39F3;
+      --blitzy-primary-dark: #2D1C77;
+      --blitzy-primary-navy: #1A105F;
+      --blitzy-primary-light: #7A6DEC;
+      --blitzy-primary-deep: #4101DB;
+      --blitzy-accent-teal: #94FAD5;
+      --blitzy-surface-tint: #F2F0FE;
+      --blitzy-surface-tint-2: #F4EFF6;
+      --blitzy-hero-gradient: linear-gradient(68deg, #7A6DEC 15.56%, #5B39F3 62.74%, #4101DB 84.44%);
+
       /* Border tokens */
       --blitzy-border: #30363d;
       --blitzy-border-strong: #484f58;
@@ -91,6 +102,24 @@
       color: var(--blitzy-fg);
       padding: 0;
       box-shadow: none;
+    }
+
+    /* Brand-tinted slide backgrounds (Executive Presentation rule § 0.11.6).
+       These selectors are more specific than the .reveal .slides section
+       rule above, so the Blitzy palette wins on title, divider, and
+       closing slides while content slides keep the deck's working
+       dark-on-light contrast. */
+    .reveal .slides section.title-slide.blitzy-title,
+    .reveal .slides section.slide-title {
+      background: var(--blitzy-hero-gradient);
+    }
+    .reveal .slides section.section-divider.blitzy-section,
+    .reveal .slides section.slide-divider {
+      background: var(--blitzy-primary-dark);
+    }
+    .reveal .slides section.closing-slide.blitzy-closing,
+    .reveal .slides section.slide-closing {
+      background: var(--blitzy-primary-navy);
     }
 
     /* Reveal.js renders its viewport background on this wrapper too. */
@@ -226,17 +255,18 @@
       align-items: center;
       justify-content: center;
       height: 100%;
+      /* Blitzy hero gradient per Executive Presentation rule § 0.11.6 */
+      background: var(--blitzy-hero-gradient);
     }
 
     .title-slide.blitzy-title .blitzy-brand,
     .slide-title .blitzy-brand {
       font-size: 5.5rem;
       font-weight: 800;
-      background: linear-gradient(135deg, var(--blitzy-accent), var(--blitzy-accent-soft));
-      -webkit-background-clip: text;
-      background-clip: text;
-      -webkit-text-fill-color: transparent;
-      color: transparent;
+      /* On the Blitzy purple hero gradient, the brand text reads white for contrast */
+      background: none;
+      -webkit-text-fill-color: #FFFFFF;
+      color: #FFFFFF;
       margin: 0 0 0.3em 0;
       letter-spacing: -0.03em;
       line-height: 1;
@@ -246,21 +276,21 @@
     .slide-title .blitzy-tagline {
       font-size: 2rem;
       font-weight: 400;
-      color: var(--blitzy-fg-muted);
+      color: var(--blitzy-accent-teal);
       margin: 0 0 1.5em 0;
       border: none;
     }
 
     .title-slide.blitzy-title .blitzy-icon-large,
     .slide-title .blitzy-icon-large {
-      color: var(--blitzy-accent);
+      color: var(--blitzy-accent-teal);
       margin-bottom: 1.5rem;
     }
 
     .title-slide.blitzy-title .blitzy-subtitle,
     .slide-title .blitzy-subtitle {
       font-size: 1.5rem;
-      color: var(--blitzy-fg);
+      color: #FFFFFF;
       margin: 0 0 0.5em 0;
     }
 
@@ -275,22 +305,23 @@
       align-items: center;
       justify-content: center;
       height: 100%;
+      /* Blitzy dark-purple divider background per Executive Presentation rule § 0.11.6 */
+      background: var(--blitzy-primary-dark);
     }
 
     .section-divider.blitzy-section .blitzy-icon-huge,
     .slide-divider .blitzy-icon-huge {
-      color: var(--blitzy-accent);
+      color: var(--blitzy-accent-teal);
       margin: 0 0 2rem 0;
     }
 
     .section-divider.blitzy-section h2,
     .slide-divider h2 {
       font-size: 4rem;
-      background: linear-gradient(135deg, var(--blitzy-accent), var(--blitzy-accent-soft));
-      -webkit-background-clip: text;
-      background-clip: text;
-      -webkit-text-fill-color: transparent;
-      color: transparent;
+      /* On the Blitzy primary-dark divider background, the section header reads white for contrast */
+      background: none;
+      -webkit-text-fill-color: #FFFFFF;
+      color: #FFFFFF;
       margin: 0;
       border: none;
       padding: 0;
@@ -350,11 +381,22 @@
 
     .diagram-slide .mermaid svg {
       max-width: 100%;
-      max-height: 70vh;
+      max-height: 76vh;
+      min-height: 480px;
+      width: 100%;
       height: auto;
       background: transparent;
       display: block;
       margin: 0 auto;
+    }
+
+    /* Caption below a diagram (used by the D1 simplified component view). */
+    .diagram-slide .diagram-caption {
+      font-size: 0.85rem;
+      color: var(--blitzy-muted);
+      text-align: center;
+      margin: 0.5rem auto 0;
+      max-width: 80%;
     }
 
     /* 6.5 Closing slide (.closing-slide.blitzy-closing, .slide-closing)  */
@@ -368,16 +410,17 @@
       align-items: center;
       justify-content: center;
       height: 100%;
+      /* Blitzy navy closing background per Executive Presentation rule § 0.11.6 */
+      background: var(--blitzy-primary-navy);
     }
 
     .closing-slide.blitzy-closing h2,
     .slide-closing h2 {
       font-size: 3.5rem;
-      background: linear-gradient(135deg, var(--blitzy-accent), var(--blitzy-accent-soft));
-      -webkit-background-clip: text;
-      background-clip: text;
-      -webkit-text-fill-color: transparent;
-      color: transparent;
+      /* On the Blitzy navy background, the closing header reads white for contrast */
+      background: none;
+      -webkit-text-fill-color: #FFFFFF;
+      color: #FFFFFF;
       margin: 0 0 1.2em 0;
       border: none;
     }
@@ -1019,7 +1062,7 @@
       <!-- ============================================================== -->
       <!-- SLIDE 1 of 18 — Title                                          -->
       <!-- ============================================================== -->
-      <section class="title-slide blitzy-title">
+      <section class="title-slide slide-title blitzy-title">
         <i data-lucide="users-round" class="blitzy-icon-large" aria-label="Sales-Connections brand mark"></i>
         <h1 class="blitzy-brand">Sales-Connections</h1>
         <h2 class="blitzy-tagline">Connection Intelligence for Sales Teams</h2>
@@ -1030,7 +1073,7 @@
       <!-- ============================================================== -->
       <!-- SLIDE 2 of 18 — Section Divider: What We Built                 -->
       <!-- ============================================================== -->
-      <section class="section-divider blitzy-section">
+      <section class="section-divider slide-divider blitzy-section">
         <i data-lucide="layers" class="blitzy-icon-huge" aria-label="What we built"></i>
         <h2>What We Built</h2>
         <p class="blitzy-section-sub">A connection intelligence platform with fourteen bound MVP features.</p>
@@ -1193,7 +1236,7 @@ sequenceDiagram
       <!-- ============================================================== -->
       <!-- SLIDE 6 of 18 — Section Divider: Architecture                  -->
       <!-- ============================================================== -->
-      <section class="section-divider blitzy-section">
+      <section class="section-divider slide-divider blitzy-section">
         <i data-lucide="network" class="blitzy-icon-huge" aria-label="Architecture"></i>
         <h2>Architecture</h2>
         <p class="blitzy-section-sub">Three-tier web app on AWS — synchronous, simple, scalable to 10,000 records per organization.</p>
@@ -1325,7 +1368,7 @@ sequenceDiagram
       <!-- ============================================================== -->
       <!-- SLIDE 10 of 18 — Section Divider: Why                          -->
       <!-- ============================================================== -->
-      <section class="section-divider blitzy-section">
+      <section class="section-divider slide-divider blitzy-section">
         <i data-lucide="compass" class="blitzy-icon-huge" aria-label="Why"></i>
         <h2>Why</h2>
         <p class="blitzy-section-sub">Five architectural decisions that define the platform.</p>
@@ -1386,7 +1429,7 @@ sequenceDiagram
       <!-- ============================================================== -->
       <!-- SLIDE 12 of 18 — Section Divider: Risk and Mitigation          -->
       <!-- ============================================================== -->
-      <section class="section-divider blitzy-section">
+      <section class="section-divider slide-divider blitzy-section">
         <i data-lucide="shield-alert" class="blitzy-icon-huge" aria-label="Risk and Mitigation"></i>
         <h2>Risk and Mitigation</h2>
         <p class="blitzy-section-sub">Known unknowns documented; mitigations engineered in or scheduled for follow-up.</p>
@@ -1554,42 +1597,25 @@ sequenceDiagram
 %% Diagram: F-002 Component View — Form to API to AI Orchestrator to Anthropic
 flowchart LR
     User((User))
-
-    subgraph SPA["Browser SPA"]
-        Form["AddEditConnectionForm.tsx<br/>(React component)"]
-        Hook["useGenerateNotesMutation<br/>(TanStack Query hook)"]
-        Client["apiPost<br/>(client.ts transport)"]
-        Corr["getCorrelationId<br/>(correlationId.ts)"]
-    end
-
-    subgraph Flask["Flask Application"]
-        MW["Correlation + Auth + RBAC<br/>middleware chain"]
-        View["POST /api/notes/generate<br/>view (notes.py)"]
-        Service["generate_outreach_notes<br/>(ai_orchestration.py)"]
-        San["sanitize_for_ai_prompt<br/>(sanitization.py)"]
-        LC["ChatAnthropic<br/>(LangChain wrapper)"]
-    end
-
+    SPA["Browser SPA<br/>(React + TanStack Query)"]
+    API["Flask API<br/>(POST /api/notes/generate)"]
+    Orchestrator["AI Orchestrator<br/>(ai_orchestration.py)"]
     Anthropic[("Anthropic Claude API<br/>External service")]
 
-    User -->|"click Generate AI Notes"| Form
-    Form -.->|"mutate({relationship_context})"| Hook
-    Hook -.-> Client
-    Corr -.->|"X-Correlation-Id header"| Client
-    Client -->|"HTTPS POST + cookie"| MW
-    MW -.-> View
-    View -.->|"NoteGenerationRequest"| Service
-    Service -.-> San
-    Service -.-> LC
-    LC -->|"HTTPS via langchain-anthropic"| Anthropic
+    User -->|"Generate AI Notes"| SPA
+    SPA -->|"HTTPS + X-Correlation-Id + cookie"| API
+    API -.->|"NoteGenerationRequest"| Orchestrator
+    Orchestrator -->|"HTTPS via langchain-anthropic"| Anthropic
 
     subgraph Legend["Legend"]
+        direction LR
         L1["Code module"]
         L2[("External service")]
         L3["Solid arrow: HTTPS request"]
         L4["Dashed arrow: internal call"]
     end
         </pre>
+        <p class="diagram-caption">Layered component view. Detailed sub-component view available in <code>docs/ai-note-generation-workflow.md</code> § 2 (Diagram D1).</p>
         <div class="arch-callouts">
           <div class="callout">
             <i data-lucide="shield-alert" aria-hidden="true"></i>
@@ -1649,7 +1675,7 @@ flowchart LR
       <!-- ============================================================== -->
       <!-- SLIDE 18 of 18 — Closing: What's Next + Thank You              -->
       <!-- ============================================================== -->
-      <section class="closing-slide blitzy-closing">
+      <section class="closing-slide slide-closing blitzy-closing">
         <h2>What's Next</h2>
         <p class="subtitle">Suggested follow-ups drawn from the post-MVP roadmap.</p>
         <div class="next-tasks">
@@ -1721,12 +1747,13 @@ flowchart LR
   </div>
 
   <!-- ================================================================= -->
-  <!-- Reveal.js core JS (PINNED 5.1.0)                                  -->
+  <!-- Reveal.js core JS (PINNED 5.1.0 — canonical NPM identifier:       -->
+  <!-- reveal.js@5.1.0)                                                  -->
   <!-- ================================================================= -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/reveal.min.js"></script>
 
   <!-- ================================================================= -->
-  <!-- Mermaid (PINNED 11.4.0)                                           -->
+  <!-- Mermaid (PINNED 11.4.0 — canonical NPM identifier: mermaid@11.4.0)-->
   <!-- ================================================================= -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/11.4.0/mermaid.min.js"></script>
 
@@ -1781,14 +1808,15 @@ flowchart LR
         lineColor: '#999999',
         secondaryColor: '#F4EFF6',
         fontFamily: 'Arial, "Liberation Sans", "Helvetica Neue", Helvetica, sans-serif',
-        fontSize: '14px'
+        fontSize: '18px'
       },
-      // Tight spacing keeps diagrams compact so they fit within the slide
-      // canvas height alongside the title, subtitle, and caption.
+      // Roomy spacing keeps the D1 component view readable at both
+      // 1920x1080 and 1280x720 by giving Mermaid enough room to scale
+      // glyphs to the larger fontSize above.
       flowchart: {
-        nodeSpacing: 35,
-        rankSpacing: 45,
-        diagramPadding: 10,
+        nodeSpacing: 50,
+        rankSpacing: 60,
+        diagramPadding: 12,
         useMaxWidth: true,
         htmlLabels: true
       },
@@ -1861,6 +1889,9 @@ flowchart LR
           : null;
         var root = currentSlide || document;
         var blocks = root.querySelectorAll('.mermaid:not([data-processed="true"])');
+        // Canonical Mermaid API: mermaid.run() — we pass a `nodes` scope
+        // to limit rendering to the currently visible slide's blocks so
+        // hidden slides never produce 0-width SVGs (display:none).
         if (blocks.length > 0 && typeof mermaid.run === 'function') {
           mermaid.run({ nodes: blocks }).catch(function (err) {
             console.error('Mermaid render error:', err);
