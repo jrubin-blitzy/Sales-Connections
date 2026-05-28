@@ -47,63 +47,71 @@ Diagram D2 below traces the complete F-002 request lifecycle from the "Generate 
 ```mermaid
 %% Diagram: F-002 Request Lifecycle — From Submit Click to Mutation Resolution
 sequenceDiagram
+    autonumber
     participant User as User
-    participant Form as AddEditConnectionForm
-    participant Hook as useGenerateNotesMutation
-    participant Transport as apiPost (client.ts)
-    participant MW as Middleware (correlation + RBAC)
-    participant View as generate() in notes.py
-    participant Orch as generate_outreach_notes()
-    participant Watchdog as _invoke_with_timeout()
-    participant Chat as _call_chat_anthropic()
-    participant Anthropic as Anthropic API
+    participant Form as Form<br/>(AddEditConnectionForm.tsx)
+    participant Hook as Hook<br/>(useGenerateNotesMutation)
+    participant ApiPost as apiPost<br/>(client.ts)
+    participant Flask as Flask<br/>(middleware + view)
+    participant Service as Service<br/>(generate_outreach_notes)
+    participant Provider as Provider<br/>(ChatAnthropic + Anthropic)
 
-    User->>Form: Click "Generate AI Notes"
-    Form->>Hook: mutate({ relationship_context })
-    Hook->>Transport: apiPost("/api/notes/generate", body)
-    Transport->>MW: HTTP POST + X-Correlation-Id + HttpOnly cookie
-    MW->>View: dispatch (Contributor/Admin)
-    View->>View: NoteGenerationRequest.model_validate(...)
-    View->>View: structlog.info("ai_note_generation_requested", user_id, org_id, context_chars)
-    View->>Orch: generate_outreach_notes(request)
-    Orch->>Orch: sanitize_for_ai_prompt(...)
-    Orch->>Orch: structlog.info("ai_request_start")
-    Orch->>Watchdog: _invoke_with_timeout(...)
-    Watchdog->>Chat: _call_chat_anthropic(...) [submitted to ThreadPoolExecutor]
-    Chat->>Anthropic: ChatAnthropic.invoke(prompt)
-    Anthropic-->>Chat: BaseMessage(content=...)
-    Chat-->>Watchdog: response text
-    Watchdog-->>Orch: response text
-    alt Watchdog cancellation (timeout)
-        Watchdog->>Watchdog: future.cancel() after timeout_s + 0.5s grace
-        Watchdog-->>Orch: raise FuturesTimeoutError
-        Orch->>Orch: structlog.warning("ai_request_timeout", elapsed_seconds)
-        Orch->>Orch: observe ai_request_duration_seconds{outcome="timeout"}
-        Orch-->>View: raise AIServiceUnavailableError(code="ai_timeout", status_code=504)
-        View-->>Transport: HTTP 504 + error envelope {code: "ai_timeout", correlation_id, ...}
-        Transport-->>Hook: throw ApiError(504, "ai_timeout", ...)
-        Hook-->>Form: onError(apiError)
-        Form->>Form: isSoftAiFailure(error) -> true
-        Form-->>User: Show non-blocking toast; ai_notes textarea remains editable; form submission NOT blocked
+    User->>Form: click "Generate AI Notes"
+    Form->>Hook: mutate({relationship_context})
+    Hook->>ApiPost: POST /api/notes/generate (JSON)
+    ApiPost->>Flask: HTTPS + X-Correlation-Id + session cookie
+    Flask->>Flask: correlation + auth + RBAC middleware
+    Flask->>Flask: pydantic validate NoteGenerationRequest
+    Flask->>Service: generate_outreach_notes(payload)
+    Service->>Service: sanitize_for_ai_prompt(text, 4000)
+    Service->>Service: bind structlog (model, prompt_chars)
+    Service->>Service: emit ai_request_start
+    Service->>Provider: submit to ThreadPoolExecutor (watchdog)
+
+    alt happy path
+        Provider->>Provider: ChatAnthropic.invoke (system + human msgs)
+        Provider-->>Service: BaseMessage with content
+        Service->>Service: emit ai_request_success (elapsed, response_chars)
+        Service->>Service: observe outcome=success on histogram
+        Service-->>Flask: NoteGenerationResponse
+        Flask-->>ApiPost: 200 + JSON body
+        ApiPost-->>Hook: GenerateNotesResponse
+        Hook-->>Form: onSuccess(data)
+        Form->>Form: setFormState({...prev, ai_notes: data.ai_notes})
     end
-    Orch->>Orch: observe ai_request_duration_seconds{outcome="success"}
-    Orch->>Orch: structlog.info("ai_request_success", elapsed_seconds, response_chars)
-    Orch-->>View: NoteGenerationResponse(ai_notes, model, generated_at)
-    View-->>Transport: HTTP 200 + response.model_dump(mode="json")
-    Transport-->>Hook: GenerateNotesResponse
-    Hook-->>Form: onSuccess(response)
-    Form->>Form: setFieldValue("ai_notes", response.ai_notes)
-    Form-->>User: Editable textarea populated
+
+    alt watchdog fires
+        Service->>Service: future.result timeout (5.0 + 0.5 s)
+        Service->>Service: future.cancel()
+        Service->>Service: emit ai_request_timeout (elapsed)
+        Service->>Service: observe outcome=timeout on histogram
+        Service-->>Flask: raise AIServiceUnavailableError(ai_timeout, 504)
+        Flask-->>ApiPost: 504 + error envelope
+        ApiPost-->>Hook: ApiError(504, "ai_timeout")
+        Hook-->>Form: onError; isSoftAiFailure==true
+        Form->>Form: render inline soft-failure hint (submit stays enabled)
+    end
+
+    alt provider error
+        Provider->>Service: raises non-timeout exception
+        Service->>Service: emit ai_request_error (elapsed, error_class)
+        Service->>Service: observe outcome=error on histogram
+        Service-->>Flask: raise AIServiceUnavailableError(ai_unavailable, 502)
+        Flask-->>ApiPost: 502 + error envelope
+        ApiPost-->>Hook: ApiError(502, "ai_unavailable")
+        Hook-->>Form: onError; isSoftAiFailure==true
+        Form->>Form: render inline soft-failure hint (submit stays enabled)
+    end
 ```
 
-**Legend (Diagram D2):**
+Diagram D2 — F-002 Request Lifecycle.
 
-- Solid arrow (`->>`) — synchronous request or call
-- Dashed arrow (`-->>`) — synchronous response or awaited resolution
-- Self-call arrow — internal helper invocation within the same participant
-- Participant box — represents a role in the workflow (UI / hook / transport / middleware / view / service / external SDK / external API)
-- `alt` block — alternative execution path; the timeout branch demonstrates the graceful-degradation contract
-- All participant aliases match real symbol names: `AddEditConnectionForm`, `useGenerateNotesMutation`, `apiPost`, `generate`, `generate_outreach_notes`, `_invoke_with_timeout`, `_call_chat_anthropic`
+**Legend:** Mermaid `sequenceDiagram` does not support `subgraph` blocks, so the diagram's legend is provided here as a Markdown list immediately after the closing fence (per the Visual Architecture Documentation rule's requirement that every diagram have a title and a legend):
+
+- *Participants* — `User`, `Form` (AddEditConnectionForm.tsx), `Hook` (useGenerateNotesMutation), `apiPost` (client.ts), `Flask` (middleware + view), `Service` (generate_outreach_notes), `Provider` (ChatAnthropic + Anthropic) — run left to right in the request order.
+- *`alt` blocks* — show alternative execution paths. The first `alt` block is the happy path; the second and third are the two soft-failure fanouts (watchdog timeout, provider error) that map to the inline UI hint.
+- *Exit paths* — the three terminal states are: form populates `ai_notes` (happy path), form renders inline soft-failure hint (timeout or provider error). In all three terminal states the form's submit button remains enabled (the F-002 non-blocking contract).
+- *Out-of-scope paths* — the `ai_not_configured` (HTTP 503) and `validation_failed` (HTTP 422) paths are not depicted here because they exit BEFORE the provider call (see § 7 Diagram D3 in the deep-dive for the full failure-mode map).
 
 ## 5. Public Interfaces
 

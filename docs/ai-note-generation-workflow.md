@@ -4,7 +4,7 @@ This document is the single-source developer narrative for the F-002 AI Note Gen
 
 The narrative is organized into twelve sections. Sections 1–2 frame the feature in business terms and lay out the end-to-end component architecture. Sections 3–6 walk one happy-path request through each of the four layers in turn. Sections 7–9 cover failure modes, observability, and security invariants. Sections 10–12 capture limitations, next-step opportunities, and references for further reading.
 
-## Table of Contents
+### Table of Contents
 
 - [1. Overview & Business Context](#1-overview--business-context)
 - [2. End-to-End Architecture](#2-end-to-end-architecture)
@@ -25,7 +25,7 @@ F-002 is an AI-assisted outreach-note generation feature that transforms a contr
 
 The business framing is intentionally provided outside the technical specification because it shapes every design decision below — the timeout budget, the non-blocking contract, the soft-vs-hard failure classification, the privacy invariant, and the choice to keep AI output editable.
 
-> Sales-Connections is expected to be used during weekly sales pipeline review meetings. Sales leaders will add connection ideas before or during the meeting, and SDRs will use the generated notes as "meeting-ready context" to decide which warm leads to pursue that week.
+> "Sales-Connections is expected to be used during weekly sales pipeline review meetings. Sales leaders will add connection ideas before or during the meeting, and SDRs will use the generated notes as 'meeting-ready context' to decide which warm leads to pursue that week."
 
 The AI-generated note is not a vanity feature. It exists to answer a small set of high-leverage questions in seconds rather than in minutes of manual triage.
 
@@ -36,13 +36,22 @@ The AI-generated note is not a vanity feature. It exists to answer a small set o
 > - Should the submitter make a warm intro, be mentioned softly, or stay uninvolved?
 > - What first outbound angle should an SDR use?
 
-The business value of F-002 is therefore measured in **speed-to-action, reduced ambiguity for SDRs, preservation of relationship trust, and faster conversion of leadership networks into outbound pipeline**. Every architectural choice in this document — from the 5-second timeout budget at `[backend/app/services/ai_orchestration.py:L156]` to the editable textarea contract in the SPA — exists to serve that business outcome.
+The business value of F-002 is therefore measured in:
 
-A load-bearing framing point: AI notes are **assistive draft text, NOT an authoritative sales recommendation**. The contributor and the SDR retain full editorial control over the saved text. See § 10 for the explicit non-goals (no LinkedIn scraping, no CRM sync, no automatic outreach sending, no model-output enforcement).
+- **Speed-to-action**
+- **Reduced ambiguity for SDRs**
+- **Preservation of relationship trust**
+- **Faster conversion of leadership networks into outbound pipeline**
+
+Every architectural choice in this document — from the 5-second timeout budget at `[backend/app/services/ai_orchestration.py:L156]` to the editable textarea contract in the SPA — exists to serve that business outcome.
+
+A load-bearing framing point: **Treat AI notes as assistive draft text, not an authoritative sales recommendation**. The contributor and the SDR retain full editorial control over the saved text. See § 10 for the explicit non-goals (no LinkedIn scraping, no CRM sync, no automatic outreach sending, no model-output enforcement).
 
 ## 2. End-to-End Architecture
 
 The F-002 workflow spans four layers: the React + TanStack Query SPA in the browser, the Flask REST API running in ECS Fargate, the AI Orchestration service that owns the provider-replaceability boundary, and the Anthropic Claude API reached via LangChain's `ChatAnthropic` wrapper. Each layer has a single canonical entry point that the rest of this document references repeatedly.
+
+> **Runtime mode note.** Diagram D1 below depicts the production-mode F-002 contract — the full Hook → `apiPost` → Flask → Anthropic path that the backend already implements end-to-end. In this branch's demo build, the frontend's `useGenerateNotesMutation` hook short-circuits at `[frontend/src/api/notes.ts:L254-L257]` with an unconditional `Promise.reject(new ApiError(502, "ai_unavailable", ...))` so demos never consume Anthropic credits while still exercising the soft-failure UI code path. Production-mode activation (the gated swap to a real `apiPost` call) is described in § 3 and enumerated as a Next Step in § 11. The diagrams in this document depict the production-mode design contract; the file-level demo-mode short-circuit is the only path currently exercised by the SPA at runtime.
 
 ```mermaid
 %% Diagram: F-002 Component View — Form to API to AI Orchestrator to Anthropic
@@ -92,7 +101,7 @@ Diagram D1 — F-002 Component View.
 - Solid arrows represent synchronous HTTPS requests that cross process or trust boundaries.
 - Dashed arrows represent in-process function or method calls.
 
-The canonical entry points in this diagram are: `AddEditConnectionForm` `[frontend/src/features/connections/AddEditConnectionForm.tsx:L324]`, `useGenerateNotesMutation` `[frontend/src/api/notes.ts:L233-L264]`, `apiPost` `[frontend/src/api/client.ts:L572-L578]`, the `generate()` view `[backend/app/api/notes.py:L247]`, `generate_outreach_notes` `[backend/app/services/ai_orchestration.py:L478-L679]`, and `_call_chat_anthropic` `[backend/app/services/ai_orchestration.py:L779-L903]`. Sections 3–6 walk each entry point in turn.
+The canonical entry points in this diagram are: `AddEditConnectionForm` `[frontend/src/features/connections/AddEditConnectionForm.tsx:L328]`, `useGenerateNotesMutation` `[frontend/src/api/notes.ts:L242]`, `apiPost` `[frontend/src/api/client.ts:L572]`, the `generate()` view `[backend/app/api/notes.py:L247]`, `generate_outreach_notes` `[backend/app/services/ai_orchestration.py:L478-L679]`, and `_call_chat_anthropic` `[backend/app/services/ai_orchestration.py:L779-L903]`. Sections 3–6 walk each entry point in turn.
 
 See also [docs/architecture.md § Surface 2 — Backend to Anthropic Claude API](architecture.md) for the system-wide architectural context that places this component view inside the four-surface integration model.
 
@@ -102,7 +111,7 @@ The frontend half of F-002 lives in the Add/Edit Connection form and a single Ta
 
 ### Form integration
 
-The exported `AddEditConnectionForm` component at `[frontend/src/features/connections/AddEditConnectionForm.tsx:L324]` is the route component mounted at `/connections/new` and `/connections/:id/edit`. It owns the entire form-state machine (including the `ai_notes` textarea) and renders a "Generate AI Notes" button next to the `relationship_context` field. The button's click handler is `handleGenerateAi` at `[frontend/src/features/connections/AddEditConnectionForm.tsx:L359-L377]`. The handler reads the current `relationship_context` form value, calls `generateNotes.mutate(...)` with that value, and on success writes the response's `ai_notes` text into the form's `ai_notes` textarea via `setFormState`. The textarea is editable both before and after AI fills it, so the SDR can refine wording before saving the connection.
+The exported `AddEditConnectionForm` component at `[frontend/src/features/connections/AddEditConnectionForm.tsx:L328]` is the route component mounted at `/connections/new` and `/connections/:id/edit`. It owns the entire form-state machine (including the `ai_notes` textarea) and renders a "Generate AI Notes" button next to the `relationship_context` field. The button's click handler is `handleGenerateAi` at `[frontend/src/features/connections/AddEditConnectionForm.tsx:L380-L398]`. The handler reads the current `relationship_context` form value, calls `generateNotes.mutate(...)` with that value, and on success writes the response's `ai_notes` text into the form's `ai_notes` textarea via `setFormState`. The textarea is editable both before and after AI fills it, so the SDR can refine wording before saving the connection.
 
 The editable-after-AI behavior is deliberate. F-002 is positioned as assistive draft text per AAP § 0.2.1; if the textarea were read-only, an SDR could not correct a misattributed warm intro or rephrase a talking point that does not match their voice. Keeping the textarea editable also makes the non-blocking contract complete: when AI fails, the user types into the same textarea the AI would have populated.
 
@@ -116,14 +125,14 @@ The `useGenerateNotesMutation` hook at `[frontend/src/api/notes.ts:L242-L273]` i
 
 ### Soft vs hard failure dichotomy
 
-The classifier `isSoftAiFailure` at `[frontend/src/api/notes.ts:L181-L186]` returns `true` for `ai_timeout` (HTTP 504) OR `ai_unavailable` (HTTP 502). Soft failures surface as an inline hint next to the button; the form's `aiSoftFailure` useMemo at `[frontend/src/features/connections/AddEditConnectionForm.tsx:L385-L388]` derives this flag from the mutation state. Hard failures (`ai_not_configured` HTTP 503, `validation_failed` HTTP 422) surface as a toast notification. In all four cases, the form's submit button remains enabled — this is the F-002 non-blocking contract enforced at the UI layer.
+The classifier `isSoftAiFailure` at `[frontend/src/api/notes.ts:L190]` returns `true` for `ai_timeout` (HTTP 504) OR `ai_unavailable` (HTTP 502). Soft failures surface as an inline hint next to the button; the form's `aiSoftFailure` useMemo at `[frontend/src/features/connections/AddEditConnectionForm.tsx:L406-L409]` derives this flag from the mutation state. Hard failures (`ai_not_configured` HTTP 503, `validation_failed` HTTP 422) surface as a toast notification. In all four cases, the form's submit button remains enabled — this is the F-002 non-blocking contract enforced at the UI layer. **AI failure does NOT block manual form submission.**
 
 ### Illustrative call pattern
 
-The code below is abridged from `[frontend/src/features/connections/AddEditConnectionForm.tsx:L357-L388]` and shows the canonical wiring between the hook, the soft-failure derivation, and the click handler. It is illustrative; consult the source for the complete and current shape.
+The code below is abridged from `[frontend/src/features/connections/AddEditConnectionForm.tsx:L362-L409]` and shows the canonical wiring between the hook, the soft-failure derivation, and the click handler. It is illustrative; consult the source for the complete and current shape.
 
 ```typescript
-// Abridged from AddEditConnectionForm.tsx (L357-L388)
+// Abridged from AddEditConnectionForm.tsx (L362-L409)
 const generateNotes = useGenerateNotesMutation();
 
 const aiSoftFailure = useMemo(
@@ -147,11 +156,11 @@ function handleGenerateAi(): void {
 }
 ```
 
-See `frontend/src/components/README.md` for the design-system primitives composing the form, and `frontend/src/lib/README.md` for the correlation-ID utility. The rationale for placing those READMEs at their prompt-specified paths despite the AI surfaces living in `features/connections/` and `frontend/src/api/` is recorded as DL-0060 and DL-0061 in `docs/decision-log.md`.
+See `frontend/src/components/README.md` for the design-system primitives composing the form, and `frontend/src/lib/README.md` for the correlation-ID utility. The rationale for placing those READMEs at their prompt-specified paths despite the AI surfaces living in `features/connections/` and `frontend/src/api/` is recorded as DL-0066 and DL-0067 in `docs/decision-log.md`.
 
 ## 4. API Contract
 
-The F-002 endpoint is `POST /api/notes/generate`. It is mounted by `notes_bp = Blueprint("notes", __name__)` at `[backend/app/api/notes.py:L208]` and decorated as a single POST route at `[backend/app/api/notes.py:L245]`. The view function is named `generate()` at `[backend/app/api/notes.py:L247]` (not `generate_notes`); the blueprint and the view together are exported via `__all__ = ["notes_bp"]` at `[backend/app/api/notes.py:L227]`.
+The F-002 endpoint is `POST /api/notes/generate`. It is mounted by `notes_bp = Blueprint("notes", __name__)` at `[backend/app/api/notes.py:L208]` and decorated as a single POST route at `[backend/app/api/notes.py:L245]`. The view function is named `generate()` at `[backend/app/api/notes.py:L247]`; the blueprint and the view together are exported via `__all__ = ["notes_bp"]` at `[backend/app/api/notes.py:L227]`.
 
 ### Role-based access control
 
@@ -425,7 +434,7 @@ The F-002 non-blocking contract is the load-bearing UX invariant of this feature
 
 ### Soft-vs-hard classification
 
-The classifier `isSoftAiFailure` at `[frontend/src/api/notes.ts:L181-L186]` returns `true` ONLY for `ai_timeout` and `ai_unavailable`. All other failures (`ai_not_configured`, `validation_failed`, and any forward-compatible code surfaced through the `AiNoteErrorCode` union at `[frontend/src/api/notes.ts:L140]`) bubble up as hard failures and surface via the global toast handler. The mapping reflects user intent: temporary issues (timeout, transient upstream error) are recoverable by clicking the button again; configuration or validation issues require corrective action elsewhere (operator updates the secret; user fixes the input).
+The classifier `isSoftAiFailure` at `[frontend/src/api/notes.ts:L190]` returns `true` ONLY for `ai_timeout` and `ai_unavailable`. All other failures (`ai_not_configured`, `validation_failed`, and any forward-compatible code surfaced through the `AiNoteErrorCode` union at `[frontend/src/api/notes.ts:L148]`) bubble up as hard failures and surface via the global toast handler. The mapping reflects user intent: temporary issues (timeout, transient upstream error) are recoverable by clicking the button again; configuration or validation issues require corrective action elsewhere (operator updates the secret; user fixes the input).
 
 ### Why the non-blocking contract exists
 
@@ -493,30 +502,31 @@ F-002 reuses ALL pre-existing observability infrastructure. This documentation d
 
 ### Reused vs Added surfaces
 
-| Surface | Mechanism | Citation | Status |
-|---|---|---|---|
-| Structured logging | `structlog 24.4.0` | `[backend/requirements.txt:L112]` | Reused |
-| API request event | `ai_note_generation_requested` (user_id, org_id, context_chars) | `[backend/app/api/notes.py:L447-L454]` | Reused |
-| Service start event | `ai_request_start` | `[backend/app/services/ai_orchestration.py:L607]` | Reused |
-| Service timeout event | `ai_request_timeout` | `[backend/app/services/ai_orchestration.py:L621]` | Reused |
-| Service error event | `ai_request_error` | `[backend/app/services/ai_orchestration.py:L645-L649]` | Reused |
-| Service success event | `ai_request_success` | `[backend/app/services/ai_orchestration.py:L662-L666]` | Reused |
-| Correlation ID (frontend mint) | `getCorrelationId` (prefix `sc-fe-`) | `[frontend/src/lib/correlationId.ts:L101]` | Reused |
-| Correlation ID (header) | `X-Correlation-Id` injected by `apiPost` | `[frontend/src/api/client.ts:L572-L578]` | Reused |
-| Metrics | `ai_request_duration_seconds{outcome}` Histogram | `[backend/app/observability/metrics.py:L263-L272]` | Reused |
-| Outcome labels | `success`, `timeout`, `error`, `validation` | `[backend/app/services/ai_orchestration.py:L232-L235]` | Reused |
-| Distributed tracing | OpenTelemetry 1.29.0 + `opentelemetry-instrumentation-httpx 0.50b0` | `[backend/requirements.txt:L123]` | Reused |
-| Liveness | `/healthz` | `[docs/operations.md § 5]` | Reused |
-| Readiness | `/readyz` | `[docs/operations.md § 5]` | Reused |
-| Alarm | `ai_latency_p95` (3 of 5 datapoints, period 300 s, threshold 5000 ms p95) | `[infra/terraform/modules/observability/main.tf:L446-L468]` | Reused |
-| **Added by this deliverable** | (none) | — | — |
+The table below has two explicit columns — `Reused (Pre-existing)` and `Added by This Deliverable` — per the Observability rule's requirement to make the reuse-vs-add split unambiguous. Every entry under `Reused (Pre-existing)` is marked `✓`; every entry under `Added by This Deliverable` is marked `—` because this is a documentation-only deliverable and adds zero new observability surfaces.
+
+| Surface | Mechanism | Citation | Reused (Pre-existing) | Added by This Deliverable |
+|---|---|---|---|---|
+| Structured logging | `structlog 24.4.0` | `[backend/requirements.txt:L112]` | ✓ | — |
+| API request event | `ai_note_generation_requested` (user_id, org_id, context_chars) | `[backend/app/api/notes.py:L447-L454]` | ✓ | — |
+| Service start event | `ai_request_start` | `[backend/app/services/ai_orchestration.py:L607]` | ✓ | — |
+| Service timeout event | `ai_request_timeout` | `[backend/app/services/ai_orchestration.py:L621]` | ✓ | — |
+| Service error event | `ai_request_error` | `[backend/app/services/ai_orchestration.py:L645-L649]` | ✓ | — |
+| Service success event | `ai_request_success` | `[backend/app/services/ai_orchestration.py:L662-L666]` | ✓ | — |
+| Correlation ID (frontend mint) | `getCorrelationId` (prefix `sc-fe-`) | `[frontend/src/lib/correlationId.ts:L101]` | ✓ | — |
+| Correlation ID (header) | `X-Correlation-Id` injected by `apiPost` | `[frontend/src/api/client.ts:L455]` | ✓ | — |
+| Metrics | `ai_request_duration_seconds{outcome}` Histogram | `[backend/app/observability/metrics.py:L263-L272]` | ✓ | — |
+| Outcome labels | `success`, `timeout`, `error`, `validation` | `[backend/app/services/ai_orchestration.py:L232-L235]` | ✓ | — |
+| Distributed tracing | OpenTelemetry 1.29.0 + `opentelemetry-instrumentation-httpx 0.50b0` | `[backend/requirements.txt:L123]` | ✓ | — |
+| Liveness | `/healthz` | `[docs/operations.md § 5]` | ✓ | — |
+| Readiness | `/readyz` | `[docs/operations.md § 5]` | ✓ | — |
+| Alarm | `ai_latency_p95` (3 of 5 datapoints, period 300 s, threshold 5000 ms p95) | `[infra/terraform/modules/observability/main.tf:L446-L468]` | ✓ | — |
 
 ### Correlation ID flow
 
 A correlation ID is the operational glue that ties a single user click to its log entries across all layers. The flow is:
 
 - The browser mints `sc-fe-<uuid>` lazily on first call via `getCorrelationId()` at `[frontend/src/lib/correlationId.ts:L101]`. The prefix is read from `VITE_CORRELATION_ID_PREFIX` (default `sc-fe-`) at `[frontend/src/lib/correlationId.ts:L56]`. The value is cached for the lifetime of the page load.
-- `apiPost` at `[frontend/src/api/client.ts:L572-L578]` injects the value as the `X-Correlation-Id` request header on every backend call.
+- `apiPost` at `[frontend/src/api/client.ts:L572]` delegates to the shared `request` helper, which injects the value as the `X-Correlation-Id` request header at `[frontend/src/api/client.ts:L455]` on every backend call.
 - The Flask correlation middleware reads the header, binds it to the `structlog` context, and propagates it via OpenTelemetry baggage so the same ID appears on every downstream log line and span.
 - All five F-002 structured-log events (the API-layer `ai_note_generation_requested` plus the four service-layer events) carry the correlation ID, enabling end-to-end traces in CloudWatch Logs Insights and Jaeger.
 
@@ -537,6 +547,8 @@ The single F-002 alarm is `ai_latency_p95` defined as a Terraform resource at `[
 - `treat_missing_data = "notBreaching"` `[infra/terraform/modules/observability/main.tf:L459]` — when no AI traffic flows (for example, during demos or low-utilization periods), the alarm treats the missing data as a healthy state. This parameter implements F-002's "AI failure does NOT block submission" invariant at the alarm layer: zero AI traffic equals zero alarms, so an outage of the AI integration cannot manifest as a paging incident when no one is exercising the feature.
 
 The alarm fires when 3 of the last 5 five-minute datapoints exceed 5000 ms p95. The 3-of-5 evaluation pattern smooths over single-period spikes; a real upstream degradation will sustain elevated p95 across multiple periods. The runbook lives in [docs/operations.md § 5 Observability](operations.md).
+
+**Known mapping gap — alarm metric and emitted log events.** The CloudWatch alarm filters on the `AICallDurationMs` metric derived (per the metric filter referenced from `[infra/terraform/modules/observability/main.tf]`) from a log event named `ai_call_completed` carrying a `ai_call_duration_ms` field. The current AI orchestrator at `[backend/app/services/ai_orchestration.py]` emits a richer four-event taxonomy (`ai_request_start`, `ai_request_success`, `ai_request_timeout`, `ai_request_error`) carrying `elapsed_seconds` (seconds, not milliseconds) rather than a single `ai_call_completed` with `ai_call_duration_ms`. Under the current event taxonomy, the metric filter that backs `ai_latency_p95` will not populate the metric, so the alarm cannot fire today against live AI traffic. This is a documented mapping gap, not a deliverable defect — the alarm resource and its runbook are still the canonical operational shape for F-002, and reconciliation belongs to a separately scoped infra-or-service change (either rename the alarm's metric filter to read `elapsed_seconds` and the four-event taxonomy, or add an `ai_call_completed` rollup event to the orchestrator). Recording the gap here per the Explainability rule preserves auditability while staying inside this documentation-only deliverable's minimal-change boundary (decision-log entry DL-0071).
 
 ### Observability surface diagram
 
@@ -632,7 +644,7 @@ User-supplied text is sanitized BEFORE prompt construction via `sanitize_for_ai_
 
 Sanitization runs at the orchestrator boundary, not at the HTTP view boundary. This is deliberate: a future internal caller (a batch job, a back-office admin tool) could invoke `generate_outreach_notes` directly without re-running view-layer validation, and the orchestrator must remain self-defending. The Pydantic schema's `max_length=4000` constraint at `[backend/app/schemas/note_generation.py:L147-L159]` is the first defense; the orchestrator's sanitizer is the second; the SDK's `max_tokens=512` budget is the third.
 
-Note that older documentation in `docs/security.md` may reference this function as `sanitize_for_prompt`; the current authoritative name is `sanitize_for_ai_prompt` as used here and in the actual `__all__` list at `[backend/app/utils/sanitization.py:L111-L114]`. Future reconciliation of the legacy name is tracked in `docs/decision-log.md`.
+The current authoritative name is `sanitize_for_ai_prompt` as used here and in the actual `__all__` list at `[backend/app/utils/sanitization.py:L111-L114]`. Any divergence found in older companion docs is tracked for reconciliation in `docs/decision-log.md`.
 
 ### Privacy-preserving logging
 
@@ -645,7 +657,7 @@ Why: relationship context may contain personally identifiable details about pros
 
 ### HttpOnly session authentication
 
-The AI endpoint uses the same HttpOnly cookie-based session as every other authenticated API call. The frontend's `apiPost` at `[frontend/src/api/client.ts:L572-L578]` uses `credentials: "include"` so the browser sends the HttpOnly session cookie automatically. No bearer tokens, no localStorage, no sessionStorage for auth state — this eliminates the XSS-exfiltration class of attacks against the session credential.
+The AI endpoint uses the same HttpOnly cookie-based session as every other authenticated API call. The frontend's `apiPost` at `[frontend/src/api/client.ts:L572]` delegates to the shared `request` helper, which applies `credentials: "include"` at `[frontend/src/api/client.ts:L464]` so the browser sends the HttpOnly session cookie automatically. No bearer tokens, no localStorage, no sessionStorage for auth state — this eliminates the XSS-exfiltration class of attacks against the session credential.
 
 The `X-Correlation-Id` header is non-secret and safe to log. It is a pseudo-random UUID minted by the browser per `[frontend/src/lib/correlationId.ts:L78-L82]` and serves observability purposes only. It MUST NOT be reused as a session token, anti-CSRF token, or any other security-bearing identifier.
 
@@ -661,7 +673,7 @@ F-002 is deliberately scoped narrowly. The following items are explicitly OUT OF
 - **No CRM sync.** The system does not push or pull data from Salesforce, HubSpot, or any external CRM. Connections live in the Sales-Connections database and nowhere else.
 - **No automatic outreach sending.** The system does not send emails, LinkedIn messages, calendar invitations, or any outbound communication. The `ai_notes` text is draft material for a human SDR to copy, paste, edit, and act on.
 - **No analytics or attribution tracking.** The system does not measure conversion of AI-suggested notes into actual outreach activity. There is no "did the SDR follow up" event, no "did this lead close" tracking.
-- **No model-output enforcement.** Sales recommendations are **assistive draft text, NOT an authoritative recommendation** (per AAP § 0.2.1). The SDR retains full editorial control via the editable `ai_notes` textarea. The model has no authority over the connection record's final saved text.
+- **No model-output enforcement.** **Treat AI notes as assistive draft text, not an authoritative sales recommendation** (per AAP § 0.2.1). The SDR retains full editorial control via the editable `ai_notes` textarea. The model has no authority over the connection record's final saved text.
 - **No multi-model A/B testing.** The system pins to a single Anthropic model identifier (`claude-sonnet-4-5`) resolved from `ANTHROPIC_MODEL`. A model swap is a configuration change governed by `docs/decision-log.md` per AAP § 0.7.5 (Explainability rule).
 - **No automatic retry on AI failure.** The TanStack Query hook is configured with `retry: 0` at `[frontend/src/api/notes.ts:L249]`. Failures surface to the user immediately so the user can decide whether to retry (click the button again) or proceed with manually typed notes.
 - **No per-user or per-org quota tracking.** The orchestrator does not currently track Anthropic spend per organization. Cost-control behavior beyond the per-request `max_tokens` budget is out of scope; § 11 lists it as a future improvement.
@@ -670,7 +682,7 @@ The non-blocking contract documented in § 7 is what makes F-002 safe to ship un
 
 ## 11. Next Steps
 
-During the documentation pass that produced this deep-dive, the following non-trivial improvement opportunities were identified. They are out of scope for the current documentation deliverable (per the minimal-change clause captured in `docs/decision-log.md` DL-0065) but are recommended for future contributors. Each item names the file or symbol it would touch so the work can be scoped quickly.
+During the documentation pass that produced this deep-dive, the following non-trivial improvement opportunities were identified. They are out of scope for the current documentation deliverable (per the minimal-change clause captured in `docs/decision-log.md` DL-0071) but are recommended for future contributors. Each item names the file or symbol it would touch so the work can be scoped quickly.
 
 - **Production-mode hook activation gated on a `VITE_AI_DEMO_MODE` environment variable** — the `useGenerateNotesMutation` hook at `[frontend/src/api/notes.ts:L242-L273]` currently rejects unconditionally with the demo-build synthetic `ApiError(502, "ai_unavailable", "AI generation is not available in demo mode")` short-circuit at `[frontend/src/api/notes.ts:L254-L257]`. To enable production-mode AI generation, introduce a new `VITE_AI_DEMO_MODE` build flag: declare it as `readonly VITE_AI_DEMO_MODE: "true" | "false"` in `[frontend/src/vite-env.d.ts]`, document its default (`"true"` for safety) in `[frontend/.env.example]`, and replace the unconditional `Promise.reject` with a conditional that swaps to `apiPost<GenerateNotesResponse, GenerateNotesRequest>('/api/notes/generate', payload)` when the flag is falsy. The Flask backend already implements the full F-002 flow described in §§ 4–6 of this document and requires no companion change.
 - **Grafana dashboard for `ai_request_duration_seconds`** — overlay p50/p95/p99 lines alongside the `outcome` label split so operators can see the latency distribution per failure mode at a glance. The histogram is already registered at `[backend/app/observability/metrics.py:L263-L272]`; only the dashboard configuration is missing.
@@ -706,15 +718,15 @@ These items are also captured in `docs/onboarding.md` (Suggested Next Tasks subs
 - [docs/architecture.md](architecture.md) — system-wide architecture (see § Surface 2 — Backend to Anthropic Claude API)
 - [docs/security.md](security.md) — threat model, sanitization invariant, credential handling, session posture
 - [docs/operations.md](operations.md) — runbook for the `ai_latency_p95` alarm and other observability surfaces
-- [docs/decision-log.md](decision-log.md) — Explainability log; entries DL-0060 through DL-0065 capture the documentation decisions for F-002 (file-path deviations, plain-Markdown choice, README placement, deep-dive placement, minimal-change clause, docs/api.md reconciliation deferral)
+- [docs/decision-log.md](decision-log.md) — Explainability log; entries DL-0060 through DL-0071 capture the F-002 related decisions. Restored entries DL-0060 (CSRF protection deferral), DL-0061 (LangChain dependency advisory deferral), DL-0062 (`context_chars` log-field retention), DL-0063 (out-of-scope screenshot removal), DL-0064 (single API-layer structured-log event retention), and DL-0065 (docs/api.md reconciliation deferral) capture earlier deferral rationale. Appended entries DL-0066 (components README placement), DL-0067 (lib README placement), DL-0068 (inline docs target actual filenames), DL-0069 (plain Markdown over a documentation generator), DL-0070 (deep-dive placement under `docs/`), and DL-0071 (no production code changes for this deliverable) capture the documentation-deliverable decisions
 - [docs/onboarding.md](onboarding.md) — onboarding handbook (consult the AI Workflow Documentation Map subsection for the index of F-002 documentation artifacts)
 
 ### Sibling module READMEs
 
 - [backend/app/services/README.md](../backend/app/services/README.md) — Service-layer README; contains a Mermaid sequence diagram analogous to Diagram D2 above
 - [backend/app/api/README.md](../backend/app/api/README.md) — API blueprint README; documents `POST /api/notes/generate` and the blueprint composition surface
-- [frontend/src/components/README.md](../frontend/src/components/README.md) — Design-system primitives README; cross-references `AddEditConnectionForm` as the AI-notes consumer (path rationale: DL-0060)
-- [frontend/src/lib/README.md](../frontend/src/lib/README.md) — Cross-cutting browser utilities README; documents the correlation-ID lifecycle and cross-references the actual mutation hook in `frontend/src/api/` (path rationale: DL-0061)
+- [frontend/src/components/README.md](../frontend/src/components/README.md) — Design-system primitives README; cross-references `AddEditConnectionForm` as the AI-notes consumer (path rationale: DL-0066)
+- [frontend/src/lib/README.md](../frontend/src/lib/README.md) — Cross-cutting browser utilities README; documents the correlation-ID lifecycle and cross-references the actual mutation hook in `frontend/src/api/` (path rationale: DL-0067)
 
 ### External references
 

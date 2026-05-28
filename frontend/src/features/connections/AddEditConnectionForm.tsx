@@ -18,6 +18,10 @@
  *   2. User reviews/edits the ai_notes textarea.
  *   3. Submit creates/updates the record. AI failure NEVER blocks step 3.
  *
+ * Non-blocking contract (F-002 invariant per AAP Sec 0.2.3):
+ *   AI failure does NOT block manual form submission.
+ *   Treat AI notes as assistive draft text, not an authoritative sales recommendation.
+ *
  * Duplicate detection (F-010): a debounced query on the linkedin_url
  * input; matches surface a non-blocking <DuplicateWarning> banner. Per
  * AAP Sec 0.7.6, "Duplicate detection is a warning, not a block."
@@ -360,6 +364,7 @@ export function AddEditConnectionForm({ mode }: AddEditConnectionFormProps): JSX
    * Handle the "Generate AI Notes" button click.
    *
    * Non-blocking contract (F-002 invariant per AAP Sec 0.4.4):
+   *   AI failure does NOT block manual form submission.
    *   Soft AI failures (504 `ai_timeout` / 502 `ai_unavailable`)
    *   MUST NOT block manual form submission. Hard failures
    *   (validation, RBAC, server) surface a toast via the hook's
@@ -367,7 +372,7 @@ export function AddEditConnectionForm({ mode }: AddEditConnectionFormProps): JSX
    *   own notes and submit.
    *
    * Soft-vs-hard classification is performed by
-   * `isSoftAiFailure(error)` from [frontend/src/api/notes.ts:L181].
+   * `isSoftAiFailure(error)` from [frontend/src/api/notes.ts:L190].
    * The form additionally renders an inline retry banner on soft
    * failures via the `aiSoftFailure` derived flag below.
    * On success the response populates `formState.ai_notes`.

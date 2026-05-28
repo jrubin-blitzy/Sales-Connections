@@ -482,14 +482,15 @@ Feature F-002 (AI Note Generation Workflow) spans four code locations across two
 - [`frontend/src/components/README.md`](../frontend/src/components/README.md) — Design-system primitives surface; cross-references the actual AI form host at `frontend/src/features/connections/AddEditConnectionForm.tsx` and describes the "Generate AI Notes" button composition.
 - [`frontend/src/lib/README.md`](../frontend/src/lib/README.md) — Cross-cutting browser utilities; documents the `X-Correlation-Id` lifecycle and cross-references the actual AI-notes mutation hook at `frontend/src/api/notes.ts` plus the shared transport at `frontend/src/api/client.ts`.
 
-The four source files that received targeted inline-documentation updates for this work are:
+The five source files that received targeted inline-documentation updates for this work are:
 
 - `backend/app/services/ai_orchestration.py` — module + per-symbol PEP 257 docstrings (AI orchestrator).
 - `backend/app/api/notes.py` — module + view-function PEP 257 docstrings (notes blueprint).
 - `frontend/src/features/connections/AddEditConnectionForm.tsx` — TSDoc on the exported component plus inline "why" comments on the non-blocking AI-failure contract.
 - `frontend/src/api/notes.ts` — TSDoc on `useGenerateNotesMutation`, `isSoftAiFailure`, and the request/response/error-code type aliases.
+- `frontend/src/api/client.ts` — targeted TSDoc on the AI-relevant helpers (`apiPost`, `ApiError`, `ApiRequestOptions`) that back `useGenerateNotesMutation`.
 
-Note on file paths: the prompt-quoted README placement (`frontend/src/components/README.md`, `frontend/src/lib/README.md`) differs from the actual location of the AI-relevant TypeScript modules (which live under `frontend/src/features/connections/` and `frontend/src/api/` respectively). The READMEs include explicit cross-references to the actual file paths; see `docs/decision-log.md` entries DL-0060 and DL-0061 for the rationale.
+Note on file paths: the prompt-quoted README placement (`frontend/src/components/README.md`, `frontend/src/lib/README.md`) differs from the actual location of the AI-relevant TypeScript modules (which live under `frontend/src/features/connections/` and `frontend/src/api/` respectively). The READMEs include explicit cross-references to the actual file paths; see `docs/decision-log.md` entries DL-0066 and DL-0067 for the rationale.
 
 ## 5. Common Development Tasks
 
@@ -859,11 +860,11 @@ The Prometheus histogram `ai_request_duration_seconds{outcome}` exposes per-outc
 
 ### Extract `AddEditConnectionForm.tsx` field-group sub-components
 
-The single-file `frontend/src/features/connections/AddEditConnectionForm.tsx` is 841 lines and combines field state, validation, debounced duplicate-check polling, AI-generation handling, and JSX for both create and edit modes. The file is functionally complete and well-tested, but the size makes review of any single-purpose change harder than necessary. Refactor: extract three field-group sub-components (identity/contact, relationship-context + AI button, status + tags) under `frontend/src/features/connections/form/` while preserving the existing public component signature (`<AddEditConnectionForm mode="create" | "edit" />`) and the existing test coverage. Out of scope for the F-002 documentation deliverable per the minimal-change clause (AAP § 0.9.3 and decision-log entry DL-0065).
+The single-file `frontend/src/features/connections/AddEditConnectionForm.tsx` is approximately 870 lines and combines field state, validation, debounced duplicate-check polling, AI-generation handling, and JSX for both create and edit modes. The file is functionally complete and well-tested, but the size makes review of any single-purpose change harder than necessary. Refactor: extract three field-group sub-components (identity/contact, relationship-context + AI button, status + tags) under `frontend/src/features/connections/form/` while preserving the existing public component signature (`<AddEditConnectionForm mode="create" | "edit" />`) and the existing test coverage. Out of scope for the F-002 documentation deliverable per the minimal-change clause (AAP § 0.9.3 and decision-log entry DL-0071).
 
 ### Split `frontend/src/api/client.ts` into transport, error-mapping, and auth-redirect modules
 
-The shared fetch wrapper at `frontend/src/api/client.ts` is 637 lines and currently combines the transport (`request`/`apiPost`/`apiGet`/etc.), the typed error class and envelope normalization (`ApiError`, `ApiErrorField`, `mapStatusToCode`), and the 401-handling redirect plumbing. Splitting into three smaller modules under `frontend/src/api/client/` would make each surface easier to review and unit-test in isolation. Constraint: the split must preserve the existing import paths (`@/api/client`) via barrel re-exports so the AI-notes mutation hook and every other consumer keeps working unchanged. Out of scope for F-002 documentation per the minimal-change clause (DL-0065).
+The shared fetch wrapper at `frontend/src/api/client.ts` is 637 lines and currently combines the transport (`request`/`apiPost`/`apiGet`/etc.), the typed error class and envelope normalization (`ApiError`, `ApiErrorField`, `mapStatusToCode`), and the 401-handling redirect plumbing. Splitting into three smaller modules under `frontend/src/api/client/` would make each surface easier to review and unit-test in isolation. Constraint: the split must preserve the existing import paths (`@/api/client`) via barrel re-exports so the AI-notes mutation hook and every other consumer keeps working unchanged. Out of scope for F-002 documentation per the minimal-change clause (DL-0071).
 
 ### Evaluate a dedicated `AIPromptTooLargeError` exception
 

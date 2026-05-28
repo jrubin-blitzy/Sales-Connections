@@ -1553,29 +1553,41 @@ sequenceDiagram
         <pre class="mermaid">
 %% Diagram: F-002 Component View — Form to API to AI Orchestrator to Anthropic
 flowchart LR
-    subgraph SPA["React SPA"]
-        FORM["AddEditConnectionForm"]
-        HOOK["useGenerateNotesMutation"]
+    User((User))
+
+    subgraph SPA["Browser SPA"]
+        Form["AddEditConnectionForm.tsx<br/>(React component)"]
+        Hook["useGenerateNotesMutation<br/>(TanStack Query hook)"]
+        Client["apiPost<br/>(client.ts transport)"]
+        Corr["getCorrelationId<br/>(correlationId.ts)"]
     end
-    subgraph API["Flask API"]
-        EP["POST /api/notes/generate"]
+
+    subgraph Flask["Flask Application"]
+        MW["Correlation + Auth + RBAC<br/>middleware chain"]
+        View["POST /api/notes/generate<br/>view (notes.py)"]
+        Service["generate_outreach_notes<br/>(ai_orchestration.py)"]
+        San["sanitize_for_ai_prompt<br/>(sanitization.py)"]
+        LC["ChatAnthropic<br/>(LangChain wrapper)"]
     end
-    subgraph SVC["Service Layer"]
-        ORCH["generate_outreach_notes"]
-    end
-    subgraph EXT["External"]
-        AC["Anthropic Claude<br/>via LangChain"]
-    end
-    FORM --> HOOK
-    HOOK -->|"POST + X-Correlation-Id"| EP
-    EP -->|"RBAC + Pydantic"| ORCH
-    ORCH -->|"sanitize + watchdog"| AC
-    AC -->|"completion"| ORCH
-    ORCH -->|"NoteGenerationResponse"| EP
-    EP -->|"JSON + correlation_id"| HOOK
+
+    Anthropic[("Anthropic Claude API<br/>External service")]
+
+    User -->|"click Generate AI Notes"| Form
+    Form -.->|"mutate({relationship_context})"| Hook
+    Hook -.-> Client
+    Corr -.->|"X-Correlation-Id header"| Client
+    Client -->|"HTTPS POST + cookie"| MW
+    MW -.-> View
+    View -.->|"NoteGenerationRequest"| Service
+    Service -.-> San
+    Service -.-> LC
+    LC -->|"HTTPS via langchain-anthropic"| Anthropic
+
     subgraph Legend["Legend"]
-        L1["Solid arrow: synchronous call"]
-        L2["Pipe label: header or contract"]
+        L1["Code module"]
+        L2[("External service")]
+        L3["Solid arrow: HTTPS request"]
+        L4["Dashed arrow: internal call"]
     end
         </pre>
         <div class="arch-callouts">

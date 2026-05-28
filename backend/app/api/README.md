@@ -12,14 +12,21 @@ The F-002 endpoint exists because of the following business reality, captured ve
 
 > "Sales-Connections is expected to be used during weekly sales pipeline review meetings. Sales leaders will add connection ideas before or during the meeting, and SDRs will use the generated notes as 'meeting-ready context' to decide which warm leads to pursue that week."
 
-The AI-generated note is not just convenience text; it is a prioritization aid that helps the SDR team quickly answer four questions:
+The AI-generated note is not just convenience text; it is a prioritization aid that helps the team quickly answer:
 
-1. Why is this person worth contacting now?
-2. How should the submitter be referenced?
-3. Should the submitter make a warm intro, be mentioned softly, or stay uninvolved?
-4. What first outbound angle should an SDR use?
+- Why is this person worth contacting now?
+- How should the submitter be referenced?
+- Should the submitter make a warm intro, be mentioned softly, or stay uninvolved?
+- What first outbound angle should an SDR use?
 
-The documentation deliberately frames this endpoint in business-value terms: **speed-to-action**, **reduced ambiguity for SDRs**, **preservation of relationship trust**, and **faster conversion of leadership networks into outbound pipeline**. This framing must remain consistent across the services README, this API README, and the deep-dive at `[docs/ai-note-generation-workflow.md]`.
+The documentation deliberately frames this endpoint in business-value terms:
+
+- **Speed-to-action**
+- **Reduced ambiguity for SDRs**
+- **Preservation of relationship trust**
+- **Faster conversion of leadership networks into outbound pipeline**
+
+This framing must remain consistent across the services README, this API README, and the deep-dive at `[docs/ai-note-generation-workflow.md]`.
 
 ## 3. Key Files
 

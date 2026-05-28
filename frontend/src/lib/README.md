@@ -4,11 +4,11 @@
 
 `frontend/src/lib` hosts the cross-cutting browser utilities shared across the Sales-Connections SPA: a per-page-load correlation ID generator (`correlationId.ts`), the singleton TanStack Query 5.62.16 client (`queryClient.ts`), and a legacy `localStorage`-backed connection/tag store (`localStore.ts`). The correlation ID utility is the F-002-relevant primitive because it enables `X-Correlation-Id` end-to-end propagation from browser → Flask middleware → structlog → CloudWatch Logs. The TanStack Query singleton hosts the cache used by every TanStack Query hook in the SPA, including `useGenerateNotesMutation`. The legacy `localStore.ts` is preserved for backward compatibility and is not part of the AI-notes flow. TypeScript 5.7.2 strict-mode types are enforced across all utilities in this folder (see [`frontend/package.json`](../../package.json)).
 
-**Path note**: The AI-notes mutation hook and HTTP client wrapper are implemented at [`frontend/src/api/notes.ts`](../api/notes.ts) and [`frontend/src/api/client.ts`](../api/client.ts) — not in this folder. This README documents the cross-cutting browser utilities this folder hosts AND cross-references the API client as the AI-notes integration surface per DL-0061 in [`docs/decision-log.md`](../../../docs/decision-log.md).
+**Path note**: The AI-notes mutation hook and HTTP client wrapper are implemented at [`frontend/src/api/notes.ts`](../api/notes.ts) and [`frontend/src/api/client.ts`](../api/client.ts) — not in this folder. This README documents the cross-cutting browser utilities this folder hosts AND cross-references the API client as the AI-notes integration surface per DL-0067 in [`docs/decision-log.md`](../../../docs/decision-log.md).
 
 ## 2. Business Context
 
-> "Sales-Connections is expected to be used during weekly sales pipeline review meetings. Sales leaders will add connection ideas before or during the meeting, and SDRs will use the generated notes as "meeting-ready context" to decide which warm leads to pursue that week."
+> "Sales-Connections is expected to be used during weekly sales pipeline review meetings. Sales leaders will add connection ideas before or during the meeting, and SDRs will use the generated notes as 'meeting-ready context' to decide which warm leads to pursue that week."
 
 > The AI-generated note is not just convenience text; it is a prioritization aid that helps the team quickly answer:
 >
@@ -34,9 +34,9 @@ In business-value terms, the correlation ID utility documented here links each c
 
 ### Cross-reference — AI-notes API surface (NOT in this folder)
 
-The mutation hook and the HTTP transport that backs it live in `frontend/src/api/`, not in this folder. See DL-0061 in [`docs/decision-log.md`](../../../docs/decision-log.md) for the rationale.
+The mutation hook and the HTTP transport that backs it live in `frontend/src/api/`, not in this folder. See DL-0067 in [`docs/decision-log.md`](../../../docs/decision-log.md) for the rationale.
 
-- [`frontend/src/api/notes.ts:L233`](../api/notes.ts) — `useGenerateNotesMutation` (TanStack Query mutation)
+- [`frontend/src/api/notes.ts:L242`](../api/notes.ts) — `useGenerateNotesMutation` (TanStack Query mutation)
 - [`frontend/src/api/client.ts:L572`](../api/client.ts) — `apiPost` (the HTTP wrapper)
 
 The correlation ID minted by `getCorrelationId()` is attached to every AI-notes call by `apiPost` via the `X-Correlation-Id` header (see [`frontend/src/api/client.ts:L1-L54`](../api/client.ts) header docstring).
@@ -120,9 +120,9 @@ queryClient.invalidateQueries({ queryKey: ["connections"] });
 
 ## 10. Related Modules
 
-- [`frontend/src/api/notes.ts`](../api/notes.ts) — `useGenerateNotesMutation` (per DL-0061, the actual AI-notes API surface).
-- [`frontend/src/api/client.ts`](../api/client.ts) — `apiPost`, `ApiError` (per DL-0061, the shared HTTP transport).
+- [`frontend/src/api/notes.ts`](../api/notes.ts) — `useGenerateNotesMutation` (per DL-0067, the actual AI-notes API surface).
+- [`frontend/src/api/client.ts`](../api/client.ts) — `apiPost`, `ApiError` (per DL-0067, the shared HTTP transport).
 - [`frontend/src/components/README.md`](../components/README.md) — design-system primitives the form composes.
 - [`backend/app/middleware/correlation.py`](../../../backend/app/middleware/correlation.py) — server-side correlation extraction.
 - [`docs/ai-note-generation-workflow.md`](../../../docs/ai-note-generation-workflow.md) § 8 — observability surfaces deep-dive.
-- [`docs/decision-log.md`](../../../docs/decision-log.md) — DL-0061 (README placement deviation rationale).
+- [`docs/decision-log.md`](../../../docs/decision-log.md) — DL-0067 (README placement deviation rationale).
