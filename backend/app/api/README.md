@@ -42,7 +42,7 @@ The package contains seven module-level files. The `notes` blueprint is the prim
 - `[backend/app/api/notes.py:L208]` — `notes_bp = Blueprint("notes", __name__)`
 - `[backend/app/api/notes.py:L227]` — `__all__ = ["notes_bp"]`
 - `[backend/app/api/notes.py:L237]` — `_AI_FAILURE_CLASS: type[AIServiceUnavailableError] = AIServiceUnavailableError`
-- `[backend/app/api/notes.py:L245-L247]` — Route decorator, `@requires_role`, and `def generate()` (function name is `generate`, NOT `generate_notes`)
+- `[backend/app/api/notes.py:L245-L247]` — Route decorator, `@requires_role`, and `def generate()` view function
 
 ## 4. Data Flow
 
@@ -61,7 +61,7 @@ flowchart TB
     View["generate() view<br/>notes.py L247<br/>request.get_json(silent=True)"]
     PydVal["NoteGenerationRequest<br/>schemas/note_generation.py<br/>1-4000 chars, extra='forbid'"]
     Log["structlog event<br/>ai_note_generation_requested<br/>extra: user_id, org_id, context_chars<br/>(NEVER raw context)"]
-    Svc["generate_outreach_notes(payload)<br/>backend/app/services/ai_orchestration.py"]
+    Svc["generate_outreach_notes(request)<br/>backend/app/services/ai_orchestration.py"]
     Anth[(Anthropic API<br/>ChatAnthropic via langchain_anthropic)]
     Resp["NoteGenerationResponse.model_dump(mode='json')<br/>HTTP 200 + jsonify"]
 
@@ -103,7 +103,7 @@ flowchart TB
 
 ## 5. Public Interfaces
 
-The package exposes one public HTTP route for F-002: `POST /api/notes/generate`. The endpoint contract is summarized below; the canonical full contract for every API endpoint lives at `[docs/api.md]`.
+The package exposes one public HTTP route for F-002: `POST /api/notes/generate`. The endpoint contract is summarized below. The cross-cutting REST endpoint catalog for the rest of the API surface lives at `[docs/api.md]`; for the F-002 endpoint contract specifically, this README and the source-of-truth `generate()` docstring at `[backend/app/api/notes.py:L249-L362]` are the authoritative references (see "Cross-link to canonical full API contract" below for the scope split).
 
 ### `POST /api/notes/generate` Endpoint Contract
 
@@ -140,7 +140,9 @@ The package exposes one public HTTP route for F-002: `POST /api/notes/generate`.
 
 ### Cross-link to canonical full API contract
 
-This README summarizes the F-002 surface only. For the canonical full REST contract — every endpoint, every schema, RBAC matrix, pagination conventions, and the uniform error envelope — see `[docs/api.md]`. DO NOT duplicate that contract here; the source of truth is `[docs/api.md]`.
+This README summarizes the F-002 surface only. `[docs/api.md]` is the cross-cutting REST endpoint catalog for the rest of the API surface (auth, connections, tags, admin, health) — refer there for the cross-endpoint conventions (pagination, RBAC matrix, uniform error envelope shape).
+
+**Authority for the F-002 endpoint contract itself.** The single-field request body (`relationship_context` only), the response shape, and the validation/RBAC/error contract are sourced from and verified against the live Pydantic schemas at `[backend/app/schemas/note_generation.py:NoteGenerationRequest]` and `[backend/app/schemas/note_generation.py:NoteGenerationResponse]` plus the comprehensive `generate()` view docstring at `[backend/app/api/notes.py:L249-L362]`. If `[docs/api.md]` and this README diverge for the F-002 endpoint, this README and the inline view docstring win because they are co-located with the implementation. A future docs/api.md refresh is recommended to reconcile its F-002 § with the actual schema (see decision-log entry DL-0065 for the cross-doc reconciliation deferral).
 
 ## 6. Error Handling
 
@@ -196,6 +198,21 @@ For the canonical security policy (threat model, auth flows, authorization, secr
 
 The notes blueprint is intentionally a thin handler per AAP § 0.5.3. It emits ONE structured log event and contributes NO metrics, audit events, or health endpoints of its own.
 
+### Reused vs Added (per the user-specified Observability rule)
+
+Per the user-specified Observability rule, this section explicitly distinguishes operational surfaces that were already present in the codebase from any that this documentation deliverable adds. **This documentation deliverable adds no new observability tooling at the API layer.** Every log event, header, and observability surface enumerated below is REUSED from the pre-existing F-002 implementation.
+
+| Observability Surface | Status | Source File |
+|-----------------------|--------|-------------|
+| structlog event `ai_note_generation_requested` (the single API-layer event) | Reused (Pre-existing) | `[backend/app/api/notes.py:L447-L454]` |
+| `X-Correlation-Id` request/response header propagation | Reused (Pre-existing) | `[backend/app/middleware/correlation.py]` |
+| Uniform error envelope `{error: {code, message, correlation_id, fields}}` | Reused (Pre-existing) | `[backend/app/middleware/error_handlers.py]` |
+| Health/readiness probes `/healthz`, `/readyz` (owned by `health_bp`, not `notes_bp`) | Reused (Pre-existing) | `[backend/app/api/health.py]` |
+| Service-layer telemetry (`ai_request_duration_seconds`, structlog `ai_request_*` events, `ai_latency_p95` alarm) | Reused (Pre-existing) | `[backend/app/services/ai_orchestration.py]` — see `[backend/app/services/README.md]` § 8 |
+| **Added by This Deliverable** | (none) | — |
+
+**Verification:** every entry above can be exercised in local development; no new instrumentation was required, and the documentation deliverable did not modify `[backend/app/api/notes.py]` logic, the central error handler, or any middleware module. Per the AAP Minimal Change Clause, no additional API-layer log events (e.g., `ai_note_generation_succeeded`, `ai_note_generation_failed`) were introduced — see decision-log entry DL-0064.
+
 ### Structured log events emitted by this blueprint
 
 - `ai_note_generation_requested` (level=info) — emitted by `_logger.info(...)` at the top of the view function at `[backend/app/api/notes.py:L447-L454]`. The `extra` dict carries `user_id`, `org_id`, and `context_chars` (length only — NEVER the raw text). This is the ONLY event the API layer emits for the F-002 path.
@@ -225,7 +242,7 @@ The following Python packages are pinned in `[backend/requirements.txt]` and are
 
 ## 9. Examples
 
-Two short examples illustrate the F-002 endpoint contract. For the full canonical contract, see `[docs/api.md]`.
+Two short examples illustrate the F-002 endpoint contract. The authoritative F-002 contract is the live Pydantic schema at `[backend/app/schemas/note_generation.py]` plus the `generate()` view docstring at `[backend/app/api/notes.py:L249-L362]`; the cross-cutting REST endpoint catalog for sibling endpoints (auth, connections, tags, admin, health) lives at `[docs/api.md]`.
 
 **Example 1 — curl invocation against local dev**:
 
@@ -259,7 +276,7 @@ Failure-mode JSON envelope examples for `validation_failed`, `ai_timeout`, `ai_u
 - `[backend/app/middleware/rbac.py]` — `requires_role` decorator
 - `[backend/app/middleware/error_handlers.py]` — `AppError` hierarchy and central JSON error envelope handler
 - `[backend/app/api/__init__.py]` — `register_blueprints(app)` and the URL-prefix table
-- `[docs/api.md]` — Canonical full API contract for all blueprints
+- `[docs/api.md]` — Cross-cutting REST endpoint catalog for the rest of the API surface (auth, connections, tags, admin, health); for the F-002 endpoint contract specifically, this README and the `generate()` view docstring at `[backend/app/api/notes.py:L249-L362]` are the authoritative references — see DL-0065 in `[docs/decision-log.md]`
 - `[docs/ai-note-generation-workflow.md]` — Cross-cutting F-002 workflow deep-dive
 - `[docs/security.md]` — Security policy (auth, RBAC, validation, sanitization invariants)
 - `[docs/operations.md]` — Operations runbook (deployment, health checks, alarms, `ai_latency_p95` runbook)

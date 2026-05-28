@@ -121,6 +121,14 @@ export interface GenerateNotesResponse {
  *   "ai_unavailable"    Anthropic provider returned an error (auth
  *                       failure, rate limit, model unavailable, etc.).
  *                       Soft failure (same affordance).
+ *   "ai_not_configured" The backend's `ANTHROPIC_API_KEY` Flask config
+ *                       value is missing or empty (HTTP 503). Hard
+ *                       failure: surfaces a prominent toast because
+ *                       it requires operator action (set the API key
+ *                       in `.env` / AWS Secrets Manager) rather than
+ *                       a contributor retry. The form remains
+ *                       submittable with manually-typed notes per the
+ *                       AAP Sec 0.4.4 non-blocking contract.
  *   "forbidden"         Viewer (Sales Rep) role attempted to call this
  *                       endpoint. The form button should be hidden
  *                       entirely for Viewers via RoleGate; this code
@@ -140,6 +148,7 @@ export interface GenerateNotesResponse {
 export type AiNoteErrorCode =
   | "ai_timeout"
   | "ai_unavailable"
+  | "ai_not_configured"
   | "forbidden"
   | "validation_failed"
   | "invalid_json"

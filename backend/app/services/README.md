@@ -6,7 +6,9 @@ The `backend/app/services` package is the business-logic layer that sits between
 
 ## 2. Business Context
 
-> Sales-Connections is expected to be used during weekly sales pipeline review meetings. Sales leaders will add connection ideas before or during the meeting, and SDRs will use the generated notes as "meeting-ready context" to decide which warm leads to pursue that week.
+The F-002 AI orchestration service exists because of the following business reality, captured verbatim from the user-supplied product framing in AAP § 0.2.3:
+
+> "Sales-Connections is expected to be used during weekly sales pipeline review meetings. Sales leaders will add connection ideas before or during the meeting, and SDRs will use the generated notes as 'meeting-ready context' to decide which warm leads to pursue that week."
 
 The AI-generated note is not just convenience text; it is a prioritization aid that helps the team quickly answer:
 
@@ -142,7 +144,7 @@ Cite `[backend/app/services/ai_orchestration.py:L478]`.
 | `ai_unavailable` | 502 | Provider exception: ChatAnthropic raised, network failure, or malformed response shape |
 | `ai_not_configured` | 503 | Missing or empty `ANTHROPIC_API_KEY` Flask config value |
 
-Note: there is no separate `AIPromptTooLargeError` class — the 4000-character context cap is enforced by the `NoteGenerationRequest` schema's `max_length=4000` constraint AND by `sanitize_for_ai_prompt(max_chars=...)` truncation, both failing safely without a dedicated exception.
+Note: the 4000-character context cap is enforced by the `NoteGenerationRequest` schema's `max_length=4000` constraint AND by `sanitize_for_ai_prompt(max_chars=...)` truncation. Both layers fail safely without a dedicated exception class — oversized input is rejected at the schema boundary (HTTP 422 `validation_failed`) and any residual character beyond the cap is truncated at the orchestrator boundary before prompt construction.
 
 ### Internal helpers (private; do not import directly)
 
@@ -177,6 +179,24 @@ Cross-link: see `[docs/security.md]` for the canonical security policy.
 ## 8. Operational Notes
 
 This section enumerates the live operational surfaces emitted by the AI orchestrator and the configuration knobs that govern its behavior. All entries are observable in local development and in production.
+
+### Reused vs Added (per the user-specified Observability rule)
+
+Per the user-specified Observability rule, this section explicitly distinguishes operational surfaces that were already present in the codebase from any that this documentation deliverable adds. **This documentation deliverable adds no new observability tooling.** Every metric, log event, alarm, and health-check enumerated below is REUSED from the pre-existing F-002 implementation.
+
+| Observability Surface | Status | Source File |
+|-----------------------|--------|-------------|
+| Prometheus histogram `ai_request_duration_seconds{outcome}` | Reused (Pre-existing) | `[backend/app/observability/metrics.py:L263-L272]` |
+| structlog event `ai_request_start` | Reused (Pre-existing) | `[backend/app/services/ai_orchestration.py:L607]` |
+| structlog event `ai_request_success` | Reused (Pre-existing) | `[backend/app/services/ai_orchestration.py:L662]` |
+| structlog event `ai_request_timeout` | Reused (Pre-existing) | `[backend/app/services/ai_orchestration.py:L621]` |
+| structlog event `ai_request_error` | Reused (Pre-existing) | `[backend/app/services/ai_orchestration.py:L645]` |
+| CloudWatch alarm `ai_latency_p95` | Reused (Pre-existing) | `[infra/terraform/modules/observability/main.tf:L446]` |
+| Health/readiness probes `/healthz`, `/readyz` | Reused (Pre-existing) | `[backend/app/api/health.py]` (not specific to AI; mentioned for completeness) |
+| Bound structlog context (`ai_model`, `prompt_chars`, `timeout_seconds`, `caller_thread`) | Reused (Pre-existing) | `[backend/app/services/ai_orchestration.py:L601-L606]` |
+| **Added by This Deliverable** | (none) | — |
+
+**Verification:** every entry above can be exercised in local development via the commands documented in § 8.5 ("Local-dev verification") below; no new instrumentation was required, and the documentation deliverable did not modify `[backend/app/observability/metrics.py]`, `[backend/app/services/ai_orchestration.py]` (telemetry call sites unchanged), or any Terraform alarm definition.
 
 ### Prometheus histogram
 
@@ -241,6 +261,8 @@ Cross-link: see `[docs/operations.md]` for the canonical alarm runbook.
 - `structlog==24.4.0`
 - `prometheus-client==0.21.1`
 - `opentelemetry-instrumentation-httpx==0.50b0`
+
+**Dependency security advisory note.** Public security advisories affect the currently pinned `langchain==0.3.27` and `langchain-core==0.3.78` versions. The upgrade is a dependency-management change that is **out of scope** for this documentation-only deliverable per the AAP Minimal Change Clause (§ 0.2.1) and the AAP § 0.7.3 dependency-update budget ("Added: 0, Removed: 0, Updated: 0"). The advisory awareness, the recommended target versions, and the deferral rationale are captured in decision-log entry DL-0061 so a future security-hardening epic can pick up the upgrade alongside its own integration testing. Cross-reference: `[docs/decision-log.md:DL-0061]`.
 
 ### Local-dev verification
 
