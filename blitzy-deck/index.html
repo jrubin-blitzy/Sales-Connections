@@ -12,10 +12,716 @@
   <!-- Reveal.js base theme (overridden by Blitzy theme below). The id="theme" is the reveal.js convention. -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/theme/black.min.css" id="theme">
 
-  <!-- Canonical Blitzy reveal.js theme override. Brand identity (colors, typography) lives here. -->
-  <link rel="stylesheet" href="references/blitzy-reveal-theme.css">
+  <!--
+    Canonical Blitzy reveal.js theme — INLINED VERBATIM from
+    blitzy-deck/references/blitzy-reveal-theme.css to satisfy the
+    Executive Presentation Rule's "single self-contained HTML file,
+    no build steps, no local file dependencies" constraint per
+    AAP § 0.11.6. The canonical file remains the single source of
+    truth; any future theme change must be applied there first and
+    then re-inlined here. Brand identity (colors, typography) lives
+    in the block immediately below.
+  -->
+  <style>
+    /*!
+     * Blitzy Reveal.js Theme
+     * Canonical theme for blitzy-deck/index.html
+     * Defines brand identity, typography, and slide layouts.
+     * No external assets; system fonts only; under 20 KB.
+     */
 
-  <!-- Layout-only CSS. Brand identity (colors, typography) belongs in the theme CSS, not here. -->
+    /* ================================================================== */
+    /* 1. Design tokens (CSS custom properties)                           */
+    /* ================================================================== */
+    :root {
+      /* Surface tokens */
+      --blitzy-bg: #0e1117;
+      --blitzy-surface: #161b22;
+      --blitzy-surface-elev: #1c2128;
+
+      /* Foreground tokens */
+      --blitzy-fg: #e6edf3;
+      --blitzy-fg-muted: #8b949e;
+      --blitzy-fg-subtle: #6e7681;
+
+      /* Accent tokens (Blitzy brand blue) */
+      --blitzy-accent: #4f8ef7;
+      --blitzy-accent-soft: #1f6feb;
+      --blitzy-accent-glow: rgba(79, 142, 247, 0.15);
+
+      /* Canonical Blitzy brand palette (Executive Presentation rule) */
+      --blitzy-primary: #5B39F3;
+      --blitzy-primary-dark: #2D1C77;
+      --blitzy-primary-navy: #1A105F;
+      --blitzy-primary-light: #7A6DEC;
+      --blitzy-primary-deep: #4101DB;
+      --blitzy-accent-teal: #94FAD5;
+      --blitzy-surface-tint: #F2F0FE;
+      --blitzy-surface-tint-2: #F4EFF6;
+      --blitzy-hero-gradient: linear-gradient(68deg, #7A6DEC 15.56%, #5B39F3 62.74%, #4101DB 84.44%);
+
+      /* Border tokens */
+      --blitzy-border: #30363d;
+      --blitzy-border-strong: #484f58;
+
+      /* Status tokens */
+      --blitzy-success: #2ea043;
+      --blitzy-warning: #d29922;
+      --blitzy-danger: #f85149;
+
+      /* Geometry tokens */
+      --blitzy-radius: 0.5rem;
+      --blitzy-radius-lg: 0.75rem;
+      --blitzy-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+      --blitzy-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+
+      /* Typography tokens */
+      --blitzy-font-sans: 'Inter', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
+      --blitzy-font-mono: ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, 'Courier New', monospace;
+    }
+
+    /* ================================================================== */
+    /* 2. Reveal.js base overrides                                        */
+    /* ================================================================== */
+    .reveal {
+      font-family: var(--blitzy-font-sans);
+      color: var(--blitzy-fg);
+      background: var(--blitzy-bg);
+      font-weight: 400;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    .reveal .slides {
+      text-align: left;
+    }
+
+    .reveal .slides section,
+    .reveal .slides section > section {
+      background: var(--blitzy-bg);
+      color: var(--blitzy-fg);
+      padding: 0;
+      box-shadow: none;
+    }
+
+    /* Brand-tinted slide backgrounds (Executive Presentation rule § 0.11.6).
+       These selectors are more specific than the .reveal .slides section
+       rule above, so the Blitzy palette wins on title, divider, and
+       closing slides while content slides keep the deck's working
+       dark-on-light contrast. */
+    .reveal .slides section.title-slide.blitzy-title,
+    .reveal .slides section.slide-title {
+      background: var(--blitzy-hero-gradient);
+    }
+    .reveal .slides section.section-divider.blitzy-section,
+    .reveal .slides section.slide-divider {
+      background: var(--blitzy-primary-dark);
+    }
+    .reveal .slides section.closing-slide.blitzy-closing,
+    .reveal .slides section.slide-closing {
+      background: var(--blitzy-primary-navy);
+    }
+
+    /* Reveal.js renders its viewport background on this wrapper too. */
+    .reveal-viewport {
+      background: var(--blitzy-bg);
+    }
+
+    /* ================================================================== */
+    /* 3. Heading hierarchy                                                */
+    /* ================================================================== */
+    .reveal h1,
+    .reveal h2,
+    .reveal h3,
+    .reveal h4,
+    .reveal h5,
+    .reveal h6 {
+      font-family: var(--blitzy-font-sans);
+      color: var(--blitzy-fg);
+      text-transform: none;
+      letter-spacing: -0.02em;
+      margin: 0 0 0.6em 0;
+      line-height: 1.2;
+      text-shadow: none;
+    }
+
+    .reveal h1 { font-size: 4.5rem; font-weight: 800; line-height: 1.05; }
+    .reveal h2 { font-size: 2.75rem; font-weight: 700; }
+    .reveal h3 { font-size: 1.75rem; font-weight: 600; color: var(--blitzy-fg-muted); }
+    .reveal h4 { font-size: 1.35rem; font-weight: 600; }
+    .reveal h5 { font-size: 1.15rem; font-weight: 600; }
+    .reveal h6 { font-size: 1rem;    font-weight: 600; }
+
+    /* ================================================================== */
+    /* 4. Body text, lists, inline elements, links                        */
+    /* ================================================================== */
+    .reveal p {
+      font-size: 1.4rem;
+      line-height: 1.55;
+      color: var(--blitzy-fg);
+      margin: 0 0 0.8em 0;
+    }
+
+    .reveal ul,
+    .reveal ol {
+      margin: 0 0 1em 1.5em;
+    }
+
+    .reveal li {
+      font-size: 1.3rem;
+      line-height: 1.55;
+      margin-bottom: 0.4em;
+    }
+
+    .reveal strong,
+    .reveal b {
+      color: var(--blitzy-accent);
+      font-weight: 700;
+    }
+
+    .reveal em,
+    .reveal i {
+      font-style: italic;
+      color: var(--blitzy-fg-muted);
+    }
+
+    /* Lucide icons embed <i> as the host element; ensure they are NOT italicized. */
+    .reveal i[data-lucide],
+    .reveal i[class*="lucide"],
+    .reveal i.blitzy-icon-large,
+    .reveal i.blitzy-icon-huge {
+      font-style: normal;
+      color: var(--blitzy-accent);
+    }
+
+    .reveal a {
+      color: var(--blitzy-accent);
+      text-decoration: none;
+      border-bottom: 1px solid transparent;
+      transition: border-color 0.15s ease, color 0.15s ease;
+    }
+
+    .reveal a:hover {
+      color: var(--blitzy-accent-soft);
+      border-bottom-color: var(--blitzy-accent);
+    }
+
+    .reveal a:focus-visible {
+      outline: 2px solid var(--blitzy-accent);
+      outline-offset: 2px;
+      border-radius: 2px;
+    }
+
+    /* ================================================================== */
+    /* 5. Reveal.js navigation controls, progress, slide-number           */
+    /* ================================================================== */
+    .reveal .controls {
+      color: var(--blitzy-accent);
+    }
+
+    .reveal .progress {
+      color: var(--blitzy-accent);
+      background: var(--blitzy-accent-glow);
+      height: 4px;
+    }
+
+    .reveal .progress span {
+      background: var(--blitzy-accent);
+    }
+
+    .reveal .slide-number {
+      background: var(--blitzy-surface);
+      color: var(--blitzy-fg-muted);
+      font-family: var(--blitzy-font-sans);
+      font-size: 0.85rem;
+      font-weight: 500;
+      padding: 0.3em 0.7em;
+      border-radius: var(--blitzy-radius);
+      border: 1px solid var(--blitzy-border);
+    }
+
+    /* ================================================================== */
+    /* 6. Custom slide types                                              */
+    /* ================================================================== */
+
+    /* 6.1 Title slide (.title-slide.blitzy-title, .slide-title)          */
+    /* The .slide-title selector is the AAP § 0.11.6 canonical name;     */
+    /* .title-slide is the pre-existing alias preserved for back-compat. */
+    .title-slide.blitzy-title,
+    .slide-title {
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      /* Blitzy hero gradient per Executive Presentation rule § 0.11.6 */
+      background: var(--blitzy-hero-gradient);
+    }
+
+    .title-slide.blitzy-title .blitzy-brand,
+    .slide-title .blitzy-brand {
+      font-size: 5.5rem;
+      font-weight: 800;
+      /* On the Blitzy purple hero gradient, the brand text reads white for contrast */
+      background: none;
+      -webkit-text-fill-color: #FFFFFF;
+      color: #FFFFFF;
+      margin: 0 0 0.3em 0;
+      letter-spacing: -0.03em;
+      line-height: 1;
+    }
+
+    .title-slide.blitzy-title .blitzy-tagline,
+    .slide-title .blitzy-tagline {
+      font-size: 2rem;
+      font-weight: 400;
+      color: var(--blitzy-accent-teal);
+      margin: 0 0 1.5em 0;
+      border: none;
+    }
+
+    .title-slide.blitzy-title .blitzy-icon-large,
+    .slide-title .blitzy-icon-large {
+      color: var(--blitzy-accent-teal);
+      margin-bottom: 1.5rem;
+    }
+
+    .title-slide.blitzy-title .blitzy-subtitle,
+    .slide-title .blitzy-subtitle {
+      font-size: 1.5rem;
+      color: #FFFFFF;
+      margin: 0 0 0.5em 0;
+    }
+
+    /* 6.2 Section divider (.section-divider.blitzy-section, .slide-divider) */
+    /* The .slide-divider selector is the AAP § 0.11.6 canonical name;       */
+    /* .section-divider is the pre-existing alias preserved for back-compat. */
+    .section-divider.blitzy-section,
+    .slide-divider {
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      /* Blitzy dark-purple divider background per Executive Presentation rule § 0.11.6 */
+      background: var(--blitzy-primary-dark);
+    }
+
+    .section-divider.blitzy-section .blitzy-icon-huge,
+    .slide-divider .blitzy-icon-huge {
+      color: var(--blitzy-accent-teal);
+      margin: 0 0 2rem 0;
+    }
+
+    .section-divider.blitzy-section h2,
+    .slide-divider h2 {
+      font-size: 4rem;
+      /* On the Blitzy primary-dark divider background, the section header reads white for contrast */
+      background: none;
+      -webkit-text-fill-color: #FFFFFF;
+      color: #FFFFFF;
+      margin: 0;
+      border: none;
+      padding: 0;
+    }
+
+    .section-divider.blitzy-section .blitzy-section-sub,
+    .slide-divider .blitzy-section-sub {
+      font-size: 1.5rem;
+      color: var(--blitzy-fg-muted);
+      margin-top: 1em;
+      max-width: 60ch;
+      line-height: 1.4;
+    }
+
+    /* 6.3 Content slide (.content-slide, .slide-content)                 */
+    /* The .slide-content selector is the AAP § 0.11.6 canonical name;    */
+    /* .content-slide is the pre-existing alias preserved for back-compat.*/
+    .content-slide,
+    .slide-content {
+      padding: 2rem 3rem;
+      height: 100%;
+    }
+
+    .content-slide h2,
+    .slide-content h2 {
+      border-bottom: 2px solid var(--blitzy-border);
+      padding-bottom: 0.4em;
+      margin-bottom: 0.8em;
+      position: relative;
+    }
+
+    .content-slide h2::after,
+    .slide-content h2::after {
+      content: '';
+      position: absolute;
+      left: 0;
+      bottom: -2px;
+      width: 4rem;
+      height: 2px;
+      background: var(--blitzy-accent);
+    }
+
+    /* 6.4 Diagram slide (.diagram-slide)                                 */
+    .diagram-slide {
+      padding: 2rem 3rem;
+    }
+
+    .diagram-slide .mermaid {
+      background: var(--blitzy-surface);
+      border: 1px solid var(--blitzy-border);
+      border-radius: var(--blitzy-radius-lg);
+      padding: 1.5rem;
+      max-width: 100%;
+      margin: 1rem auto;
+      overflow: hidden;
+    }
+
+    .diagram-slide .mermaid svg {
+      max-width: 100%;
+      max-height: 76vh;
+      min-height: 480px;
+      width: 100%;
+      height: auto;
+      background: transparent;
+      display: block;
+      margin: 0 auto;
+    }
+
+    /* Caption below a diagram (used by the D1 simplified component view). */
+    .diagram-slide .diagram-caption {
+      font-size: 0.85rem;
+      color: var(--blitzy-muted);
+      text-align: center;
+      margin: 0.5rem auto 0;
+      max-width: 80%;
+    }
+
+    /* 6.5 Closing slide (.closing-slide.blitzy-closing, .slide-closing)  */
+    /* The .slide-closing selector is the AAP § 0.11.6 canonical name;    */
+    /* .closing-slide is the pre-existing alias preserved for back-compat.*/
+    .closing-slide.blitzy-closing,
+    .slide-closing {
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      /* Blitzy navy closing background per Executive Presentation rule § 0.11.6 */
+      background: var(--blitzy-primary-navy);
+    }
+
+    .closing-slide.blitzy-closing h2,
+    .slide-closing h2 {
+      font-size: 3.5rem;
+      /* On the Blitzy navy background, the closing header reads white for contrast */
+      background: none;
+      -webkit-text-fill-color: #FFFFFF;
+      color: #FFFFFF;
+      margin: 0 0 1.2em 0;
+      border: none;
+    }
+
+    /* ================================================================== */
+    /* 7. Layout helpers                                                  */
+    /* ================================================================== */
+
+    /* 7.1 Icon size containers                                           */
+    .blitzy-icon-large {
+      width: 80px;
+      height: 80px;
+      display: inline-block;
+      color: var(--blitzy-accent);
+    }
+
+    .blitzy-icon-huge {
+      width: 120px;
+      height: 120px;
+      display: inline-block;
+      color: var(--blitzy-accent);
+    }
+
+    .blitzy-icon-large svg,
+    .blitzy-icon-huge svg {
+      width: 100%;
+      height: 100%;
+      stroke-width: 1.5;
+    }
+
+    /* 7.2 Feature grid (4-column for the 14 MVP features on slide 3)     */
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 1rem;
+      margin-top: 2rem;
+    }
+
+    .feature-grid .feature-cell {
+      background: var(--blitzy-surface);
+      border: 1px solid var(--blitzy-border);
+      border-radius: var(--blitzy-radius);
+      padding: 1.25rem 1rem;
+      text-align: center;
+      transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .feature-grid .feature-cell:hover {
+      border-color: var(--blitzy-accent);
+      background: var(--blitzy-surface-elev);
+      transform: translateY(-2px);
+    }
+
+    .feature-grid .feature-cell svg {
+      width: 40px;
+      height: 40px;
+      color: var(--blitzy-accent);
+      stroke-width: 1.5;
+    }
+
+    .feature-grid .feature-cell .feature-id {
+      font-family: var(--blitzy-font-mono);
+      font-size: 0.85rem;
+      color: var(--blitzy-fg-subtle);
+      display: block;
+    }
+
+    .feature-grid .feature-cell .feature-name {
+      font-size: 1rem;
+      font-weight: 500;
+      color: var(--blitzy-fg);
+      display: block;
+      line-height: 1.3;
+    }
+
+    /* 7.3 Decision / risk / next-tasks grids                             */
+    .decision-grid,
+    .risk-grid,
+    .next-tasks {
+      display: grid;
+      gap: 1.5rem;
+      margin-top: 1.5rem;
+      list-style: none;
+      padding: 0;
+    }
+
+    .decision-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .risk-grid {
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .next-tasks {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    /* 7.4 Generic surface containers (.card, .cell)                      */
+    .card,
+    .cell {
+      background: var(--blitzy-surface);
+      border: 1px solid var(--blitzy-border);
+      border-radius: var(--blitzy-radius);
+      padding: 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.6rem;
+      transition: border-color 0.15s ease, background 0.15s ease;
+    }
+
+    .card:hover,
+    .cell:hover {
+      border-color: var(--blitzy-accent);
+      background: var(--blitzy-surface-elev);
+    }
+
+    .card svg,
+    .cell svg {
+      width: 32px;
+      height: 32px;
+      color: var(--blitzy-accent);
+      flex-shrink: 0;
+      stroke-width: 1.5;
+    }
+
+    .card h3,
+    .cell h3 {
+      font-size: 1.25rem;
+      margin: 0;
+      color: var(--blitzy-fg);
+      border: none;
+      padding: 0;
+    }
+
+    .card p,
+    .cell p {
+      font-size: 1rem;
+      line-height: 1.5;
+      color: var(--blitzy-fg-muted);
+      margin: 0;
+    }
+
+    /* Brand-level coloring for inline span "heading"/"body" pairs used    */
+    /* across .card, .cell, and .next-tasks .item containers.             */
+    .card .heading,
+    .cell .heading,
+    .next-tasks .item .heading {
+      color: var(--blitzy-fg);
+      font-weight: 600;
+    }
+
+    .card .body,
+    .cell .body,
+    .next-tasks .item .body {
+      color: var(--blitzy-fg-muted);
+    }
+
+    /* 7.5 Risk severity variants (border supplements icon + text;        */
+    /*     never the only differentiator per accessibility guideline)     */
+    .cell.risk-high   { border-left: 4px solid var(--blitzy-danger); }
+    .cell.risk-medium { border-left: 4px solid var(--blitzy-warning); }
+    .cell.risk-low    { border-left: 4px solid var(--blitzy-success); }
+    .cell.mitigation  { border-left: 4px solid var(--blitzy-success); }
+
+    /* 7.6 Caption helper (small muted text below diagrams)               */
+    .caption {
+      font-size: 1rem;
+      color: var(--blitzy-fg-muted);
+      font-style: italic;
+      text-align: center;
+      margin-top: 0.75rem;
+      line-height: 1.4;
+    }
+
+    /* 7.7 Brand credit text (title + closing slides)                     */
+    .blitzy-credit {
+      font-size: 0.9rem;
+      color: var(--blitzy-fg-subtle);
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      margin-top: 1.5em;
+      font-weight: 500;
+    }
+
+    /* ================================================================== */
+    /* 8. Mermaid diagram theming (outer container only)                  */
+    /* ================================================================== */
+    .reveal .mermaid {
+      text-align: center;
+      font-family: var(--blitzy-font-sans);
+      line-height: 1.4;
+    }
+
+    .reveal .mermaid svg {
+      background: transparent;
+      max-width: 100%;
+      height: auto;
+      display: block;
+      margin: 0 auto;
+    }
+
+    /* Ensure Mermaid text inherits the Blitzy font where Mermaid does    */
+    /* not enforce its own font-family on individual labels.              */
+    .reveal .mermaid foreignObject div,
+    .reveal .mermaid .label,
+    .reveal .mermaid .nodeLabel,
+    .reveal .mermaid .edgeLabel {
+      font-family: var(--blitzy-font-sans) !important;
+    }
+
+    /* ================================================================== */
+    /* 9. Tables                                                          */
+    /* ================================================================== */
+    .reveal table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1em 0;
+      font-size: 1.1rem;
+      background: transparent;
+    }
+
+    .reveal table thead th {
+      background: var(--blitzy-surface);
+      color: var(--blitzy-accent);
+      border-bottom: 2px solid var(--blitzy-border);
+      text-align: left;
+      padding: 0.6em 0.8em;
+      font-weight: 600;
+      font-size: 1rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .reveal table tbody td {
+      border-bottom: 1px solid var(--blitzy-border);
+      padding: 0.6em 0.8em;
+      color: var(--blitzy-fg);
+      vertical-align: top;
+    }
+
+    .reveal table tbody tr:hover td {
+      background: var(--blitzy-surface);
+    }
+
+    /* ================================================================== */
+    /* 10. Inline code (e.g., feature IDs F-001)                          */
+    /* ================================================================== */
+    .reveal code {
+      font-family: var(--blitzy-font-mono);
+      font-size: 0.95em;
+      background: var(--blitzy-surface);
+      color: var(--blitzy-accent);
+      padding: 0.15em 0.4em;
+      border-radius: 0.25rem;
+      border: 1px solid var(--blitzy-border);
+    }
+
+    /* ================================================================== */
+    /* 11. Accessibility and focus                                        */
+    /* ================================================================== */
+    .reveal button:focus-visible,
+    .reveal a:focus-visible,
+    .reveal [tabindex]:focus-visible {
+      outline: 2px solid var(--blitzy-accent);
+      outline-offset: 2px;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .reveal *,
+      .reveal *::before,
+      .reveal *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+      }
+    }
+
+    /* ================================================================== */
+    /* 12. Responsive resilience (smaller projector resolutions)          */
+    /* ================================================================== */
+    @media (max-width: 1280px) {
+      .feature-grid  { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .decision-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 900px) {
+      .feature-grid  { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .decision-grid { grid-template-columns: 1fr; }
+      .risk-grid     { grid-template-columns: 1fr; }
+      .next-tasks    { grid-template-columns: 1fr; }
+      .reveal h1     { font-size: 3.5rem; }
+      .reveal h2     { font-size: 2.25rem; }
+    }
+  </style>
+
+  <!-- Layout-only CSS. Brand identity (colors, typography) belongs in the theme block above, not here. -->
   <style>
     /* Feature grid (slide 3) — 4x4 grid carrying 14 feature cells + 2 brand-badge cells. */
     /* Sized tightly so all 16 cells fit within the 1080px slide canvas alongside the */
@@ -239,6 +945,114 @@
     .reveal .content-slide h3 { font-size: 1.2rem; margin: 0.85rem 0 0.4rem; }
     .reveal .content-slide p  { font-size: 0.95rem; line-height: 1.4; margin: 0.4rem 0; }
     .reveal .content-slide .subtitle { font-size: 0.85rem; }
+
+    /* KPI grid for the F-002 documentation-delivery scope slide. */
+    /* 4-column grid carrying numeric KPIs with icon + value + label. */
+    /* Sized to fit alongside the business-value list within the 1080px canvas. */
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 1rem;
+      margin: 1.25rem 0 1.5rem;
+    }
+    .kpi-grid .kpi-card {
+      text-align: center;
+      padding: 1.1rem 0.75rem;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 0.5rem;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.35rem;
+    }
+    .kpi-grid .kpi-card svg {
+      width: 30px;
+      height: 30px;
+      stroke-width: 1.5;
+      margin-bottom: 0.15rem;
+    }
+    .kpi-grid .kpi-value {
+      font-size: 2.2rem;
+      font-weight: 700;
+      line-height: 1;
+      margin: 0.1rem 0;
+    }
+    .kpi-grid .kpi-label {
+      font-size: 0.72em;
+      opacity: 0.8;
+      line-height: 1.25;
+    }
+
+    /* Business-value 4-cell grid used on the scope-and-value slide. */
+    /* Reuses the card surface idiom from .decision-grid but with 4 columns. */
+    .biz-value-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 1rem;
+      margin-top: 0.5rem;
+    }
+    .biz-value-grid .item {
+      padding: 0.85rem 1rem;
+      border-radius: 0.5rem;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      text-align: left;
+    }
+    .biz-value-grid .item svg {
+      width: 22px;
+      height: 22px;
+      stroke-width: 1.5;
+      margin-bottom: 0.35rem;
+    }
+    .biz-value-grid .item .heading {
+      display: block;
+      font-weight: 600;
+      font-size: 0.85em;
+      margin-bottom: 0.2rem;
+      line-height: 1.2;
+    }
+    .biz-value-grid .item .body {
+      display: block;
+      font-size: 0.7em;
+      opacity: 0.85;
+      line-height: 1.35;
+    }
+
+    /* Eyebrow label that sits above an H2 (e.g., feature tag on section divider). */
+    .eyebrow {
+      display: inline-block;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Cascadia Code", "Roboto Mono", Consolas, monospace;
+      font-size: 0.9rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      opacity: 0.7;
+      margin-bottom: 0.4rem;
+    }
+
+    /* Compact caption-style note row used below the F-002 architecture diagram */
+    /* to surface risks-and-onboarding callouts without a separate slide. */
+    .arch-callouts {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.6rem 1rem;
+      max-width: 80%;
+      margin: 0.85rem auto 0;
+      font-size: 0.78em;
+      opacity: 0.9;
+    }
+    .arch-callouts .callout {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      text-align: left;
+    }
+    .arch-callouts .callout svg {
+      width: 16px;
+      height: 16px;
+      stroke-width: 1.5;
+      flex-shrink: 0;
+    }
   </style>
 </head>
 <body>
@@ -246,9 +1060,9 @@
     <div class="slides">
 
       <!-- ============================================================== -->
-      <!-- SLIDE 1 of 16 — Title                                          -->
+      <!-- SLIDE 1 of 18 — Title                                          -->
       <!-- ============================================================== -->
-      <section class="title-slide blitzy-title">
+      <section class="title-slide slide-title blitzy-title">
         <i data-lucide="users-round" class="blitzy-icon-large" aria-label="Sales-Connections brand mark"></i>
         <h1 class="blitzy-brand">Sales-Connections</h1>
         <h2 class="blitzy-tagline">Connection Intelligence for Sales Teams</h2>
@@ -257,16 +1071,16 @@
       </section>
 
       <!-- ============================================================== -->
-      <!-- SLIDE 2 of 16 — Section Divider: What We Built                 -->
+      <!-- SLIDE 2 of 18 — Section Divider: What We Built                 -->
       <!-- ============================================================== -->
-      <section class="section-divider blitzy-section">
+      <section class="section-divider slide-divider blitzy-section">
         <i data-lucide="layers" class="blitzy-icon-huge" aria-label="What we built"></i>
         <h2>What We Built</h2>
         <p class="blitzy-section-sub">A connection intelligence platform with fourteen bound MVP features.</p>
       </section>
 
       <!-- ============================================================== -->
-      <!-- SLIDE 3 of 16 — Content: Product Mission and 14 Features grid  -->
+      <!-- SLIDE 3 of 18 — Content: Product Mission and 14 Features grid  -->
       <!-- ============================================================== -->
       <section class="content-slide">
         <h2>Product Mission</h2>
@@ -355,7 +1169,7 @@
       </section>
 
       <!-- ============================================================== -->
-      <!-- SLIDE 4 of 16 — Content: User Flow 1 (Contributor adds)        -->
+      <!-- SLIDE 4 of 18 — Content: User Flow 1 (Contributor adds)        -->
       <!-- ============================================================== -->
       <section class="content-slide diagram-slide">
         <h2>User Flow 1: Add a Connection</h2>
@@ -387,7 +1201,7 @@ sequenceDiagram
       </section>
 
       <!-- ============================================================== -->
-      <!-- SLIDE 5 of 16 — Content: User Flow 2 (Sales Rep claims)        -->
+      <!-- SLIDE 5 of 18 — Content: User Flow 2 (Sales Rep claims)        -->
       <!-- ============================================================== -->
       <section class="content-slide diagram-slide">
         <h2>User Flow 2: Browse and Claim a Lead</h2>
@@ -420,16 +1234,16 @@ sequenceDiagram
       </section>
 
       <!-- ============================================================== -->
-      <!-- SLIDE 6 of 16 — Section Divider: Architecture                  -->
+      <!-- SLIDE 6 of 18 — Section Divider: Architecture                  -->
       <!-- ============================================================== -->
-      <section class="section-divider blitzy-section">
+      <section class="section-divider slide-divider blitzy-section">
         <i data-lucide="network" class="blitzy-icon-huge" aria-label="Architecture"></i>
         <h2>Architecture</h2>
         <p class="blitzy-section-sub">Three-tier web app on AWS — synchronous, simple, scalable to 10,000 records per organization.</p>
       </section>
 
       <!-- ============================================================== -->
-      <!-- SLIDE 7 of 16 — Content: System Context                        -->
+      <!-- SLIDE 7 of 18 — Content: System Context                        -->
       <!-- ============================================================== -->
       <section class="content-slide diagram-slide">
         <h2>System Context</h2>
@@ -463,7 +1277,7 @@ graph LR
       </section>
 
       <!-- ============================================================== -->
-      <!-- SLIDE 8 of 16 — Content: Data Model                            -->
+      <!-- SLIDE 8 of 18 — Content: Data Model                            -->
       <!-- ============================================================== -->
       <section class="content-slide diagram-slide">
         <h2>Data Model</h2>
@@ -519,7 +1333,7 @@ erDiagram
       </section>
 
       <!-- ============================================================== -->
-      <!-- SLIDE 9 of 16 — Content: Request Lifecycle                     -->
+      <!-- SLIDE 9 of 18 — Content: Request Lifecycle                     -->
       <!-- ============================================================== -->
       <section class="content-slide diagram-slide">
         <h2>Request Lifecycle</h2>
@@ -552,16 +1366,16 @@ sequenceDiagram
 
 
       <!-- ============================================================== -->
-      <!-- SLIDE 10 of 16 — Section Divider: Why                          -->
+      <!-- SLIDE 10 of 18 — Section Divider: Why                          -->
       <!-- ============================================================== -->
-      <section class="section-divider blitzy-section">
+      <section class="section-divider slide-divider blitzy-section">
         <i data-lucide="compass" class="blitzy-icon-huge" aria-label="Why"></i>
         <h2>Why</h2>
         <p class="blitzy-section-sub">Five architectural decisions that define the platform.</p>
       </section>
 
       <!-- ============================================================== -->
-      <!-- SLIDE 11 of 16 — Content: Decision Highlights                  -->
+      <!-- SLIDE 11 of 18 — Content: Decision Highlights                  -->
       <!-- ============================================================== -->
       <section class="content-slide">
         <h2>Decision Highlights</h2>
@@ -613,16 +1427,16 @@ sequenceDiagram
       </section>
 
       <!-- ============================================================== -->
-      <!-- SLIDE 12 of 16 — Section Divider: Risk and Mitigation          -->
+      <!-- SLIDE 12 of 18 — Section Divider: Risk and Mitigation          -->
       <!-- ============================================================== -->
-      <section class="section-divider blitzy-section">
+      <section class="section-divider slide-divider blitzy-section">
         <i data-lucide="shield-alert" class="blitzy-icon-huge" aria-label="Risk and Mitigation"></i>
         <h2>Risk and Mitigation</h2>
         <p class="blitzy-section-sub">Known unknowns documented; mitigations engineered in or scheduled for follow-up.</p>
       </section>
 
       <!-- ============================================================== -->
-      <!-- SLIDE 13 of 16 — Content: Risk Register                        -->
+      <!-- SLIDE 13 of 18 — Content: Risk Register                        -->
       <!-- ============================================================== -->
       <section class="content-slide">
         <h2>Risk Register</h2>
@@ -689,16 +1503,133 @@ sequenceDiagram
       </section>
 
       <!-- ============================================================== -->
-      <!-- SLIDE 14 of 16 — Section Divider: Onboarding                   -->
+      <!-- SLIDE 14 of 18 — Section Divider: Documentation Delivery       -->
+      <!-- F-002 documentation deliverable for the AI Note Generation     -->
+      <!-- workflow. Per AAP § 0.11.6 and folder requirements.            -->
+      <!-- The slide-divider class is the AAP § 0.11.6 canonical name;   -->
+      <!-- section-divider is the pre-existing alias preserved for back-  -->
+      <!-- compat with surrounding deck styles.                           -->
       <!-- ============================================================== -->
-      <section class="section-divider blitzy-section">
-        <i data-lucide="book-open" class="blitzy-icon-huge" aria-label="Onboarding"></i>
-        <h2>Onboarding</h2>
-        <p class="blitzy-section-sub">From a clean machine to a running app in under ten minutes.</p>
+      <section class="section-divider slide-divider blitzy-section">
+        <i data-lucide="book-open" class="blitzy-icon-huge" aria-label="Documentation Delivery"></i>
+        <p class="eyebrow">F-002</p>
+        <h2>Documentation Delivery</h2>
+        <p class="blitzy-section-sub">Module READMEs, workflow deep-dive, onboarding refresh.</p>
       </section>
 
       <!-- ============================================================== -->
-      <!-- SLIDE 15 of 16 — Content: Onboarding Flow                      -->
+      <!-- SLIDE 15 of 18 — Content: F-002 Documentation Scope & Value    -->
+      <!-- Combines "What Was Done" KPI grid with "Why This Was Done"     -->
+      <!-- business-value bullets per the folder-requirements fallback    -->
+      <!-- ("combine 'Risks & Mitigations' and 'Onboarding Path' OR       -->
+      <!--  by removing one of the existing slides that overlaps").       -->
+      <!-- The slide-content class is the AAP § 0.11.6 canonical name;    -->
+      <!-- content-slide is the pre-existing alias preserved for back-    -->
+      <!-- compat with surrounding deck styles.                           -->
+      <!-- ============================================================== -->
+      <section class="content-slide slide-content">
+        <h2>Documentation Delivery — Scope &amp; Business Value</h2>
+        <p class="subtitle">Five new files, four source-file docstring refreshes, seven Mermaid diagrams, six decision-log entries.</p>
+        <div class="kpi-grid">
+          <div class="kpi-card">
+            <i data-lucide="file-text" aria-hidden="true"></i>
+            <span class="kpi-value">5</span>
+            <span class="kpi-label">New Markdown files</span>
+          </div>
+          <div class="kpi-card">
+            <i data-lucide="code" aria-hidden="true"></i>
+            <span class="kpi-value">4</span>
+            <span class="kpi-label">Source files updated (docstrings only)</span>
+          </div>
+          <div class="kpi-card">
+            <i data-lucide="git-branch" aria-hidden="true"></i>
+            <span class="kpi-value">7</span>
+            <span class="kpi-label">Mermaid diagrams (D1&ndash;D7)</span>
+          </div>
+          <div class="kpi-card">
+            <i data-lucide="scroll-text" aria-hidden="true"></i>
+            <span class="kpi-value">6</span>
+            <span class="kpi-label">Decision-log entries</span>
+          </div>
+        </div>
+        <div class="biz-value-grid">
+          <div class="item">
+            <i data-lucide="zap" aria-hidden="true"></i>
+            <span class="heading">Speed to action</span>
+            <span class="body">SDRs walk into pipeline review with meeting-ready outreach notes.</span>
+          </div>
+          <div class="item">
+            <i data-lucide="target" aria-hidden="true"></i>
+            <span class="heading">Reduced ambiguity</span>
+            <span class="body">Clear answers for who, why, and the first outbound angle per warm lead.</span>
+          </div>
+          <div class="item">
+            <i data-lucide="shield" aria-hidden="true"></i>
+            <span class="heading">Trust preserved</span>
+            <span class="body">Notes stay editable; AI is assistive draft text, never authoritative.</span>
+          </div>
+          <div class="item">
+            <i data-lucide="users" aria-hidden="true"></i>
+            <span class="heading">Faster onboarding</span>
+            <span class="body">New contributors find F-002 end-to-end in one cross-layer deep-dive.</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================================================== -->
+      <!-- SLIDE 16 of 18 — Content: Architectural Impact (Mermaid D1)    -->
+      <!-- Diagram D1 — F-002 Component View. Per AAP § 0.5.3 and the     -->
+      <!-- Visual Architecture Documentation rule § 0.11.3. Documentation -->
+      <!-- is documentation-only: no architectural change, hence the      -->
+      <!-- "Architectural Impact: Zero" framing.                          -->
+      <!-- The slide-content class is the AAP § 0.11.6 canonical name;    -->
+      <!-- content-slide is the pre-existing alias preserved for back-    -->
+      <!-- compat with surrounding deck styles. The Mermaid block uses    -->
+      <!-- <pre class="mermaid"> per AAP § 0.11.6 ("Mermaid: embed as     -->
+      <!-- <pre class=\"mermaid\">"); other diagrams on pre-existing      -->
+      <!-- slides retain their <div class="mermaid"> wrapper because the  -->
+      <!-- review explicitly scopes this requirement to the new D1 slide. -->
+      <!-- ============================================================== -->
+      <section class="content-slide slide-content diagram-slide">
+        <h2>Architectural Impact: Zero</h2>
+        <p class="subtitle">Documentation-only deliverable. Existing component view shown unchanged.</p>
+        <pre class="mermaid">
+%% Diagram: F-002 Component View — Form to API to AI Orchestrator to Anthropic
+flowchart LR
+    User((User))
+    SPA["Browser SPA<br/>(React + TanStack Query)"]
+    API["Flask API<br/>(POST /api/notes/generate)"]
+    Orchestrator["AI Orchestrator<br/>(ai_orchestration.py)"]
+    Anthropic[("Anthropic Claude API<br/>External service")]
+
+    User -->|"Generate AI Notes"| SPA
+    SPA -->|"HTTPS + X-Correlation-Id + cookie"| API
+    API -.->|"NoteGenerationRequest"| Orchestrator
+    Orchestrator -->|"HTTPS via langchain-anthropic"| Anthropic
+
+    subgraph Legend["Legend"]
+        direction LR
+        L1["Code module"]
+        L2[("External service")]
+        L3["Solid arrow: HTTPS request"]
+        L4["Dashed arrow: internal call"]
+    end
+        </pre>
+        <p class="diagram-caption">Layered component view. Detailed sub-component view available in <code>docs/ai-note-generation-workflow.md</code> § 2 (Diagram D1).</p>
+        <div class="arch-callouts">
+          <div class="callout">
+            <i data-lucide="shield-alert" aria-hidden="true"></i>
+            <span>Risk: documentation drift &mdash; mitigated by bidirectional source citations.</span>
+          </div>
+          <div class="callout">
+            <i data-lucide="map" aria-hidden="true"></i>
+            <span>Onboarding: <code>docs/onboarding.md</code> AI Workflow Documentation Map links every new artifact.</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================================================== -->
+      <!-- SLIDE 17 of 18 — Content: Onboarding Flow                      -->
       <!-- ============================================================== -->
       <section class="content-slide diagram-slide">
         <h2>Clean Machine to Running App</h2>
@@ -742,9 +1673,9 @@ flowchart LR
       </section>
 
       <!-- ============================================================== -->
-      <!-- SLIDE 16 of 16 — Closing: What's Next + Thank You              -->
+      <!-- SLIDE 18 of 18 — Closing: What's Next + Thank You              -->
       <!-- ============================================================== -->
-      <section class="closing-slide blitzy-closing">
+      <section class="closing-slide slide-closing blitzy-closing">
         <h2>What's Next</h2>
         <p class="subtitle">Suggested follow-ups drawn from the post-MVP roadmap.</p>
         <div class="next-tasks">
@@ -816,12 +1747,13 @@ flowchart LR
   </div>
 
   <!-- ================================================================= -->
-  <!-- Reveal.js core JS (PINNED 5.1.0)                                  -->
+  <!-- Reveal.js core JS (PINNED 5.1.0 — canonical NPM identifier:       -->
+  <!-- reveal.js@5.1.0)                                                  -->
   <!-- ================================================================= -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/reveal.min.js"></script>
 
   <!-- ================================================================= -->
-  <!-- Mermaid (PINNED 11.4.0)                                           -->
+  <!-- Mermaid (PINNED 11.4.0 — canonical NPM identifier: mermaid@11.4.0)-->
   <!-- ================================================================= -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/11.4.0/mermaid.min.js"></script>
 
@@ -856,16 +1788,35 @@ flowchart LR
       theme: 'default',
       securityLevel: 'loose',
       fontFamily: 'Arial, "Liberation Sans", "Helvetica Neue", Helvetica, sans-serif',
+      // Required Blitzy theme variables per AAP § 0.11.6 (Executive
+      // Presentation rule). The five mandated tokens are added below
+      // alongside the previously-existing fontFamily / fontSize tokens.
+      // These map to:
+      //   primaryColor       : '#F2F0FE'  (pale Blitzy purple tint)
+      //   primaryTextColor   : '#333333'  (Blitzy neutral text)
+      //   primaryBorderColor : '#5B39F3'  (Blitzy primary purple)
+      //   lineColor          : '#999999'  (Blitzy neutral line)
+      //   secondaryColor     : '#F4EFF6'  (Blitzy secondary surface)
+      // The existing sizing/layout fields below (flowchart, sequence,
+      // er) are preserved unchanged. The themeCSS overrides further
+      // down force per-element colors where the deck's dark background
+      // requires high contrast on label text.
       themeVariables: {
+        primaryColor: '#F2F0FE',
+        primaryTextColor: '#333333',
+        primaryBorderColor: '#5B39F3',
+        lineColor: '#999999',
+        secondaryColor: '#F4EFF6',
         fontFamily: 'Arial, "Liberation Sans", "Helvetica Neue", Helvetica, sans-serif',
-        fontSize: '14px'
+        fontSize: '18px'
       },
-      // Tight spacing keeps diagrams compact so they fit within the slide
-      // canvas height alongside the title, subtitle, and caption.
+      // Roomy spacing keeps the D1 component view readable at both
+      // 1920x1080 and 1280x720 by giving Mermaid enough room to scale
+      // glyphs to the larger fontSize above.
       flowchart: {
-        nodeSpacing: 35,
-        rankSpacing: 45,
-        diagramPadding: 10,
+        nodeSpacing: 50,
+        rankSpacing: 60,
+        diagramPadding: 12,
         useMaxWidth: true,
         htmlLabels: true
       },
@@ -938,6 +1889,9 @@ flowchart LR
           : null;
         var root = currentSlide || document;
         var blocks = root.querySelectorAll('.mermaid:not([data-processed="true"])');
+        // Canonical Mermaid API: mermaid.run() — we pass a `nodes` scope
+        // to limit rendering to the currently visible slide's blocks so
+        // hidden slides never produce 0-width SVGs (display:none).
         if (blocks.length > 0 && typeof mermaid.run === 'function') {
           mermaid.run({ nodes: blocks }).catch(function (err) {
             console.error('Mermaid render error:', err);

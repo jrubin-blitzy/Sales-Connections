@@ -356,6 +356,22 @@ export function AddEditConnectionForm({ mode }: AddEditConnectionFormProps): JSX
   // === AI note generation (F-002) ====================================
   const generateNotes = useGenerateNotesMutation();
 
+  /**
+   * Handle the "Generate AI Notes" button click.
+   *
+   * Non-blocking contract (F-002 invariant per AAP Sec 0.4.4):
+   *   Soft AI failures (504 `ai_timeout` / 502 `ai_unavailable`)
+   *   MUST NOT block manual form submission. Hard failures
+   *   (validation, RBAC, server) surface a toast via the hook's
+   *   own onError; the form still allows the user to type their
+   *   own notes and submit.
+   *
+   * Soft-vs-hard classification is performed by
+   * `isSoftAiFailure(error)` from [frontend/src/api/notes.ts:L181].
+   * The form additionally renders an inline retry banner on soft
+   * failures via the `aiSoftFailure` derived flag below.
+   * On success the response populates `formState.ai_notes`.
+   */
   function handleGenerateAi(): void {
     const trimmedContext = formState.relationship_context.trim();
     if (trimmedContext.length === 0) {
@@ -741,6 +757,12 @@ export function AddEditConnectionForm({ mode }: AddEditConnectionFormProps): JSX
               maxLength mirrors the backend pydantic 8000-char cap on
               ai_notes (see backend/app/schemas/connection.py
               _AI_NOTES_MAX_CHARS). */}
+          {/* The AI-populated ai_notes value remains user-editable at all
+              times. AI generation is assistive draft text per AAP Sec
+              0.9.2 ("Treat AI notes as assistive draft text, not an
+              authoritative sales recommendation"). The textarea is
+              controlled by formState, so user keystrokes overwrite
+              AI output without re-fetching. */}
           <Textarea
             label="AI / outreach notes"
             value={formState.ai_notes}

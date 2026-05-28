@@ -8,6 +8,7 @@ This guide walks a new contributor from a clean machine to a running, modifiable
 - [2. First Run](#2-first-run)
 - [3. Domain Context](#3-domain-context)
 - [4. Repository Layout](#4-repository-layout)
+  - [AI Workflow Documentation Map](#ai-workflow-documentation-map)
 - [5. Common Development Tasks](#5-common-development-tasks)
 - [6. Common Pitfalls](#6-common-pitfalls)
 - [7. Observability Verification](#7-observability-verification)
@@ -471,6 +472,26 @@ sales-connections/
 
 The dependency direction is strictly inward. Frontend depends only on the REST contract; backend depends only on PostgreSQL and outbound HTTPS to Anthropic and Google; infrastructure depends on nothing application-level. There is no shared code between frontend and backend; the equivalent runtime contract (Zod on the client, pydantic on the server) is hand-maintained side-by-side.
 
+### AI Workflow Documentation Map
+
+Feature F-002 (AI Note Generation Workflow) spans four code locations across two languages and is documented across the following artifacts. New contributors who need to understand or modify the AI-assisted outreach-notes path should start with the deep-dive and follow its references into the per-module READMEs.
+
+- [`docs/ai-note-generation-workflow.md`](ai-note-generation-workflow.md) — End-to-end developer deep-dive across SPA, API, service, and provider layers. The single canonical narrative for F-002; includes Mermaid diagrams D1-D4, the failure-mode catalogue, and the observability cross-reference table.
+- [`backend/app/services/README.md`](../backend/app/services/README.md) — Service-layer overview; documents the AI orchestrator (`ai_orchestration.py`) as the sole AI integration boundary. Includes the prompt-mandated Mermaid sequence diagram (D2) for the F-002 request lifecycle.
+- [`backend/app/api/README.md`](../backend/app/api/README.md) — REST API blueprints overview; documents the `POST /api/notes/generate` request/response contract and the RBAC posture (Contributor + Admin).
+- [`frontend/src/components/README.md`](../frontend/src/components/README.md) — Design-system primitives surface; cross-references the actual AI form host at `frontend/src/features/connections/AddEditConnectionForm.tsx` and describes the "Generate AI Notes" button composition.
+- [`frontend/src/lib/README.md`](../frontend/src/lib/README.md) — Cross-cutting browser utilities; documents the `X-Correlation-Id` lifecycle and cross-references the actual AI-notes mutation hook at `frontend/src/api/notes.ts` plus the shared transport at `frontend/src/api/client.ts`.
+
+The five source files that received targeted inline-documentation updates for this work are:
+
+- `backend/app/services/ai_orchestration.py` — module + per-symbol PEP 257 docstrings (AI orchestrator).
+- `backend/app/api/notes.py` — module + view-function PEP 257 docstrings (notes blueprint).
+- `frontend/src/features/connections/AddEditConnectionForm.tsx` — TSDoc on the exported component plus inline "why" comments on the non-blocking AI-failure contract.
+- `frontend/src/api/notes.ts` — TSDoc on `useGenerateNotesMutation`, `isSoftAiFailure`, and the request/response/error-code type aliases.
+- `frontend/src/api/client.ts` — targeted TSDoc on the AI-relevant helpers (`apiPost`, `ApiError`, `ApiRequestOptions`) that back `useGenerateNotesMutation`.
+
+Note on file paths: the prompt-quoted README placement (`frontend/src/components/README.md`, `frontend/src/lib/README.md`) differs from the actual location of the AI-relevant TypeScript modules (which live under `frontend/src/features/connections/` and `frontend/src/api/` respectively). The READMEs include explicit cross-references to the actual file paths; see `docs/decision-log.md` entries DL-0060 and DL-0061 for the rationale.
+
 ## 5. Common Development Tasks
 
 The recipes below cover the most common changes a contributor will make. Each recipe is a complete checklist; do not skip steps.
@@ -832,6 +853,26 @@ Introduce a `/api/v1/` prefix when a breaking change is needed. Implementation: 
 ### AWS Terraform provider 6.x upgrade and `aws_region` attribute migration
 
 Bump the AWS provider constraint in `infra/terraform/versions.tf` from `~> 5.70` to `~> 6.0` (or the equivalent open range) and migrate every `data.aws_region.current.name` reference to `data.aws_region.current.region`. The `.region` attribute on the `aws_region` data source was first introduced in AWS provider 6.0.0 (verified by `terraform providers schema -json` against versions 5.70.0 through 5.100.0; see DL-0059 for the empirical analysis). The migration touches eleven code sites (six in `modules/network/vpc_endpoints.tf`, three in `modules/ecs/data.tf`, three in `modules/ecs/locals.tf`, plus `modules/ecs/migration.tf`, `modules/ecs/locals.tf`'s frontend log block, and `main.tf:159`) and four comment-only references in `modules/observability/data.tf`, `modules/alb/data.tf`, `modules/alb/acm.tf`, and `modules/ecs/data.tf`. Implementation: combine the version bump with the attribute migration in a single PR, accompany it with a new decision-log entry capturing any other AWS provider 6.x breaking changes encountered (the `aws_region` data source is one of dozens of attributes touched by 5.x -> 6.x; see hashicorp/terraform-provider-aws#42468 and the project's Dependabot terraform ecosystem PRs for the surface area), validate the entire root composition with `terraform init -backend=false && terraform validate` to confirm zero deprecation warnings, and run a `terraform plan` against a non-production environment to confirm zero infrastructure drift. Deferred from QA Final Checkpoint 13 Issue #2 (INFO).
+
+### Grafana dashboard for `ai_request_duration_seconds`
+
+The Prometheus histogram `ai_request_duration_seconds{outcome}` exposes per-outcome AI call latency with label values `success`, `timeout`, `error`, and `validation`. Build a Grafana dashboard panel that overlays p50, p90, p95, and p99 latency derived from `histogram_quantile()` on the histogram bucket series, faceted by the `outcome` label so operators can see at a glance which failure mode is driving any P95 budget breach. Implementation: a new dashboard JSON under `infra/grafana/dashboards/ai-latency.json` referenced from `infra/terraform/modules/observability/main.tf`, plus a runbook addition in `docs/operations.md` § 5.
+
+### Extract `AddEditConnectionForm.tsx` field-group sub-components
+
+The single-file `frontend/src/features/connections/AddEditConnectionForm.tsx` is approximately 870 lines and combines field state, validation, debounced duplicate-check polling, AI-generation handling, and JSX for both create and edit modes. The file is functionally complete and well-tested, but the size makes review of any single-purpose change harder than necessary. Refactor: extract three field-group sub-components (identity/contact, relationship-context + AI button, status + tags) under `frontend/src/features/connections/form/` while preserving the existing public component signature (`<AddEditConnectionForm mode="create" | "edit" />`) and the existing test coverage. Out of scope for the F-002 documentation deliverable per the minimal-change clause (AAP § 0.9.3 and decision-log entry DL-0065).
+
+### Split `frontend/src/api/client.ts` into transport, error-mapping, and auth-redirect modules
+
+The shared fetch wrapper at `frontend/src/api/client.ts` is 637 lines and currently combines the transport (`request`/`apiPost`/`apiGet`/etc.), the typed error class and envelope normalization (`ApiError`, `ApiErrorField`, `mapStatusToCode`), and the 401-handling redirect plumbing. Splitting into three smaller modules under `frontend/src/api/client/` would make each surface easier to review and unit-test in isolation. Constraint: the split must preserve the existing import paths (`@/api/client`) via barrel re-exports so the AI-notes mutation hook and every other consumer keeps working unchanged. Out of scope for F-002 documentation per the minimal-change clause (DL-0065).
+
+### Evaluate a dedicated exception class for oversized AI prompts
+
+Today, the AI orchestrator subsumes every non-timeout, non-misconfiguration failure under `AIServiceUnavailableError(code="ai_unavailable", status_code=502)`. A future enhancement could introduce a dedicated, size-distinct exception class to give callers a more specific signal when the prompt context exceeds `AI_PROMPT_CONTEXT_MAX_CHARS` after sanitization or when the Claude API returns a 413-equivalent. The SPA could then surface a tailored "your input is too long; try shortening" affordance instead of the generic "AI is unavailable" banner. Implementation: add the new exception class in `backend/app/services/ai_orchestration.py`, map it through the existing `AppError` handler, and add a new `AiNoteErrorCode` value plus a corresponding helper in `frontend/src/api/notes.ts` so the form can branch on the size-specific code. Out of scope for F-002 documentation per the minimal-change clause.
+
+### Add a citation-anchor validation script to CI
+
+The F-002 documentation deliverable cites specific line numbers in Python and TypeScript source (e.g., `[backend/app/services/ai_orchestration.py:L478]`) to anchor every behavioral claim. Today these anchors are verified manually during code review, which scales poorly as the documentation surface and the source files evolve in parallel. A future enhancement would add a `scripts/validate-citations.py` script that parses every `[<path>:L<line>]` and `[<path>:L<start>-L<end>]` citation across the `docs/`, `backend/app/services/README.md`, `backend/app/api/README.md`, `frontend/src/components/README.md`, and `frontend/src/lib/README.md` files, then opens each referenced file and confirms the cited line exists and matches an expected symbol pattern (function definition, class definition, structured-log call, decorator, etc.). The script would be wired into the existing `lint` GitHub Actions workflow with a non-blocking warning status initially and promoted to a blocking check after a stabilization period. Implementation: add the Python script under `scripts/`, add a dictionary of `path -> [expected pattern regex]` per cited symbol, and wire into `.github/workflows/lint.yml`. Out of scope for F-002 documentation per the minimal-change clause.
 
 ## 10. Troubleshooting
 

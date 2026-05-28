@@ -71,7 +71,7 @@ dnspython==2.8.0
 # 0.x line compatible with anthropic>=0.97 as of project creation.
 anthropic==0.97.0
 langchain==0.3.27
-langchain-core==0.3.78
+langchain-core==0.3.81
 langchain-anthropic==0.3.21
 langchain-text-splitters==0.3.11
 langsmith==0.4.39
