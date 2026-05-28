@@ -239,6 +239,114 @@
     .reveal .content-slide h3 { font-size: 1.2rem; margin: 0.85rem 0 0.4rem; }
     .reveal .content-slide p  { font-size: 0.95rem; line-height: 1.4; margin: 0.4rem 0; }
     .reveal .content-slide .subtitle { font-size: 0.85rem; }
+
+    /* KPI grid for the F-002 documentation-delivery scope slide. */
+    /* 4-column grid carrying numeric KPIs with icon + value + label. */
+    /* Sized to fit alongside the business-value list within the 1080px canvas. */
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 1rem;
+      margin: 1.25rem 0 1.5rem;
+    }
+    .kpi-grid .kpi-card {
+      text-align: center;
+      padding: 1.1rem 0.75rem;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 0.5rem;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.35rem;
+    }
+    .kpi-grid .kpi-card svg {
+      width: 30px;
+      height: 30px;
+      stroke-width: 1.5;
+      margin-bottom: 0.15rem;
+    }
+    .kpi-grid .kpi-value {
+      font-size: 2.2rem;
+      font-weight: 700;
+      line-height: 1;
+      margin: 0.1rem 0;
+    }
+    .kpi-grid .kpi-label {
+      font-size: 0.72em;
+      opacity: 0.8;
+      line-height: 1.25;
+    }
+
+    /* Business-value 4-cell grid used on the scope-and-value slide. */
+    /* Reuses the card surface idiom from .decision-grid but with 4 columns. */
+    .biz-value-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 1rem;
+      margin-top: 0.5rem;
+    }
+    .biz-value-grid .item {
+      padding: 0.85rem 1rem;
+      border-radius: 0.5rem;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      text-align: left;
+    }
+    .biz-value-grid .item svg {
+      width: 22px;
+      height: 22px;
+      stroke-width: 1.5;
+      margin-bottom: 0.35rem;
+    }
+    .biz-value-grid .item .heading {
+      display: block;
+      font-weight: 600;
+      font-size: 0.85em;
+      margin-bottom: 0.2rem;
+      line-height: 1.2;
+    }
+    .biz-value-grid .item .body {
+      display: block;
+      font-size: 0.7em;
+      opacity: 0.85;
+      line-height: 1.35;
+    }
+
+    /* Eyebrow label that sits above an H2 (e.g., feature tag on section divider). */
+    .eyebrow {
+      display: inline-block;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Cascadia Code", "Roboto Mono", Consolas, monospace;
+      font-size: 0.9rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      opacity: 0.7;
+      margin-bottom: 0.4rem;
+    }
+
+    /* Compact caption-style note row used below the F-002 architecture diagram */
+    /* to surface risks-and-onboarding callouts without a separate slide. */
+    .arch-callouts {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.6rem 1rem;
+      max-width: 80%;
+      margin: 0.85rem auto 0;
+      font-size: 0.78em;
+      opacity: 0.9;
+    }
+    .arch-callouts .callout {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      text-align: left;
+    }
+    .arch-callouts .callout svg {
+      width: 16px;
+      height: 16px;
+      stroke-width: 1.5;
+      flex-shrink: 0;
+    }
   </style>
 </head>
 <body>
@@ -246,7 +354,7 @@
     <div class="slides">
 
       <!-- ============================================================== -->
-      <!-- SLIDE 1 of 16 — Title                                          -->
+      <!-- SLIDE 1 of 18 — Title                                          -->
       <!-- ============================================================== -->
       <section class="title-slide blitzy-title">
         <i data-lucide="users-round" class="blitzy-icon-large" aria-label="Sales-Connections brand mark"></i>
@@ -257,7 +365,7 @@
       </section>
 
       <!-- ============================================================== -->
-      <!-- SLIDE 2 of 16 — Section Divider: What We Built                 -->
+      <!-- SLIDE 2 of 18 — Section Divider: What We Built                 -->
       <!-- ============================================================== -->
       <section class="section-divider blitzy-section">
         <i data-lucide="layers" class="blitzy-icon-huge" aria-label="What we built"></i>
@@ -266,7 +374,7 @@
       </section>
 
       <!-- ============================================================== -->
-      <!-- SLIDE 3 of 16 — Content: Product Mission and 14 Features grid  -->
+      <!-- SLIDE 3 of 18 — Content: Product Mission and 14 Features grid  -->
       <!-- ============================================================== -->
       <section class="content-slide">
         <h2>Product Mission</h2>
@@ -355,7 +463,7 @@
       </section>
 
       <!-- ============================================================== -->
-      <!-- SLIDE 4 of 16 — Content: User Flow 1 (Contributor adds)        -->
+      <!-- SLIDE 4 of 18 — Content: User Flow 1 (Contributor adds)        -->
       <!-- ============================================================== -->
       <section class="content-slide diagram-slide">
         <h2>User Flow 1: Add a Connection</h2>
@@ -387,7 +495,7 @@ sequenceDiagram
       </section>
 
       <!-- ============================================================== -->
-      <!-- SLIDE 5 of 16 — Content: User Flow 2 (Sales Rep claims)        -->
+      <!-- SLIDE 5 of 18 — Content: User Flow 2 (Sales Rep claims)        -->
       <!-- ============================================================== -->
       <section class="content-slide diagram-slide">
         <h2>User Flow 2: Browse and Claim a Lead</h2>
@@ -420,7 +528,7 @@ sequenceDiagram
       </section>
 
       <!-- ============================================================== -->
-      <!-- SLIDE 6 of 16 — Section Divider: Architecture                  -->
+      <!-- SLIDE 6 of 18 — Section Divider: Architecture                  -->
       <!-- ============================================================== -->
       <section class="section-divider blitzy-section">
         <i data-lucide="network" class="blitzy-icon-huge" aria-label="Architecture"></i>
@@ -429,7 +537,7 @@ sequenceDiagram
       </section>
 
       <!-- ============================================================== -->
-      <!-- SLIDE 7 of 16 — Content: System Context                        -->
+      <!-- SLIDE 7 of 18 — Content: System Context                        -->
       <!-- ============================================================== -->
       <section class="content-slide diagram-slide">
         <h2>System Context</h2>
@@ -463,7 +571,7 @@ graph LR
       </section>
 
       <!-- ============================================================== -->
-      <!-- SLIDE 8 of 16 — Content: Data Model                            -->
+      <!-- SLIDE 8 of 18 — Content: Data Model                            -->
       <!-- ============================================================== -->
       <section class="content-slide diagram-slide">
         <h2>Data Model</h2>
@@ -519,7 +627,7 @@ erDiagram
       </section>
 
       <!-- ============================================================== -->
-      <!-- SLIDE 9 of 16 — Content: Request Lifecycle                     -->
+      <!-- SLIDE 9 of 18 — Content: Request Lifecycle                     -->
       <!-- ============================================================== -->
       <section class="content-slide diagram-slide">
         <h2>Request Lifecycle</h2>
@@ -552,7 +660,7 @@ sequenceDiagram
 
 
       <!-- ============================================================== -->
-      <!-- SLIDE 10 of 16 — Section Divider: Why                          -->
+      <!-- SLIDE 10 of 18 — Section Divider: Why                          -->
       <!-- ============================================================== -->
       <section class="section-divider blitzy-section">
         <i data-lucide="compass" class="blitzy-icon-huge" aria-label="Why"></i>
@@ -561,7 +669,7 @@ sequenceDiagram
       </section>
 
       <!-- ============================================================== -->
-      <!-- SLIDE 11 of 16 — Content: Decision Highlights                  -->
+      <!-- SLIDE 11 of 18 — Content: Decision Highlights                  -->
       <!-- ============================================================== -->
       <section class="content-slide">
         <h2>Decision Highlights</h2>
@@ -613,7 +721,7 @@ sequenceDiagram
       </section>
 
       <!-- ============================================================== -->
-      <!-- SLIDE 12 of 16 — Section Divider: Risk and Mitigation          -->
+      <!-- SLIDE 12 of 18 — Section Divider: Risk and Mitigation          -->
       <!-- ============================================================== -->
       <section class="section-divider blitzy-section">
         <i data-lucide="shield-alert" class="blitzy-icon-huge" aria-label="Risk and Mitigation"></i>
@@ -622,7 +730,7 @@ sequenceDiagram
       </section>
 
       <!-- ============================================================== -->
-      <!-- SLIDE 13 of 16 — Content: Risk Register                        -->
+      <!-- SLIDE 13 of 18 — Content: Risk Register                        -->
       <!-- ============================================================== -->
       <section class="content-slide">
         <h2>Risk Register</h2>
@@ -689,16 +797,125 @@ sequenceDiagram
       </section>
 
       <!-- ============================================================== -->
-      <!-- SLIDE 14 of 16 — Section Divider: Onboarding                   -->
+      <!-- SLIDE 14 of 18 — Section Divider: Documentation Delivery       -->
+      <!-- F-002 documentation deliverable for the AI Note Generation     -->
+      <!-- workflow. Per AAP § 0.11.6 and folder requirements.            -->
       <!-- ============================================================== -->
       <section class="section-divider blitzy-section">
-        <i data-lucide="book-open" class="blitzy-icon-huge" aria-label="Onboarding"></i>
-        <h2>Onboarding</h2>
-        <p class="blitzy-section-sub">From a clean machine to a running app in under ten minutes.</p>
+        <i data-lucide="book-open" class="blitzy-icon-huge" aria-label="Documentation Delivery"></i>
+        <p class="eyebrow">F-002</p>
+        <h2>Documentation Delivery</h2>
+        <p class="blitzy-section-sub">Module READMEs, workflow deep-dive, onboarding refresh.</p>
       </section>
 
       <!-- ============================================================== -->
-      <!-- SLIDE 15 of 16 — Content: Onboarding Flow                      -->
+      <!-- SLIDE 15 of 18 — Content: F-002 Documentation Scope & Value    -->
+      <!-- Combines "What Was Done" KPI grid with "Why This Was Done"     -->
+      <!-- business-value bullets per the folder-requirements fallback    -->
+      <!-- ("combine 'Risks & Mitigations' and 'Onboarding Path' OR       -->
+      <!--  by removing one of the existing slides that overlaps").       -->
+      <!-- ============================================================== -->
+      <section class="content-slide">
+        <h2>Documentation Delivery — Scope &amp; Business Value</h2>
+        <p class="subtitle">Five new files, four source-file docstring refreshes, seven Mermaid diagrams, six decision-log entries.</p>
+        <div class="kpi-grid">
+          <div class="kpi-card">
+            <i data-lucide="file-text" aria-hidden="true"></i>
+            <span class="kpi-value">5</span>
+            <span class="kpi-label">New Markdown files</span>
+          </div>
+          <div class="kpi-card">
+            <i data-lucide="code" aria-hidden="true"></i>
+            <span class="kpi-value">4</span>
+            <span class="kpi-label">Source files updated (docstrings only)</span>
+          </div>
+          <div class="kpi-card">
+            <i data-lucide="git-branch" aria-hidden="true"></i>
+            <span class="kpi-value">7</span>
+            <span class="kpi-label">Mermaid diagrams (D1&ndash;D7)</span>
+          </div>
+          <div class="kpi-card">
+            <i data-lucide="scroll-text" aria-hidden="true"></i>
+            <span class="kpi-value">6</span>
+            <span class="kpi-label">Decision-log entries</span>
+          </div>
+        </div>
+        <div class="biz-value-grid">
+          <div class="item">
+            <i data-lucide="zap" aria-hidden="true"></i>
+            <span class="heading">Speed to action</span>
+            <span class="body">SDRs walk into pipeline review with meeting-ready outreach notes.</span>
+          </div>
+          <div class="item">
+            <i data-lucide="target" aria-hidden="true"></i>
+            <span class="heading">Reduced ambiguity</span>
+            <span class="body">Clear answers for who, why, and the first outbound angle per warm lead.</span>
+          </div>
+          <div class="item">
+            <i data-lucide="shield" aria-hidden="true"></i>
+            <span class="heading">Trust preserved</span>
+            <span class="body">Notes stay editable; AI is assistive draft text, never authoritative.</span>
+          </div>
+          <div class="item">
+            <i data-lucide="users" aria-hidden="true"></i>
+            <span class="heading">Faster onboarding</span>
+            <span class="body">New contributors find F-002 end-to-end in one cross-layer deep-dive.</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================================================== -->
+      <!-- SLIDE 16 of 18 — Content: Architectural Impact (Mermaid D1)    -->
+      <!-- Diagram D1 — F-002 Component View. Per AAP § 0.5.3 and the     -->
+      <!-- Visual Architecture Documentation rule § 0.11.3. Documentation -->
+      <!-- is documentation-only: no architectural change, hence the      -->
+      <!-- "Architectural Impact: Zero" framing.                          -->
+      <!-- ============================================================== -->
+      <section class="content-slide diagram-slide">
+        <h2>Architectural Impact: Zero</h2>
+        <p class="subtitle">Documentation-only deliverable. Existing component view shown unchanged.</p>
+        <div class="mermaid">
+%% Diagram: F-002 Component View — Form to API to AI Orchestrator to Anthropic
+flowchart LR
+    subgraph SPA["React SPA"]
+        FORM["AddEditConnectionForm"]
+        HOOK["useGenerateNotesMutation"]
+    end
+    subgraph API["Flask API"]
+        EP["POST /api/notes/generate"]
+    end
+    subgraph SVC["Service Layer"]
+        ORCH["generate_outreach_notes"]
+    end
+    subgraph EXT["External"]
+        AC["Anthropic Claude<br/>via LangChain"]
+    end
+    FORM --> HOOK
+    HOOK -->|"POST + X-Correlation-Id"| EP
+    EP -->|"RBAC + Pydantic"| ORCH
+    ORCH -->|"sanitize + watchdog"| AC
+    AC -->|"completion"| ORCH
+    ORCH -->|"NoteGenerationResponse"| EP
+    EP -->|"JSON + correlation_id"| HOOK
+    subgraph Legend["Legend"]
+        L1["Solid arrow: synchronous call"]
+        L2["Pipe label: header or contract"]
+    end
+        </div>
+        <div class="arch-callouts">
+          <div class="callout">
+            <i data-lucide="shield-alert" aria-hidden="true"></i>
+            <span>Risk: documentation drift &mdash; mitigated by bidirectional source citations.</span>
+          </div>
+          <div class="callout">
+            <i data-lucide="map" aria-hidden="true"></i>
+            <span>Onboarding: <code>docs/onboarding.md</code> Documentation Map links every new artifact.</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================================================== -->
+      <!-- SLIDE 17 of 18 — Content: Onboarding Flow                      -->
       <!-- ============================================================== -->
       <section class="content-slide diagram-slide">
         <h2>Clean Machine to Running App</h2>
@@ -742,7 +959,7 @@ flowchart LR
       </section>
 
       <!-- ============================================================== -->
-      <!-- SLIDE 16 of 16 — Closing: What's Next + Thank You              -->
+      <!-- SLIDE 18 of 18 — Closing: What's Next + Thank You              -->
       <!-- ============================================================== -->
       <section class="closing-slide blitzy-closing">
         <h2>What's Next</h2>
