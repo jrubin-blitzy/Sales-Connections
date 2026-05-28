@@ -502,24 +502,24 @@ F-002 reuses ALL pre-existing observability infrastructure. This documentation d
 
 ### Reused vs Added surfaces
 
-The table below has two explicit columns — `Reused (Pre-existing)` and `Added by This Deliverable` — per the Observability rule's requirement to make the reuse-vs-add split unambiguous. Every entry under `Reused (Pre-existing)` is marked `✓`; every entry under `Added by This Deliverable` is marked `—` because this is a documentation-only deliverable and adds zero new observability surfaces.
+The table below has two explicit columns — `Reused (Pre-existing)` and `Added by This Deliverable` — per the Observability rule's requirement to make the reuse-vs-add split unambiguous. Every entry under `Reused (Pre-existing)` is marked `Yes`; every entry under `Added by This Deliverable` is marked `—` because this is a documentation-only deliverable and adds zero new observability surfaces.
 
 | Surface | Mechanism | Citation | Reused (Pre-existing) | Added by This Deliverable |
 |---|---|---|---|---|
-| Structured logging | `structlog 24.4.0` | `[backend/requirements.txt:L112]` | ✓ | — |
-| API request event | `ai_note_generation_requested` (user_id, org_id, context_chars) | `[backend/app/api/notes.py:L447-L454]` | ✓ | — |
-| Service start event | `ai_request_start` | `[backend/app/services/ai_orchestration.py:L607]` | ✓ | — |
-| Service timeout event | `ai_request_timeout` | `[backend/app/services/ai_orchestration.py:L621]` | ✓ | — |
-| Service error event | `ai_request_error` | `[backend/app/services/ai_orchestration.py:L645-L649]` | ✓ | — |
-| Service success event | `ai_request_success` | `[backend/app/services/ai_orchestration.py:L662-L666]` | ✓ | — |
-| Correlation ID (frontend mint) | `getCorrelationId` (prefix `sc-fe-`) | `[frontend/src/lib/correlationId.ts:L101]` | ✓ | — |
-| Correlation ID (header) | `X-Correlation-Id` injected by `apiPost` | `[frontend/src/api/client.ts:L455]` | ✓ | — |
-| Metrics | `ai_request_duration_seconds{outcome}` Histogram | `[backend/app/observability/metrics.py:L263-L272]` | ✓ | — |
-| Outcome labels | `success`, `timeout`, `error`, `validation` | `[backend/app/services/ai_orchestration.py:L232-L235]` | ✓ | — |
-| Distributed tracing | OpenTelemetry 1.29.0 + `opentelemetry-instrumentation-httpx 0.50b0` | `[backend/requirements.txt:L123]` | ✓ | — |
-| Liveness | `/healthz` | `[docs/operations.md § 5]` | ✓ | — |
-| Readiness | `/readyz` | `[docs/operations.md § 5]` | ✓ | — |
-| Alarm | `ai_latency_p95` (3 of 5 datapoints, period 300 s, threshold 5000 ms p95) | `[infra/terraform/modules/observability/main.tf:L446-L468]` | ✓ | — |
+| Structured logging | `structlog 24.4.0` | `[backend/requirements.txt:L112]` | Yes | — |
+| API request event | `ai_note_generation_requested` (user_id, org_id, context_chars) | `[backend/app/api/notes.py:L447-L454]` | Yes | — |
+| Service start event | `ai_request_start` | `[backend/app/services/ai_orchestration.py:L607]` | Yes | — |
+| Service timeout event | `ai_request_timeout` | `[backend/app/services/ai_orchestration.py:L621]` | Yes | — |
+| Service error event | `ai_request_error` | `[backend/app/services/ai_orchestration.py:L645-L649]` | Yes | — |
+| Service success event | `ai_request_success` | `[backend/app/services/ai_orchestration.py:L662-L666]` | Yes | — |
+| Correlation ID (frontend mint) | `getCorrelationId` (prefix `sc-fe-`) | `[frontend/src/lib/correlationId.ts:L101]` | Yes | — |
+| Correlation ID (header) | `X-Correlation-Id` injected by `apiPost` | `[frontend/src/api/client.ts:L455]` | Yes | — |
+| Metrics | `ai_request_duration_seconds{outcome}` Histogram | `[backend/app/observability/metrics.py:L263-L272]` | Yes | — |
+| Outcome labels | `success`, `timeout`, `error`, `validation` | `[backend/app/services/ai_orchestration.py:L232-L235]` | Yes | — |
+| Distributed tracing | OpenTelemetry 1.29.0 + `opentelemetry-instrumentation-httpx 0.50b0` | `[backend/requirements.txt:L123]` | Yes | — |
+| Liveness | `/healthz` | `[docs/operations.md § 5]` | Yes | — |
+| Readiness | `/readyz` | `[docs/operations.md § 5]` | Yes | — |
+| Alarm | `ai_latency_p95` (3 of 5 datapoints, period 300 s, threshold 5000 ms p95) | `[infra/terraform/modules/observability/main.tf:L446-L468]` | Yes | — |
 
 ### Correlation ID flow
 
