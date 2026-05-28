@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-`frontend/src/lib` hosts the cross-cutting browser utilities shared across the Sales-Connections SPA: a per-page-load correlation ID generator (`correlationId.ts`), the singleton TanStack Query 5.62.16 client (`queryClient.ts`), and a legacy `localStorage`-backed connection/tag store (`localStore.ts`). The correlation ID utility is the F-002-relevant primitive because it enables `X-Correlation-Id` end-to-end propagation from browser → Flask middleware → structlog → CloudWatch Logs. The TanStack Query singleton hosts the cache used by every TanStack Query hook in the SPA, including `useGenerateNotesMutation`. The legacy `localStore.ts` is preserved for backward compatibility and is not part of the AI-notes flow.
+`frontend/src/lib` hosts the cross-cutting browser utilities shared across the Sales-Connections SPA: a per-page-load correlation ID generator (`correlationId.ts`), the singleton TanStack Query 5.62.16 client (`queryClient.ts`), and a legacy `localStorage`-backed connection/tag store (`localStore.ts`). The correlation ID utility is the F-002-relevant primitive because it enables `X-Correlation-Id` end-to-end propagation from browser → Flask middleware → structlog → CloudWatch Logs. The TanStack Query singleton hosts the cache used by every TanStack Query hook in the SPA, including `useGenerateNotesMutation`. The legacy `localStore.ts` is preserved for backward compatibility and is not part of the AI-notes flow. TypeScript 5.7.2 strict-mode types are enforced across all utilities in this folder (see [`frontend/package.json`](../../package.json)).
 
 **Path note**: The AI-notes mutation hook and HTTP client wrapper are implemented at [`frontend/src/api/notes.ts`](../api/notes.ts) and [`frontend/src/api/client.ts`](../api/client.ts) — not in this folder. This README documents the cross-cutting browser utilities this folder hosts AND cross-references the API client as the AI-notes integration surface per DL-0061 in [`docs/decision-log.md`](../../../docs/decision-log.md).
 
@@ -59,7 +59,7 @@ sequenceDiagram
     Browser->>Corr: "First call to getCorrelationId()"
     Corr->>Corr: "Mint sc-fe-<uuid> via crypto.randomUUID()"
     Corr-->>Browser: "Return cached ID"
-    Note over Corr: "Module-level cache; reset on logout via resetCorrelationId()"
+    Note over Corr: "Module-level cache — reset on logout via resetCorrelationId()"
     Browser->>Client: "POST /api/notes/generate"
     Client->>Route: "X-Correlation-Id: sc-fe-..."
     Route->>Mid: "Extract header"
