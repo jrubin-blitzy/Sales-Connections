@@ -370,6 +370,7 @@ export function AddEditConnectionForm({ mode }: AddEditConnectionFormProps): JSX
    * `isSoftAiFailure(error)` from [frontend/src/api/notes.ts:L181].
    * The form additionally renders an inline retry banner on soft
    * failures via the `aiSoftFailure` derived flag below.
+   * On success the response populates `formState.ai_notes`.
    */
   function handleGenerateAi(): void {
     const trimmedContext = formState.relationship_context.trim();

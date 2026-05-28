@@ -8,7 +8,7 @@
 
 ## 2. Business Context
 
-> "Sales-Connections is expected to be used during weekly sales pipeline review meetings. Sales leaders will add connection ideas before or during the meeting, and SDRs will use the generated notes as 'meeting-ready context' to decide which warm leads to pursue that week."
+> "Sales-Connections is expected to be used during weekly sales pipeline review meetings. Sales leaders will add connection ideas before or during the meeting, and SDRs will use the generated notes as "meeting-ready context" to decide which warm leads to pursue that week."
 
 > The AI-generated note is not just convenience text; it is a prioritization aid that helps the team quickly answer:
 >
@@ -17,7 +17,12 @@
 > - Should the submitter make a warm intro, be mentioned softly, or stay uninvolved?
 > - What first outbound angle should an SDR use?
 
-In business-value terms, the correlation ID utility documented here is what links each click of the "Generate AI Notes" button to its backend processing trace — making latency analysis, debugging, and incident response possible across the SPA → API → AI provider chain that delivers those meeting-ready prioritization aids.
+In business-value terms, the correlation ID utility documented here links each click of the "Generate AI Notes" button to its backend processing trace and underpins the four business outcomes the AI-notes workflow is delivered for:
+
+- **Speed-to-action** — observable round-trip latency on each AI call lets SDRs trust that pressing "Generate AI Notes" returns a meeting-ready draft within the five-second budget; missing or slow traces are surfaced immediately rather than hidden.
+- **Reduced ambiguity for SDRs** — every AI prioritization aid is anchored to a `sc-fe-*` correlation ID an analyst can replay end-to-end in CloudWatch Logs, so questions about why a particular note looks the way it does are answerable rather than speculative.
+- **Preservation of relationship trust** — correlation IDs flow through logs that intentionally exclude raw `relationship_context`; debugging never exposes the warm-network details contributors shared in confidence.
+- **Faster conversion of leadership networks into outbound pipeline** — when AI calls misbehave during a weekly review, an operator can trace, fix, and restore the prioritization aid quickly enough that the same meeting still drives outbound action rather than slipping to the next cycle.
 
 ## 3. Key Files
 

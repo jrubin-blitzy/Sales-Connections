@@ -8,7 +8,7 @@
 
 ## 2. Business Context
 
-> "Sales-Connections is expected to be used during weekly sales pipeline review meetings. Sales leaders will add connection ideas before or during the meeting, and SDRs will use the generated notes as 'meeting-ready context' to decide which warm leads to pursue that week."
+> "Sales-Connections is expected to be used during weekly sales pipeline review meetings. Sales leaders will add connection ideas before or during the meeting, and SDRs will use the generated notes as "meeting-ready context" to decide which warm leads to pursue that week."
 
 > The AI-generated note is not just convenience text; it is a prioritization aid that helps the team quickly answer:
 >
@@ -17,7 +17,12 @@
 > - Should the submitter make a warm intro, be mentioned softly, or stay uninvolved?
 > - What first outbound angle should an SDR use?
 
-The design-system primitives in this folder are the visual building blocks SDRs touch during these review meetings — the Button they click to ask AI for help, the Textarea where they read and edit the response, the Toast that surfaces an error when a hard failure occurs.
+The design-system primitives in this folder are the visual building blocks SDRs touch during these review meetings — the Button they click to ask AI for help, the Textarea where they read and edit the response, the Toast that surfaces an error when a hard failure occurs. The four business outcomes the AI-notes workflow is delivered for shape every primitive choice in this folder:
+
+- **Speed-to-action** — the `<Button loading>` state and the `useGenerateNotesMutation.isPending` binding keep the AI request visible and uncluttered so SDRs can resume the meeting flow within the five-second timeout budget.
+- **Reduced ambiguity for SDRs** — the editable `<Textarea>` that hosts the AI-populated `ai_notes` field, plus the inline soft-failure banner, make it obvious which suggestions came from AI and which the SDR refined.
+- **Preservation of relationship trust** — the `relationship_context` `<Textarea>` is form-local and never logged client-side; primitives are intentionally feature-agnostic so the privacy boundary lives at the server, not in browser-side state.
+- **Faster conversion of leadership networks into outbound pipeline** — primitives degrade gracefully on AI failure (soft-failure inline banner, no toast, form remains submittable) so a misbehaving AI provider never blocks the SDR from acting on the warm lead in the same review meeting.
 
 ## 3. Key Files
 
@@ -100,7 +105,7 @@ This README summarizes the four primitives the AI-notes flow uses. Refer to each
 - `<Input>` / `<Textarea>` `errorMessage` prop renders the validation message below the field with `aria-describedby` wiring and `aria-invalid="true"` on the control; the surrounding form sets per-field error strings only when `submitAttempted` is true (see [`frontend/src/features/connections/AddEditConnectionForm.tsx`](../features/connections/AddEditConnectionForm.tsx)).
 - `<Button>` `loading` state automatically replaces the left icon with a Lucide `Loader2` spinner and disables the button — used while `useGenerateNotesMutation.isPending` is true.
 - `<Toast>` summon pattern for hard AI failures: `useGenerateNotesMutation`'s `onError` callback calls `toast.error(...)` ONLY when `isSoftAiFailure(error)` returns false; see [`frontend/src/api/notes.ts:L181`](../api/notes.ts) for the `isSoftAiFailure` predicate definition.
-- Soft AI failures (504 `ai_timeout` / 502 `ai_unavailable`) bypass the Toast and surface an inline retry banner in the form via the `aiSoftFailure` derived flag at [`frontend/src/features/connections/AddEditConnectionForm.tsx:L385`](../features/connections/AddEditConnectionForm.tsx), preserving the F-002 non-blocking contract per AAP § 0.4.4.
+- Soft AI failures (504 `ai_timeout` / 502 `ai_unavailable`) bypass the Toast and surface an inline retry banner in the form via the `aiSoftFailure` derived flag at [`frontend/src/features/connections/AddEditConnectionForm.tsx:L400`](../features/connections/AddEditConnectionForm.tsx), preserving the F-002 non-blocking contract per AAP § 0.4.4.
 
 ## 7. Security and Privacy Notes
 
@@ -143,8 +148,8 @@ if (generateNotes.isError && isSoftAiFailure(generateNotes.error)) {
 ## 10. Related Modules
 
 - [`frontend/src/features/connections/AddEditConnectionForm.tsx`](../features/connections/AddEditConnectionForm.tsx) — actual AI-notes consumer form (per DL-0060).
-- [`frontend/src/api/notes.ts`](../api/notes.ts) — `useGenerateNotesMutation` hook (the demo-mode rejection sits at L246-L248 per AAP § 0.9.1).
-- [`frontend/src/api/client.ts`](../api/client.ts) — `apiPost`, `ApiError` shared HTTP transport.
+- [`frontend/src/api/notes.ts`](../api/notes.ts) — `useGenerateNotesMutation` hook; the demo-mode rejection is defined at [`frontend/src/api/notes.ts:L246-L248`](../api/notes.ts) per AAP § 0.9.1.
+- [`frontend/src/api/client.ts`](../api/client.ts) — `apiPost` shared HTTP transport; [`frontend/src/api/client.ts:L182`](../api/client.ts) defines the exported `ApiError` class consumed by the AI-notes flow.
 - [`frontend/src/lib/README.md`](../lib/README.md) — cross-cutting browser utilities (correlation ID lifecycle, TanStack Query client singleton).
 - [`docs/ai-note-generation-workflow.md`](../../../docs/ai-note-generation-workflow.md) — end-to-end F-002 deep-dive (SPA → API → service → provider).
 - [`backend/app/api/README.md`](../../../backend/app/api/README.md) — server-side `POST /api/notes/generate` endpoint contract.
