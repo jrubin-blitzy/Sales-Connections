@@ -108,11 +108,11 @@ The editable-after-AI behavior is deliberate. F-002 is positioned as assistive d
 
 ### TanStack Query mutation hook
 
-The `useGenerateNotesMutation` hook at `[frontend/src/api/notes.ts:L233-L264]` is a thin wrapper around TanStack Query's `useMutation`. It is typed against the schemas declared in the same file: `GenerateNotesRequest` at `[frontend/src/api/notes.ts:L74]` and `GenerateNotesResponse` at `[frontend/src/api/notes.ts:L101]`. The hook configures three behaviors:
+The `useGenerateNotesMutation` hook at `[frontend/src/api/notes.ts:L242-L273]` is a thin wrapper around TanStack Query's `useMutation`. It is typed against the schemas declared in the same file: `GenerateNotesRequest` at `[frontend/src/api/notes.ts:L74]` and `GenerateNotesResponse` at `[frontend/src/api/notes.ts:L101]`. The hook configures three behaviors:
 
-- `retry: 0` at `[frontend/src/api/notes.ts:L249]` — AI failures are not auto-retried by the client. The 5-second server-side timeout budget is the only retry trigger; a retry loop on top of that budget would compound the wait time and surprise the user. The user retries by clicking the button again, which is also the rate-limiting control of last resort.
-- Demo-mode short-circuit at `[frontend/src/api/notes.ts:L246-L248]` — when the SPA is built with `VITE_AI_DEMO_MODE` truthy, the hook synthesizes `new ApiError(502, "ai_unavailable", "AI generation is not available in demo mode")` rather than calling the backend. Demos never consume Anthropic credits and the soft-failure UI exercises the same code path operators see in production outages.
-- `onError` soft-failure branch at `[frontend/src/api/notes.ts:L250-L262]` — when `isSoftAiFailure(error)` returns true, the hook returns without toasting. The form component reads `mutation.error` and renders an inline banner instead. Hard failures (validation, auth, RBAC, server) get a toast so the user sees feedback that the click failed.
+- `retry: 0` at `[frontend/src/api/notes.ts:L258]` — AI failures are not auto-retried by the client. The 5-second server-side timeout budget is the only retry trigger; a retry loop on top of that budget would compound the wait time and surprise the user. The user retries by clicking the button again, which is also the rate-limiting control of last resort.
+- Demo-build short-circuit at `[frontend/src/api/notes.ts:L254-L257]` — in this demo build, the hook's `mutationFn` is implemented as an unconditional `Promise.reject(new ApiError(502, "ai_unavailable", "AI generation is not available in demo mode"))`. The `_payload` parameter is intentionally unused (underscore-prefixed) and the hook never calls the backend. The rejection is deliberate: demos never consume Anthropic credits while still exercising the same soft-failure UI code path operators see in production outages. Production-mode activation (a gated swap to a real `apiPost('/api/notes/generate', payload)` call) is enumerated as a Next Step in § 11.
+- `onError` soft-failure branch at `[frontend/src/api/notes.ts:L259-L271]` — when `isSoftAiFailure(error)` returns true, the hook returns without toasting. The form component reads `mutation.error` and renders an inline banner instead. Hard failures (validation, auth, RBAC, server) get a toast so the user sees feedback that the click failed.
 
 ### Soft vs hard failure dichotomy
 
@@ -352,9 +352,12 @@ sequenceDiagram
 
 Diagram D2 — F-002 Request Lifecycle.
 
-- Participants run left to right in the request order: `User` → `Form` → `Hook` → `apiPost` → `Flask` → `Service` → `Provider`.
-- The first `alt` block is the happy path; the second and third are the two soft-failure fanouts that map to the inline UI hint.
-- The `ai_not_configured` (HTTP 503) and `validation_failed` (HTTP 422) paths are not depicted here because they exit BEFORE the provider call (see § 7 Diagram D3 for the full failure-mode map).
+**Legend:** Mermaid `sequenceDiagram` does not support `subgraph` blocks, so the diagram's legend is provided here as a Markdown list immediately after the closing fence (per the Visual Architecture Documentation rule's requirement that every diagram have a title and a legend):
+
+- *Participants* — `User`, `Form` (AddEditConnectionForm.tsx), `Hook` (useGenerateNotesMutation), `apiPost` (client.ts), `Flask` (middleware + view), `Service` (generate_outreach_notes), `Provider` (ChatAnthropic + Anthropic) — run left to right in the request order.
+- *`alt` blocks* — show alternative execution paths. The first `alt` block is the happy path; the second and third are the two soft-failure fanouts (watchdog timeout, provider error) that map to the inline UI hint.
+- *Exit paths* — the three terminal states are: form populates `ai_notes` (happy path), form renders inline soft-failure hint (timeout or provider error). In all three terminal states the form's submit button remains enabled (the F-002 non-blocking contract).
+- *Out-of-scope paths* — the `ai_not_configured` (HTTP 503) and `validation_failed` (HTTP 422) paths are not depicted here because they exit BEFORE the provider call (see § 7 Diagram D3 for the full failure-mode map).
 
 ## 6. Provider Layer
 
@@ -440,9 +443,8 @@ flowchart TB
     Empty -->|No| NoOp([Handler returns; nothing sent])
     Empty -->|Yes| Hook[useGenerateNotesMutation.mutate]
 
-    Hook --> Demo{VITE_AI_DEMO_MODE<br/>truthy?}
-    Demo -->|Yes| DemoErr["Synthetic ApiError(502, ai_unavailable)<br/>Soft fail"]
-    Demo -->|No| Post[apiPost POST /api/notes/generate]
+    Hook --> DemoErr(["Demo-build short-circuit<br/>Synthetic ApiError(502, ai_unavailable)<br/>Soft fail — unconditional in demo build"])
+    Hook -.->|"Production-mode flow<br/>(planned — see § 11)"| Post[apiPost POST /api/notes/generate]
 
     Post --> Pyd{Pydantic validation<br/>passes?}
     Pyd -->|No| V422([validation_failed<br/>HTTP 422 — field error])
@@ -473,6 +475,8 @@ flowchart TB
         L1[Rectangle: system component]
         L2{Diamond: decision branch}
         L3([Stadium: user-visible outcome])
+        L4[Solid arrow: current-build flow]
+        L5[Dashed arrow: planned production-mode flow]
     end
 ```
 
@@ -530,6 +534,7 @@ The single F-002 alarm is `ai_latency_p95` defined as a Terraform resource at `[
 - `evaluation_periods = 5` `[infra/terraform/modules/observability/main.tf:L450]`
 - `datapoints_to_alarm = 3` `[infra/terraform/modules/observability/main.tf:L451]`
 - `threshold = var.alarm_threshold_p95_ms_ai_call` (default 5000 ms) `[infra/terraform/modules/observability/main.tf:L457]`
+- `treat_missing_data = "notBreaching"` `[infra/terraform/modules/observability/main.tf:L459]` — when no AI traffic flows (for example, during demos or low-utilization periods), the alarm treats the missing data as a healthy state. This parameter implements F-002's "AI failure does NOT block submission" invariant at the alarm layer: zero AI traffic equals zero alarms, so an outage of the AI integration cannot manifest as a paging incident when no one is exercising the feature.
 
 The alarm fires when 3 of the last 5 five-minute datapoints exceed 5000 ms p95. The 3-of-5 evaluation pattern smooths over single-period spikes; a real upstream degradation will sustain elevated p95 across multiple periods. The runbook lives in [docs/operations.md § 5 Observability](operations.md).
 
@@ -667,6 +672,7 @@ The non-blocking contract documented in § 7 is what makes F-002 safe to ship un
 
 During the documentation pass that produced this deep-dive, the following non-trivial improvement opportunities were identified. They are out of scope for the current documentation deliverable (per the minimal-change clause captured in `docs/decision-log.md` DL-0065) but are recommended for future contributors. Each item names the file or symbol it would touch so the work can be scoped quickly.
 
+- **Production-mode hook activation gated on a `VITE_AI_DEMO_MODE` environment variable** — the `useGenerateNotesMutation` hook at `[frontend/src/api/notes.ts:L242-L273]` currently rejects unconditionally with the demo-build synthetic `ApiError(502, "ai_unavailable", "AI generation is not available in demo mode")` short-circuit at `[frontend/src/api/notes.ts:L254-L257]`. To enable production-mode AI generation, introduce a new `VITE_AI_DEMO_MODE` build flag: declare it as `readonly VITE_AI_DEMO_MODE: "true" | "false"` in `[frontend/src/vite-env.d.ts]`, document its default (`"true"` for safety) in `[frontend/.env.example]`, and replace the unconditional `Promise.reject` with a conditional that swaps to `apiPost<GenerateNotesResponse, GenerateNotesRequest>('/api/notes/generate', payload)` when the flag is falsy. The Flask backend already implements the full F-002 flow described in §§ 4–6 of this document and requires no companion change.
 - **Grafana dashboard for `ai_request_duration_seconds`** — overlay p50/p95/p99 lines alongside the `outcome` label split so operators can see the latency distribution per failure mode at a glance. The histogram is already registered at `[backend/app/observability/metrics.py:L263-L272]`; only the dashboard configuration is missing.
 - **Refactor `frontend/src/features/connections/AddEditConnectionForm.tsx` into smaller field-group sub-components** — the file currently mixes form-state machinery, AI button orchestration, validation helpers, and JSX in a single large module. Extraction would improve reviewability without changing behavior.
 - **Split `frontend/src/api/client.ts` into transport / error-mapping / auth-redirect modules** — the current file bundles three concerns. Splitting would improve discoverability and reduce review surface area for future changes.
