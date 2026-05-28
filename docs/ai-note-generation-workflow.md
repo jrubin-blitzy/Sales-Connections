@@ -406,10 +406,10 @@ The provider layer is pinned to the following versions in `backend/requirements.
 
 - `anthropic==0.97.0` at `[backend/requirements.txt:L72]`
 - `langchain==0.3.27` at `[backend/requirements.txt:L73]`
-- `langchain-core==0.3.78` at `[backend/requirements.txt:L74]`
+- `langchain-core==0.3.81` at `[backend/requirements.txt:L74]`
 - `langchain-anthropic==0.3.21` at `[backend/requirements.txt:L75]`
 
-These versions are managed as a coordinated set. A future advisory-driven upgrade is out of scope for this documentation-only deliverable per the AAP Minimal Change Clause (§ 0.2.1) and the AAP § 0.7.3 dependency-update budget; when it is undertaken, the upgrade SHOULD be exercised via the existing test suite before merging.
+These versions are managed as a coordinated set. `langchain-core` is held at the published patched floor (`0.3.81`) to keep the manifest above the serialization-injection advisory cutoff on the `0.x` branch; sibling packages remain at their existing pins because the advisory targets `langchain-core` specifically. Future broader upgrades remain out of scope for this documentation-only deliverable per the AAP Minimal Change Clause (§ 0.2.1) and the AAP § 0.7.3 dependency-update budget; when undertaken, the upgrade SHOULD be exercised via the existing test suite before merging.
 
 ### System and user prompts
 
@@ -731,5 +731,5 @@ These items are also captured in `docs/onboarding.md` (Suggested Next Tasks subs
 ### External references
 
 - Anthropic Python SDK (`anthropic==0.97.0`) — used transitively by LangChain; never imported directly by Sales-Connections code outside the orchestrator
-- LangChain (`langchain==0.3.27`, `langchain-anthropic==0.3.21`, `langchain-core==0.3.78`) — provider abstraction; the import boundary lives entirely inside `_call_chat_anthropic`
+- LangChain (`langchain==0.3.27`, `langchain-anthropic==0.3.21`, `langchain-core==0.3.81`) — provider abstraction; the import boundary lives entirely inside `_call_chat_anthropic`
 - reveal.js 5.1.0, Mermaid 11.4.0, Lucide 0.460.0 — used in the executive deck at `blitzy-deck/index.html` for leadership-visible communication about this documentation deliverable (out of scope for this deep-dive)

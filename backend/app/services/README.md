@@ -266,13 +266,13 @@ Cross-link: see `[docs/operations.md]` for the canonical alarm runbook.
 
 - `anthropic==0.97.0`
 - `langchain==0.3.27`
-- `langchain-core==0.3.78`
+- `langchain-core==0.3.81`
 - `langchain-anthropic==0.3.21`
 - `structlog==24.4.0`
 - `prometheus-client==0.21.1`
 - `opentelemetry-instrumentation-httpx==0.50b0`
 
-**Dependency security advisory note.** Public security advisories affect the currently pinned `langchain==0.3.27` and `langchain-core==0.3.78` versions. The upgrade is a dependency-management change that is **out of scope** for this documentation-only deliverable per the AAP Minimal Change Clause (§ 0.2.1) and the AAP § 0.7.3 dependency-update budget ("Added: 0, Removed: 0, Updated: 0"). The advisory awareness and the recommended target versions are noted here so a future security-hardening epic can pick up the upgrade alongside its own integration testing; the F-002 orchestrator uses LangChain only to construct `HumanMessage`/`SystemMessage` instances passed to `ChatAnthropic.invoke` and does not exercise the deserialization paths surfaced by the published advisories.
+**Dependency security advisory note.** `langchain-core` is pinned to the patched release `0.3.81` to remediate the published serialization-injection advisory affecting versions below that floor on the `0.x` branch. The F-002 orchestrator uses LangChain only to construct `HumanMessage`/`SystemMessage` instances passed to `ChatAnthropic.invoke` and does not exercise the deserialization paths surfaced by the published advisories, but the patched floor is pinned to keep the dependency manifest above the advisory cutoff. Sibling LangChain packages (`langchain==0.3.27`, `langchain-anthropic==0.3.21`) remain at their existing pins because the published advisory targets `langchain-core` specifically.
 
 ### Local-dev verification
 
