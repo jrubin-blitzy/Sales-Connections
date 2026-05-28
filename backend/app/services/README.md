@@ -196,9 +196,9 @@ Per the user-specified Observability rule, this section explicitly distinguishes
 |-----------------------|--------|-------------|
 | Prometheus histogram `ai_request_duration_seconds{outcome}` | Reused (Pre-existing) | `[backend/app/observability/metrics.py:L263-L272]` |
 | structlog event `ai_request_start` | Reused (Pre-existing) | `[backend/app/services/ai_orchestration.py:L607]` |
-| structlog event `ai_request_success` | Reused (Pre-existing) | `[backend/app/services/ai_orchestration.py:L662]` |
+| structlog event `ai_request_success` | Reused (Pre-existing) | `[backend/app/services/ai_orchestration.py:L662-L666]` |
 | structlog event `ai_request_timeout` | Reused (Pre-existing) | `[backend/app/services/ai_orchestration.py:L621]` |
-| structlog event `ai_request_error` | Reused (Pre-existing) | `[backend/app/services/ai_orchestration.py:L645]` |
+| structlog event `ai_request_error` | Reused (Pre-existing) | `[backend/app/services/ai_orchestration.py:L645-L649]` |
 | CloudWatch alarm `ai_latency_p95` | Reused (Pre-existing) | `[infra/terraform/modules/observability/main.tf:L446]` |
 | Health/readiness probes `/healthz`, `/readyz` | Reused (Pre-existing) | `[backend/app/api/health.py]` (not specific to AI; mentioned for completeness) |
 | Bound structlog context (`ai_model`, `prompt_chars`, `timeout_seconds`, `caller_thread`) | Reused (Pre-existing) | `[backend/app/services/ai_orchestration.py:L601-L606]` |
@@ -224,9 +224,9 @@ Per the user-specified Observability rule, this section explicitly distinguishes
 | Event | Level | Line | Additional fields beyond bound context |
 |-------|-------|------|---------------------------------------|
 | `ai_request_start` | info | L607 | (none; uses bound fields only) |
-| `ai_request_success` | info | L662 | `elapsed_seconds`, `response_chars` |
+| `ai_request_success` | info | L662-L666 | `elapsed_seconds`, `response_chars` |
 | `ai_request_timeout` | warning | L621 | `elapsed_seconds` |
-| `ai_request_error` | error | L645 | `elapsed_seconds`, `error_class` |
+| `ai_request_error` | error | L645-L649 | `elapsed_seconds`, `error_class` |
 
 The bound logger established at `[backend/app/services/ai_orchestration.py:L601-L606]` attaches these context keys to every event: `ai_model`, `prompt_chars`, `timeout_seconds`, `caller_thread`.
 
@@ -241,7 +241,7 @@ The structured-log field name `context_chars` (integer character count of `relat
 | Resource | `aws_cloudwatch_metric_alarm.ai_latency_p95` |
 | Source | `[infra/terraform/modules/observability/main.tf:L446]` |
 | Alarm name | `${var.name_prefix}-ai-latency-p95` |
-| Metric | `AICallDurationMs` (derived from `ai_request_duration_seconds` histogram) |
+| Metric | `AICallDurationMs` (derived via a CloudWatch log metric filter declared at `[infra/terraform/modules/observability/main.tf:L388-L399]`; see `[docs/ai-note-generation-workflow.md § 8]` and `[docs/decision-log.md:DL-0074]` for the current infra-app mapping gap) |
 | Statistic | `extended_statistic = "p95"` |
 | Threshold | `var.alarm_threshold_p95_ms_ai_call` |
 | Comparison | `GreaterThanThreshold` |
