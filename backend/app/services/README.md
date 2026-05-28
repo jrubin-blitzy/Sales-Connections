@@ -224,6 +224,8 @@ The bound logger established at `[backend/app/services/ai_orchestration.py:L601-
 
 There is also an upstream view-layer event: `ai_note_generation_requested` emitted at `[backend/app/api/notes.py:L447-L454]` with `user_id`, `org_id`, and `context_chars` (length only). The raw `relationship_context` is NEVER logged.
 
+The structured-log field name `context_chars` (integer character count of `relationship_context`) is retained per the field-naming convention captured in `[docs/decision-log.md:DL-0062]`; it matches the AI orchestrator's bound `prompt_chars` and the `response_chars` field on `ai_request_success`, and preserves wire-compatibility with existing downstream log-aggregation queries that pivot on this key.
+
 ### CloudWatch alarm: `ai_latency_p95`
 
 | Property | Value |
