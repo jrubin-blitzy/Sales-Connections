@@ -441,14 +441,14 @@ jobs:
           TRIVY_DISABLE_VEX_NOTICE: "true"
 
       - name: Upload backend Trivy SARIF to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v3.37.4
         if: always()
         with:
           sarif_file: trivy-backend.sarif
           category: trivy-backend
 
       - name: Upload frontend Trivy SARIF to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v3.37.4
         if: always()
         with:
           sarif_file: trivy-frontend.sarif
