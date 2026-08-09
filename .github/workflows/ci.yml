@@ -415,7 +415,7 @@ jobs:
         run: docker load -i /tmp/frontend-image.tar
 
       - name: Trivy scan - backend image (SARIF for Security tab)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: sales-connections-backend:ci-latest
           format: sarif
@@ -428,7 +428,7 @@ jobs:
           TRIVY_DISABLE_VEX_NOTICE: "true"
 
       - name: Trivy scan - frontend image (SARIF for Security tab)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: sales-connections-frontend:ci-latest
           format: sarif
@@ -455,7 +455,7 @@ jobs:
           category: trivy-frontend
 
       - name: Trivy scan - backend image (table format, fail on CRITICAL/HIGH)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: sales-connections-backend:ci-latest
           format: table
@@ -468,7 +468,7 @@ jobs:
           TRIVY_DISABLE_VEX_NOTICE: "true"
 
       - name: Trivy scan - frontend image (table format, fail on CRITICAL/HIGH)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: sales-connections-frontend:ci-latest
           format: table
